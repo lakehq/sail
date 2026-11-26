@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,6 +13,7 @@ use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion_expr::expr::Sort;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
@@ -25,24 +28,29 @@ use sail_common_datafusion::column_features::{
 };
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
-    SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeltaCheckConstraintExpr, DeltaConstraintViolation,
+    OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
+    find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
+use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_table_url;
+use sail_logical_plan::check_constraints::apply_delta_check_constraint_filter;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
+use crate::options::session_replace_where_constraint_check;
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
@@ -119,12 +127,13 @@ impl DataSource for DeltaLakeSource {
         infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
 
-    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Delta table options");
         };
         let SinkInfo {
             input,
+            identity_columns_to_track,
             sql_insert,
             mode,
             partition_by,
@@ -139,10 +148,25 @@ impl DataSource for DeltaLakeSource {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for Delta format");
         }
+        // Capture the session setting in the incoming plan, before the writer adds
+        // retained old rows or CDF branches. Workers only execute the assertion.
+        let input = match &mode {
+            SinkMode::OverwriteIf { condition }
+                if session_replace_where_constraint_check(ctx.config())? =>
+            {
+                apply_delta_check_constraint_filter(
+                    input,
+                    &replace_where_constraints(condition),
+                    None,
+                )?
+            }
+            _ => input,
+        };
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
                 DeltaWriteNodeOptions {
+                    identity_columns_to_track,
                     output: if sql_insert {
                         CommandOutput::Empty
                     } else {
@@ -161,8 +185,36 @@ impl DataSource for DeltaLakeSource {
     }
 }
 
+fn replace_where_constraints(condition: &ExprWithSource) -> Vec<DeltaCheckConstraintExpr> {
+    // Delta's extractConstraints ignores constant-only top-level conjuncts, not
+    // constants nested within column-bearing expressions (such as OR).
+    split_conjunction(&condition.expr)
+        .into_iter()
+        .filter(|expr| expr.any_column_refs())
+        .map(|expr| DeltaCheckConstraintExpr {
+            name: "replaceWhere".to_string(),
+            expression: condition
+                .source
+                .clone()
+                .unwrap_or_else(|| condition.expr.to_string()),
+            expr: expr.clone(),
+            violation: DeltaConstraintViolation::ReplaceWhere,
+        })
+        .collect()
+}
+
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    async fn prepare_shallow_clone(
+        &self,
+        ctx: &datafusion::execution::TaskContext,
+        source: futures::future::BoxFuture<'_, Result<String>>,
+        destination: &str,
+        mode: sail_common::spec::CreateTableMode,
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceClone> {
+        crate::clone::prepare(ctx, source, destination, mode).await
+    }
+
     fn procedure_provider(
         self: Arc<Self>,
     ) -> Option<Arc<dyn sail_common_datafusion::lakeprocedure::LakeProcedureProvider>> {
@@ -358,6 +410,7 @@ impl LakeSource for DeltaLakeSource {
         };
         let metadata_configuration = delta_create_table_metadata_configuration(properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        validate_delta_retention_properties(config, &metadata_configuration)?;
         let normalized_schema = normalize_delta_schema(&declared_schema);
         let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -660,6 +713,7 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
+    pub identity_columns_to_track: Vec<String>,
     pub output: CommandOutput,
     pub path: String,
     pub mode: SinkMode,
@@ -732,6 +786,7 @@ pub(crate) async fn plan_delta_write(
     node: &DeltaWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let DeltaWriteNodeOptions {
+        identity_columns_to_track,
         output,
         path,
         mode,
@@ -759,6 +814,7 @@ pub(crate) async fn plan_delta_write(
             }
         }
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
+        SinkMode::ReplaceTable(_) => return plan_err!("staged table replacement requires Iceberg"),
     };
     let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
     let requested_partition_columns = partition_by
@@ -799,6 +855,7 @@ pub(crate) async fn plan_delta_write(
         table_url.clone(),
         object_store,
         lakehouse_planning_context,
+        delta_options.txn_app_id.is_some(),
     )
     .await
     {
@@ -818,9 +875,31 @@ pub(crate) async fn plan_delta_write(
                 .cloned()
         })
         .transpose()?;
+    if let (Some(snapshot), Some(app_id), Some(version)) = (
+        &table_snapshot,
+        &delta_options.txn_app_id,
+        delta_options.txn_version,
+    ) && snapshot
+        .transaction_version(app_id)?
+        .is_some_and(|recorded| recorded >= version)
+    {
+        return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+            output.schema(),
+        )));
+    }
     let table_properties = table_properties.into_iter().collect::<HashMap<_, _>>();
-    let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // New table declarations retain Sail's option aliases; an existing table's custom
+    // properties must not be reinterpreted when planning subsequent writes.
+    let metadata_configuration = if table_exists {
+        resolve_delta_metadata_configuration(&table_properties)
+    } else {
+        canonicalize_and_validate_table_properties(&table_properties)
+    }
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    if !table_exists {
+        validate_delta_retention_properties(ctx.config(), &metadata_configuration)?;
+    }
 
     match mode {
         PhysicalSinkMode::ErrorIfExists if table_exists => {
@@ -932,6 +1011,7 @@ pub(crate) async fn plan_delta_write(
     .with_target_nullability(extract_target_nullability(Some(logical_schema)))
     .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
+    .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(table_snapshot)
     .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
@@ -946,11 +1026,12 @@ async fn open_delta_write_planning_table(
     table_url: Url,
     object_store: Arc<dyn object_store::ObjectStore>,
     lakehouse_table: Option<&LakehouseExecutionContext>,
+    require_transactions: bool,
 ) -> std::result::Result<DeltaTable, DeltaTableError> {
-    // Only partition columns and table existence are needed at planning time;
-    // skip replaying Add/Remove file actions unless a later physical plan needs them.
+    // Checksums may omit setTransactions. Replay the log for idempotent writes.
     let mut table_config = DeltaSnapshotConfig {
         require_files: false,
+        require_transactions,
         ..Default::default()
     };
 
@@ -1034,16 +1115,31 @@ impl DeltaLakeSource {
             .iter()
             .filter_map(|(k, v)| v.as_deref().map(|val| (k.as_str(), val)))
             .collect();
-        let validated_sets = canonicalize_and_validate_table_properties(set_pairs.iter().copied())
+        let allow_arbitrary_key = "spark.databricks.delta.allowArbitraryProperties.enabled";
+        let allow_arbitrary = ctx
+            .session_config()
+            .get_extension::<SessionConfigService>()
+            .map(|service| service.get_option(allow_arbitrary_key))
+            .transpose()?
+            .flatten()
+            .map(|value| {
+                value.to_ascii_lowercase().parse::<bool>().map_err(|_| {
+                    DataFusionError::Plan(format!("{allow_arbitrary_key} must be a boolean"))
+                })
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let validated_sets =
+            crate::spec::properties::canonicalize_and_validate_alter_table_properties(
+                &set_pairs,
+                allow_arbitrary,
+            )
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let canonical_unsets: Vec<String> = unset_changes
             .iter()
-            .map(|(k, _)| {
-                route_table_property_key(k)
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| k.clone())
-            })
+            .map(|(key, _)| crate::spec::properties::canonicalize_alter_table_property_key(key))
             .collect();
+        validate_delta_retention_properties(ctx.session_config(), &validated_sets)?;
 
         let existing_config = snapshot.metadata().configuration().clone();
 
@@ -1078,9 +1174,35 @@ impl DeltaLakeSource {
             new_metadata = new_metadata.remove_config_key(key);
         }
 
+        let mode_key = "delta.columnMapping.mode";
+        if validated_sets.contains_key(mode_key) || canonical_unsets.iter().any(|k| k == mode_key) {
+            let old_mode = snapshot.effective_column_mapping_mode();
+            let new_mode = new_metadata
+                .configuration()
+                .get(mode_key)
+                .map(|value| ColumnMappingMode::try_from(value.as_str()))
+                .transpose()?
+                .unwrap_or_default();
+            if old_mode != new_mode {
+                if (old_mode, new_mode) != (ColumnMappingMode::None, ColumnMappingMode::Name) {
+                    return plan_err!(
+                        "Changing column mapping mode from {} to {} is not supported",
+                        old_mode.as_ref(),
+                        new_mode.as_ref()
+                    );
+                }
+                let schema =
+                    crate::schema::mapping::annotate_existing_schema(&new_metadata.parse_schema()?);
+                new_metadata = new_metadata.with_schema(&schema)?.add_config_key(
+                    "delta.columnMapping.maxColumnId".into(),
+                    compute_max_column_id(&schema).to_string(),
+                );
+            }
+        }
+
         // Derive the desired protocol from the new configuration and merge it with the
-        // existing protocol. We only ever upgrade: features already present on the table
-        // are preserved, and new feature requirements are added.
+        // existing protocol. Features already supported by the table are preserved;
+        // equivalent legacy protocol representations may use lower version numbers.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
@@ -1095,8 +1217,61 @@ impl DeltaLakeSource {
             &desired_protocol,
             &new_metadata,
         );
-        let (merged_protocol, protocol_upgraded) =
-            merge_protocol_for_upgrade(existing_protocol, &desired_protocol);
+        // Version properties request the corresponding implicit feature set, not metadata keys.
+        let reader_version = validated_sets
+            .get("delta.minReaderVersion")
+            .map(|value| value.parse::<i32>())
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .unwrap_or(existing_protocol.min_reader_version());
+        let writer_version = validated_sets
+            .get("delta.minWriterVersion")
+            .map(|value| value.parse::<i32>())
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .unwrap_or(existing_protocol.min_writer_version());
+        // Validate the requested pair before merging can hide an invalid reader/writer dependency.
+        if reader_version >= 3 && writer_version < 7 {
+            return plan_err!("minReaderVersion 3 requires minWriterVersion 7");
+        }
+        let version_requirements = Protocol::new(
+            reader_version,
+            writer_version,
+            (reader_version >= 3).then(Vec::new),
+            (writer_version >= 7).then(Vec::new),
+        );
+        let merged_protocol = existing_protocol
+            .merge_upgrade_requirements(&version_requirements)
+            .merge_upgrade_requirements(&desired_protocol);
+        let has_protocol_request = validated_sets.keys().any(|key| {
+            matches!(
+                key.as_str(),
+                "delta.minReaderVersion" | "delta.minWriterVersion"
+            ) || key.starts_with("delta.feature.")
+        });
+        let merged_protocol = if has_protocol_request {
+            merged_protocol.normalize_for_alter()
+        } else {
+            merged_protocol
+        };
+        crate::transaction::PROTOCOL
+            .can_write_to_protocol(&merged_protocol)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let protocol_upgraded = merged_protocol != *existing_protocol;
+        let protocol_keys: Vec<_> = new_metadata
+            .configuration()
+            .keys()
+            .filter(|key| {
+                matches!(
+                    key.as_str(),
+                    "delta.minReaderVersion" | "delta.minWriterVersion"
+                ) || key.to_ascii_lowercase().starts_with("delta.feature.")
+            })
+            .cloned()
+            .collect();
+        for key in protocol_keys {
+            new_metadata = new_metadata.remove_config_key(&key);
+        }
 
         let mut actions: Vec<CommitAction> = Vec::new();
         if protocol_upgraded {
@@ -1577,11 +1752,38 @@ pub(crate) fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
         .keys()
         .any(|key| key.eq_ignore_ascii_case("delta.feature.typeWidening"));
 
-    if existing_supports_preview && !stable_explicitly_requested {
+    let desired = if existing_supports_preview && !stable_explicitly_requested {
         protocol_without_feature(desired, TableFeature::TypeWidening)
     } else {
         desired.clone()
+    };
+    preserve_existing_variant_features(existing, &desired, configuration)
+}
+
+fn preserve_existing_variant_features(
+    existing: &Protocol,
+    desired: &Protocol,
+    configuration: &HashMap<String, String>,
+) -> Protocol {
+    let explicitly_requested = |feature: &str| {
+        configuration
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(feature))
+    };
+    let mut desired = desired.clone();
+    if existing.has_reader_feature(&TableFeature::VariantTypePreview)
+        && !explicitly_requested("delta.feature.variantType")
+        && !explicitly_requested("delta.feature.variantShredding")
+    {
+        desired = protocol_without_feature(&desired, TableFeature::VariantType);
     }
+    // Existing stable shredding must not acquire the default preview feature on metadata updates.
+    if existing.has_reader_feature(&TableFeature::VariantShredding)
+        && !explicitly_requested("delta.feature.variantShredding-preview")
+    {
+        desired = protocol_without_feature(&desired, TableFeature::VariantShreddingPreview);
+    }
+    desired
 }
 
 fn append_only_protocol_for_existing_table(
@@ -1716,6 +1918,43 @@ fn delta_create_table_identity_columns(
         .collect()
 }
 
+fn validate_delta_retention_properties(
+    config: &SessionConfig,
+    properties: &HashMap<String, String>,
+) -> Result<()> {
+    if !properties.contains_key("delta.logRetentionDuration")
+        && !properties.contains_key("delta.deletedFileRetentionDuration")
+    {
+        return Ok(());
+    }
+    let key =
+        "spark.databricks.delta.vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility";
+    let enabled = config
+        .get_extension::<SessionConfigService>()
+        .map(|service| service.get_option(key))
+        .transpose()?
+        .flatten()
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .parse::<bool>()
+                .map_err(|_| DataFusionError::Plan(format!("{key} must be a boolean")))
+        })
+        .transpose()?
+        .unwrap_or(true);
+    // Delta validates the supplied properties, using defaults for omitted keys.
+    let properties = TableProperties::from(properties.iter());
+    if enabled
+        && properties.log_retention_duration().as_millis()
+            < properties.deleted_file_retention_duration().as_millis()
+    {
+        return plan_err!(
+            "delta.logRetentionDuration must be greater than or equal to delta.deletedFileRetentionDuration"
+        );
+    }
+    Ok(())
+}
+
 fn delta_create_table_metadata_configuration(
     properties: Vec<(String, String)>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
@@ -1723,7 +1962,7 @@ fn delta_create_table_metadata_configuration(
         .into_iter()
         .filter(|(key, _)| !key.starts_with("option."))
         .collect::<HashMap<_, _>>();
-    resolve_delta_metadata_configuration(&table_properties)
+    canonicalize_and_validate_table_properties(&table_properties)
 }
 
 fn delta_catalog_managed_create_table_properties(
@@ -1790,7 +2029,7 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .generation_expression()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -1805,7 +2044,7 @@ fn extract_default_expressions(logical_schema: Option<&DFSchema>) -> HashMap<Str
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .current_default()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -1836,7 +2075,7 @@ fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRe
         .fields()
         .iter()
         .map(|field| {
-            let features = ColumnFeatures::from_map(field.metadata());
+            let features = ColumnFeatures::from_field(field);
             let mut metadata = field.metadata().clone();
             if features.is_not_null_constraint() {
                 changed = true;
@@ -1864,7 +2103,7 @@ fn extract_identity_columns(
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .identity()
                 .map(|identity| (field.name().clone(), identity))
         })
@@ -1874,11 +2113,21 @@ fn extract_identity_columns(
 fn resolve_delta_metadata_configuration(
     table_properties: &HashMap<String, String>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
-    canonicalize_and_validate_table_properties(
+    // Explicit option aliases are canonicalized by the splitter; metadata's custom keys are literal.
+    let is_delta_property = |key: &str| key.to_ascii_lowercase().starts_with("delta.");
+    let mut configuration = canonicalize_and_validate_table_properties(
         table_properties
             .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str())),
-    )
+            .filter(|(key, _)| is_delta_property(key))
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )?;
+    configuration.extend(
+        table_properties
+            .iter()
+            .filter(|(key, _)| !is_delta_property(key))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    Ok(configuration)
 }
 
 pub fn split_delta_write_options_and_table_properties(
@@ -1910,7 +2159,9 @@ pub fn split_delta_write_options_and_table_properties(
                         return plan_err!(
                             "Delta table property `{CATALOG_TABLE_OPTION}` is reserved for internal use"
                         );
-                    } else if let Some(property_key) = route_table_property_key(&key) {
+                    } else if key.to_ascii_lowercase().starts_with("delta.") {
+                        let property_key =
+                            crate::spec::properties::canonicalize_alter_table_property_key(&key);
                         table_properties.insert(property_key, value);
                     } else if key.starts_with("option.") {
                         // Write option from the OPTIONS clause; keep in clean items
@@ -1936,7 +2187,48 @@ pub fn split_delta_write_options_and_table_properties(
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{col, lit};
+
     use super::*;
+
+    #[test]
+    fn replace_where_selects_only_column_bearing_conjuncts() {
+        let column = col("p").eq(lit(1));
+        let null = lit(ScalarValue::Boolean(None));
+        for (expr, expected) in [
+            (lit(true), vec![]),
+            (lit(false), vec![]),
+            (null.clone(), vec![]),
+            (column.clone().and(lit(false)), vec![column.clone()]),
+            (lit(false).and(column.clone()), vec![column.clone()]),
+            (column.clone().and(null.clone()), vec![column.clone()]),
+            (
+                column.clone().or(null.clone()),
+                vec![column.clone().or(null)],
+            ),
+            (
+                column.clone().and(col("v").gt(lit(0))),
+                vec![column, col("v").gt(lit(0))],
+            ),
+        ] {
+            let condition = ExprWithSource::new(expr, Some("original predicate".to_string()));
+            let constraints = replace_where_constraints(&condition);
+            assert_eq!(
+                constraints
+                    .iter()
+                    .map(|c| c.expr.clone())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(
+                constraints
+                    .iter()
+                    .all(|c| c.expression == "original predicate"
+                        && c.violation == DeltaConstraintViolation::ReplaceWhere)
+            );
+        }
+    }
 
     #[test]
     fn test_split_delta_write_options_and_table_properties() -> Result<()> {

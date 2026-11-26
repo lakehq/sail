@@ -1,1 +1,0 @@
-"""Container-backed test fixtures."""

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::prelude::PyAnyMethods;
@@ -14,10 +16,12 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     // We do not capture SIGINT for the server since the user may enter Ctrl+C when
     // interacting with the Python interpreter.
     // The server will be terminated when the Python interpreter exits.
-    let shutdown = async {
-        // The shutdown signal receiver will be notified when `tx` is dropped,
-        // even if no value is sent through the channel.
-        let _ = rx.await;
+    let shutdown = || {
+        Ok(async {
+            // The shutdown signal receiver will be notified when `tx` is dropped,
+            // even if no value is sent through the channel.
+            let _ = rx.await;
+        })
     };
     with_spark_connect_server(address, shutdown, |addr| async move {
         // Move `tx` to the async block so that it will be dropped after running the PySpark shell,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Public handle for a system store actor.
 
 use std::path::Path;

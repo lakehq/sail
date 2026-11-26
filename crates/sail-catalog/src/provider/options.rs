@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -43,6 +45,27 @@ pub struct CreateTableOptions {
     pub is_write_precondition: bool,
 }
 
+pub enum StageTableOptions {
+    Definition(CreateTableOptions),
+    IcebergMigration {
+        definition: CreateTableOptions,
+        source: Box<sail_common_datafusion::catalog::TableKind>,
+        backup: sail_common_datafusion::catalog::MigrationBackup,
+    },
+    ShallowClone {
+        default_location: String,
+        location: Option<String>,
+        mode: CreateTableMode,
+        is_external: bool,
+    },
+}
+
+impl From<CreateTableOptions> for StageTableOptions {
+    fn from(options: CreateTableOptions) -> Self {
+        Self::Definition(options)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,
@@ -74,6 +97,9 @@ pub fn plain_lakehouse_create_table_metadata_requirement(
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableColumnOptions {
+    /// Arrow field metadata, including logical type identity.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
@@ -181,6 +207,8 @@ pub enum AlterTableOptions {
         name: Vec<String>,
         data_type: DataType,
         #[serde(default)]
+        metadata: Vec<(String, String)>,
+        #[serde(default)]
         case_sensitive: bool,
     },
     AlterColumnDefault {
@@ -273,10 +301,12 @@ impl From<&AlterTableOptions>
             AlterTableOptions::AlterColumnType {
                 name,
                 data_type,
+                metadata,
                 case_sensitive,
             } => LakeSourceAlterTableOperation::AlterColumnType {
                 column_path: name.clone(),
                 data_type: data_type.clone(),
+                metadata: metadata.clone(),
                 case_sensitive: *case_sensitive,
             },
             AlterTableOptions::AlterColumnDefault { name, default } => {
@@ -299,4 +329,12 @@ impl From<&AlterTableOptions>
             }
         }
     }
+}
+
+/// A registered file-table partition. Values follow the table's partition-column order.
+#[derive(Debug, Clone)]
+pub struct CatalogFilePartition {
+    pub values: Vec<String>,
+    pub location: Option<String>,
+    pub format: String,
 }

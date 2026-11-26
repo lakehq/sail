@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter, Write};
 
 use chrono::format::{Item, Numeric, Pad};
@@ -78,19 +80,20 @@ const TIME_FORMAT_ITEMS: &[Item<'static>] = &[
     Item::Numeric(Numeric::Second, Pad::Zero),
 ];
 
-fn write_timestamp(
-    f: &mut Formatter<'_>,
-    datetime: &DateTime<Utc>,
-    tz: Option<&Tz>,
-) -> std::fmt::Result {
-    let datetime = if let Some(tz) = tz {
-        datetime.with_timezone(tz).naive_local()
-    } else {
-        datetime.naive_utc()
-    };
-    let value = datetime.format_with_items(DATETIME_FORMAT_ITEMS.iter());
-    let fraction = FractionFormatter::<9>(datetime.nanosecond());
-    write!(f, "{value}{fraction}")
+pub struct TimestampFormatter<'a>(pub &'a DateTime<Utc>, pub Option<&'a Tz>);
+
+impl Display for TimestampFormatter<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let &Self(datetime, tz) = self;
+        let datetime = if let Some(tz) = tz {
+            datetime.with_timezone(tz).naive_local()
+        } else {
+            datetime.naive_utc()
+        };
+        let value = datetime.format_with_items(DATETIME_FORMAT_ITEMS.iter());
+        let fraction = FractionFormatter::<9>(datetime.nanosecond());
+        write!(f, "{value}{fraction}")
+    }
 }
 
 pub struct TimestampSecondFormatter<'a>(pub i64, pub Option<&'a Tz>);
@@ -99,7 +102,7 @@ impl Display for TimestampSecondFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(seconds, tz) = self;
         match Utc.timestamp_opt(*seconds, 0).earliest() {
-            Some(datetime) => write_timestamp(f, &datetime, *tz),
+            Some(datetime) => TimestampFormatter(&datetime, *tz).fmt(f),
             None => write!(f, "ERROR"),
         }
     }
@@ -111,7 +114,7 @@ impl Display for TimestampMillisecondFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(milliseconds, tz) = self;
         match Utc.timestamp_millis_opt(*milliseconds).earliest() {
-            Some(datetime) => write_timestamp(f, &datetime, *tz),
+            Some(datetime) => TimestampFormatter(&datetime, *tz).fmt(f),
             None => write!(f, "ERROR"),
         }
     }
@@ -128,7 +131,7 @@ impl Display for TimestampMicrosecondFormatter<'_> {
         let nanos = microseconds.rem_euclid(1_000_000) * 1_000; // Convert remaining microseconds to nanoseconds
         let datetime = Utc.timestamp_opt(secs, nanos as u32).earliest();
         match datetime {
-            Some(datetime) => write_timestamp(f, &datetime, *tz),
+            Some(datetime) => TimestampFormatter(&datetime, *tz).fmt(f),
             None => write!(f, "ERROR"),
         }
     }
@@ -140,7 +143,7 @@ impl Display for TimestampNanosecondFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(nanoseconds, tz) = self;
         let datetime = Utc.timestamp_nanos(*nanoseconds);
-        write_timestamp(f, &datetime, *tz)
+        TimestampFormatter(&datetime, *tz).fmt(f)
     }
 }
 

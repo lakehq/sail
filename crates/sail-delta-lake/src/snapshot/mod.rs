@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -190,6 +178,7 @@ impl DeltaSnapshot {
                 log_store,
                 replay_hint,
                 config.catalog_managed_commits.as_ref(),
+                config.require_transactions,
             )
             .await
             {
@@ -213,6 +202,18 @@ impl DeltaSnapshot {
         )
         .await?;
         Self::from_replayed_state(log_store, config, replayed)
+    }
+
+    fn replayed_schema(metadata: &Metadata) -> DeltaResult<(ArrowSchemaRef, TableProperties)> {
+        let properties = TableProperties::from(metadata.configuration().iter());
+        let schema = metadata.parse_schema()?;
+        if matches!(
+            properties.column_mapping_mode,
+            Some(ColumnMappingMode::Name | ColumnMappingMode::Id)
+        ) {
+            crate::schema::mapping::validate_mapped_schema(&schema)?;
+        }
+        Ok((Arc::new(ArrowSchema::try_from(&schema)?), properties))
     }
 
     fn from_replayed_state(
@@ -239,8 +240,7 @@ impl DeltaSnapshot {
         config: DeltaSnapshotConfig,
         replayed: ReplayedTableHeader,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(replayed.metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&replayed.metadata)?;
 
         Ok(Self {
             version: replayed.version,
@@ -272,8 +272,7 @@ impl DeltaSnapshot {
         domain_metadata: Vec<DomainMetadata>,
         commit_timestamps: BTreeMap<i64, i64>,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&metadata)?;
 
         Ok(Self {
             version,
@@ -743,10 +742,20 @@ impl DeltaSnapshot {
     }
 
     pub fn transaction_version(&self, app_id: impl ToString) -> DeltaResult<Option<i64>> {
-        Ok(self
-            .app_txns
-            .get(&app_id.to_string())
-            .map(|txn| txn.version))
+        let Some(txn) = self.app_txns.get(&app_id.to_string()) else {
+            return Ok(None);
+        };
+        if let Some(duration) = self.table_properties().set_transaction_retention_duration {
+            let cutoff = crate::checkpoint::retention_cutoff_timestamp(
+                Utc::now().timestamp_millis(),
+                duration,
+                "delta.setTransactionRetentionDuration",
+            )?;
+            if txn.last_updated.is_none_or(|updated| updated <= cutoff) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(txn.version))
     }
 
     // ── Capability token verification ─────────────────────────────────────────

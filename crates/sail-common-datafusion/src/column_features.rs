@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Engine-level contract for column-feature metadata.
 //!
 //! Column features (generation expressions, identity columns, default values,
@@ -20,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::{Field, Metadata};
 
 use crate::catalog::CatalogTableColumnIdentity;
 
@@ -81,16 +83,16 @@ impl AsRef<str> for ColumnFeatureKey {
 
 /// Typed read-only view over a column's engine-level feature metadata.
 ///
-/// Construct via [`ColumnFeatures::from_field`] or [`ColumnFeatures::from_map`]
+/// Construct via [`ColumnFeatures::from_field`] or [`ColumnFeatures::from_metadata`]
 /// to read generation expressions, identity specs, defaults, etc.
 /// without touching raw string keys.
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnFeatures<'a> {
-    metadata: &'a HashMap<String, String>,
+    metadata: &'a Metadata,
 }
 
 impl<'a> ColumnFeatures<'a> {
-    pub fn from_map(metadata: &'a HashMap<String, String>) -> Self {
+    pub fn from_metadata(metadata: &'a Metadata) -> Self {
         Self { metadata }
     }
 

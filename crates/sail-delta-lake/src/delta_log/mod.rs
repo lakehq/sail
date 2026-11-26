@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) mod cleanup;
 mod listing;
 mod replay;
@@ -18,6 +20,7 @@ pub(crate) use replay::{
 };
 pub(crate) use segment::{
     LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_log_files,
+    validate_commit_contiguity_with_compactions,
 };
 pub use store::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,

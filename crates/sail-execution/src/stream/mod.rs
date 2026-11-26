@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) mod accessor;
 pub(crate) mod celeborn;
 pub mod error;
@@ -8,6 +10,7 @@ pub(crate) mod service;
 pub(crate) mod storage;
 pub mod writer;
 
+#[expect(clippy::allow_attributes)]
 pub mod r#gen {
     tonic::include_proto!("sail.stream");
 }

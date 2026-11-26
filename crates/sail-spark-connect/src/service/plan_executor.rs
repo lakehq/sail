@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
@@ -6,19 +9,19 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
-use futures::stream;
+use futures::stream::{self, BoxStream, StreamExt};
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::JobService;
+use sail_common_datafusion::session::job::{JobService, QueryCancellation};
 use sail_plan::resolve_and_execute_plan;
+use sail_session::shutdown;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
-    Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, ExecutorOutputStream,
-    to_arrow_batch,
+    Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, to_arrow_batch,
 };
 use crate::service::config_manager::handle_sql_config;
 use crate::session::SparkSession;
@@ -39,16 +42,28 @@ use crate::streaming::timeout_millis;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
+    server_side_session_id: String,
     operation_id: String,
-    inner: ExecutorOutputStream,
+    inner: BoxStream<'static, Result<ExecutorOutput, Status>>,
 }
 
 impl ExecutePlanResponseStream {
-    pub fn new(session_id: String, operation_id: String, inner: ExecutorOutputStream) -> Self {
+    pub(crate) fn cancel_on_shutdown(mut self, cancellation: &Arc<QueryCancellation>) -> Self {
+        self.inner = Box::pin(shutdown::cancel_stream(cancellation, self.inner));
+        self
+    }
+
+    pub fn new(
+        session_id: String,
+        server_side_session_id: String,
+        operation_id: String,
+        inner: BoxStream<'static, SparkResult<ExecutorOutput>>,
+    ) -> Self {
         Self {
             session_id,
+            server_side_session_id,
             operation_id,
-            inner,
+            inner: Box::pin(inner.map(|item| item.map_err(Status::from))),
         }
     }
 }
@@ -62,10 +77,12 @@ impl Stream for ExecutePlanResponseStream {
     ) -> Poll<Option<Result<ExecutePlanResponse, Status>>> {
         self.inner.as_mut().poll_next(cx).map(|poll| {
             poll.map(|item| {
-                let item = item.map_err(Status::from)?;
+                let item = item?;
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
-                response.server_side_session_id.clone_from(&self.session_id);
+                response
+                    .server_side_session_id
+                    .clone_from(&self.server_side_session_id);
                 response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
@@ -143,6 +160,7 @@ async fn handle_execute_plan(
     spark.add_executor(executor)?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         rx,
     ))
@@ -262,17 +280,18 @@ pub(crate) async fn handle_execute_sql_command(
             }));
             let mut output = vec![ExecutorOutput::new(result)];
             let operation_id = metadata.operation_id.clone();
-            let rx: ExecutorOutputStream = if metadata.reattachable {
+            let rx = if metadata.reattachable {
                 output.push(ExecutorOutput::complete());
                 let executor = Executor::completed(metadata, output);
                 let rx = executor.start()?;
                 spark.add_executor(executor)?;
                 rx
             } else {
-                Box::pin(stream::iter(output.into_iter().map(Ok)))
+                stream::iter(output.into_iter().map(Ok)).boxed()
             };
             Ok(ExecutePlanResponseStream::new(
                 spark.session_id().to_string(),
+                spark.server_session_id().to_string(),
                 operation_id,
                 rx,
             ))
@@ -308,6 +327,7 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -409,6 +429,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -492,6 +513,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -572,6 +594,7 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
         .into_iter();
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -635,6 +658,7 @@ pub(crate) async fn handle_reattach_execute(
     let rx = executor.start()?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         rx,
     ))
@@ -716,6 +740,7 @@ pub(crate) async fn handle_execute_register_datasource(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))

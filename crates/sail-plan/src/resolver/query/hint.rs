@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -63,26 +65,28 @@ impl PlanResolver<'_> {
                         })
                     }
                     _ => Err(PlanError::analysis(format!(
-                        "{name} hint parameters must be column names after the optional partition count",
+                        "{} hint parameters must be column names after the optional partition count",
+                        name.to_ascii_uppercase()
                     ))),
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
+            // The range hint sorts each column ascending, like Spark.
+            let columns = if range {
+                columns
+                    .into_iter()
+                    .map(|column| {
+                        spec::Expr::SortOrder(spec::SortOrder {
+                            child: Box::new(column),
+                            direction: spec::SortDirection::Ascending,
+                            null_ordering: spec::NullOrdering::Unspecified,
+                        })
+                    })
+                    .collect()
+            } else {
+                columns
+            };
             let num_partitions = Some(num_partitions.unwrap_or(self.config.shuffle_partitions));
             if !columns.is_empty() {
-                let columns = if range {
-                    columns
-                        .into_iter()
-                        .map(|child| {
-                            spec::Expr::SortOrder(spec::SortOrder {
-                                child: Box::new(child),
-                                direction: spec::SortDirection::Ascending,
-                                null_ordering: spec::NullOrdering::NullsFirst,
-                            })
-                        })
-                        .collect()
-                } else {
-                    columns
-                };
                 return self
                     .resolve_repartition_by_expression(input, columns, num_partitions, state)
                     .await;
@@ -92,7 +96,6 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                     num_partitions,
                     ExplicitRepartitionKind::RoundRobin,
-                    vec![],
                 )),
             }));
         }
@@ -112,7 +115,6 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                     Some(num_partitions),
                     repartition_kind,
-                    vec![],
                 )),
             }));
         }

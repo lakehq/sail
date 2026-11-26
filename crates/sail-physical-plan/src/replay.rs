@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::{Arc, OnceLock};
 
 use datafusion::common::tree_node::TreeNodeRecursion;

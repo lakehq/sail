@@ -1,13 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod delta;
 pub mod display;
 pub mod iceberg;
 pub mod lakehouse;
 pub mod managed;
+mod replacement;
 mod status;
 
 use datafusion_common::Column;
 use datafusion_expr::expr;
 pub use lakehouse::*;
+pub use replacement::*;
 use serde::{Deserialize, Serialize};
 pub use status::*;
 

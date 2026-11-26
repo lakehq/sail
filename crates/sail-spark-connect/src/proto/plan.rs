@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use sail_common::spec;
@@ -48,14 +50,15 @@ fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableCo
         .metadata
         .iter()
         .cloned()
-        .collect::<std::collections::HashMap<_, _>>();
-    let identity = sail_common_datafusion::column_features::ColumnFeatures::from_map(&metadata)
-        .identity()
-        .map(|identity| spec::TableColumnIdentity {
-            start: Some(identity.start),
-            step: Some(identity.step),
-            allow_explicit_insert: identity.allow_explicit_insert,
-        });
+        .collect::<datafusion::arrow::datatypes::Metadata>();
+    let identity =
+        sail_common_datafusion::column_features::ColumnFeatures::from_metadata(&metadata)
+            .identity()
+            .map(|identity| spec::TableColumnIdentity {
+                start: Some(identity.start),
+                step: Some(identity.step),
+                allow_explicit_insert: identity.allow_explicit_insert,
+            });
     spec::TableColumnDefinition {
         name: field.name.clone(),
         data_type: field.data_type.clone(),
@@ -190,13 +193,16 @@ impl TryFrom<RelType> for RelationNode {
                             unparsed_identifier,
                             options,
                         } = x;
+                        // The options come from a map, so sort them for a deterministic order.
+                        let mut options = options.into_iter().collect::<Vec<_>>();
+                        options.sort();
                         spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
                             temporal: None,
                             sample: None,
-                            options: options.into_iter().collect(),
+                            options,
                         }))
                     }
                     ReadType::DataSource(x) => {
@@ -246,7 +252,11 @@ impl TryFrom<RelType> for RelationNode {
                     .transpose()?;
                 let expressions = expressions
                     .into_iter()
-                    .map(|e| e.try_into())
+                    .map(|e| {
+                        Ok(spec::Expr::try_from(e)?.with_projection_item_cast_naming(
+                            spec::CastNaming::DataFrameProjectionItem,
+                        ))
+                    })
                     .collect::<SparkResult<Vec<_>>>()?;
                 Ok(RelationNode::Query(spec::QueryNode::Project {
                     input,
@@ -393,14 +403,20 @@ impl TryFrom<RelType> for RelationNode {
                 } = *aggregate;
                 let input = input.required("aggregate input")?;
                 let input = (*input).try_into()?;
-                let grouping = grouping_expressions
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<Vec<_>>>()?;
-                let aggregate = aggregate_expressions
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<Vec<_>>>()?;
+                // Spark names grouping and aggregate columns the way it names an item
+                // of a SQL projection list, so a single cast keeps the name of its child.
+                let to_output = |exprs: Vec<sc::Expression>| {
+                    exprs
+                        .into_iter()
+                        .map(|x| {
+                            Ok(spec::Expr::try_from(x)?.with_projection_item_cast_naming(
+                                spec::CastNaming::SqlProjectionItem,
+                            ))
+                        })
+                        .collect::<SparkResult<Vec<_>>>()
+                };
+                let grouping = to_output(grouping_expressions)?;
+                let aggregate = to_output(aggregate_expressions)?;
                 let node = match GroupType::try_from(group_type)? {
                     GroupType::Unspecified => {
                         return Err(SparkError::invalid("unspecified aggregate group type"));
@@ -474,7 +490,7 @@ impl TryFrom<RelType> for RelationNode {
                             .into_iter()
                             .map(|x| {
                                 let GroupingSets { grouping_set } = x;
-                                grouping_set.into_iter().map(|x| x.try_into()).collect()
+                                to_output(grouping_set)
                             })
                             .collect::<SparkResult<Vec<_>>>()?;
                         spec::QueryNode::Aggregate(spec::Aggregate {
@@ -1334,6 +1350,7 @@ impl TryFrom<RelType> for RelationNode {
             }
             RelType::Catalog(catalog) => Ok(RelationNode::Command(catalog.try_into()?)),
             RelType::RelationChanges(_) => Err(SparkError::unsupported("relation changes")),
+            RelType::Zip(_) => Err(SparkError::unsupported("zip relation")),
             RelType::NearestByJoin(_) => Err(SparkError::unsupported("nearest-by join")),
             RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
             // TODO: Lower Delta Connect relation extensions for scans, inspection, and maintenance.
@@ -1932,11 +1949,6 @@ fn merge_matched_clause_from_expression(
         sc::merge_action::ActionType::UpdateStar => spec::MergeMatchedAction::UpdateAll,
         sc::merge_action::ActionType::Update => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid(
-                    "merge matched update requires assignments",
-                ));
-            }
             spec::MergeMatchedAction::UpdateSet(assignments)
         }
         sc::merge_action::ActionType::Invalid
@@ -1961,9 +1973,6 @@ fn merge_not_matched_by_target_clause_from_expression(
         sc::merge_action::ActionType::InsertStar => spec::MergeNotMatchedByTargetAction::InsertAll,
         sc::merge_action::ActionType::Insert => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid("merge insert requires assignments"));
-            }
             let (columns, values) = assignments.into_iter().unzip();
             spec::MergeNotMatchedByTargetAction::InsertColumns { columns, values }
         }
@@ -1989,11 +1998,6 @@ fn merge_not_matched_by_source_clause_from_expression(
         sc::merge_action::ActionType::Delete => spec::MergeNotMatchedBySourceAction::Delete,
         sc::merge_action::ActionType::Update => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid(
-                    "merge not matched by source update requires assignments",
-                ));
-            }
             spec::MergeNotMatchedBySourceAction::UpdateSet(assignments)
         }
         sc::merge_action::ActionType::Invalid
@@ -2162,6 +2166,43 @@ mod tests {
             |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
+    }
+
+    #[test]
+    fn test_named_table_read_options_are_sorted() -> SparkResult<()> {
+        use sc::read::{NamedTable, ReadType};
+        use sc::relation;
+
+        let pairs = |items: &[(&str, &str)]| {
+            items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let relation = sc::Relation {
+            common: None,
+            rel_type: Some(relation::RelType::Read(sc::Read {
+                is_streaming: false,
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    unparsed_identifier: "t".to_string(),
+                    options: pairs(&[("c", "3"), ("a", "1"), ("b", "2")])
+                        .into_iter()
+                        .collect(),
+                })),
+            })),
+        };
+
+        let plan: spec::QueryPlan = relation.try_into()?;
+        let spec::QueryNode::Read {
+            read_type: spec::ReadType::NamedTable(table),
+            ..
+        } = plan.node
+        else {
+            return Err(SparkError::internal("expected a named table read"));
+        };
+        // The options come from a map, so their order must not depend on its iteration order.
+        assert_eq!(table.options, pairs(&[("a", "1"), ("b", "2"), ("c", "3")]));
+        Ok(())
     }
 
     #[test]

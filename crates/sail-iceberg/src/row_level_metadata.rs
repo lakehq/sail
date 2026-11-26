@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
@@ -208,6 +210,42 @@ mod tests {
                 .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error)))?,
             encoded
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deletion_vector_target_transport_preserves_ordinary_delete_formats() -> Result<()> {
+        use crate::spec::DataFileFormat;
+
+        let mut positional_deletes = [
+            DataFileFormat::Parquet,
+            DataFileFormat::Avro,
+            DataFileFormat::Orc,
+        ]
+        .map(|file_format| PositionDeleteFile::File {
+            path: format!("data/positions.{file_format:?}"),
+            size: 123,
+            file_format,
+        })
+        .to_vec();
+        positional_deletes.push(PositionDeleteFile::DeletionVector {
+            path: "data/shared.puffin".to_string(),
+            range: 4..36,
+            cardinality: 1,
+        });
+        let expected = RowLevelFileMetadata {
+            partition: vec![],
+            deletion_vector: Some(DeletionVectorTarget {
+                snapshot_id: 42,
+                record_count: 10,
+                positional_deletes,
+            }),
+        };
+        let encoded = serde_json::to_string(&expected)
+            .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error)))?;
+        let decoded: RowLevelFileMetadata = serde_json::from_str(&encoded)
+            .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error)))?;
+        assert_eq!(decoded, expected);
         Ok(())
     }
 

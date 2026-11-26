@@ -1,0 +1,2156 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::execution::TaskContext;
+use datafusion_common::{DataFusionError, Result, plan_err};
+use sail_catalog::error::CatalogError;
+use sail_catalog::manager::CatalogManager;
+use sail_common_datafusion::catalog::{ReplacementAuthority, TableReplacement};
+use sail_common_datafusion::error::CommitRequiresReplanningError;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::datasource::type_converter::arrow_schema_to_iceberg;
+use crate::io::StoreContext;
+use crate::operations::bootstrap::prepare_bootstrap_snapshot;
+use crate::operations::helpers::format_version_for_schema;
+use crate::operations::metadata_commit::{
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, previous_metadata_log_entry,
+};
+use crate::physical_plan::commit::IcebergCommitInfo;
+use crate::schema_evolution::SchemaEvolver;
+use crate::spec::{
+    FormatVersion, MAIN_BRANCH, NullOrder, SnapshotLog, SortDirection, SortField, SortOrder,
+    TableMetadata, TableRequirement, TableUpdate, Transform,
+};
+use crate::table::find_latest_metadata_file;
+use crate::table::metadata_loader::metadata_file_version_from_path;
+
+/// Coordinator-only private replacement state. Workers receive only the resulting writer schema,
+/// spec, properties and order, not the table's history or a live catalog reservation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IcebergTableReplacement {
+    pub catalog: TableReplacement,
+    pub base_metadata_file: Option<String>,
+    pub metadata: TableMetadata,
+    pub(crate) base_codec: BaseMetadataCodec,
+}
+
+fn replacement_fields_compatible(
+    actual: &datafusion::arrow::datatypes::Fields,
+    input: &datafusion::arrow::datatypes::Fields,
+) -> bool {
+    actual.len() == input.len()
+        && actual.iter().zip(input).all(|(actual, input)| {
+            actual.name() == input.name()
+                && (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        })
+}
+
+fn replacement_types_compatible(
+    actual: &datafusion::arrow::datatypes::DataType,
+    input: &datafusion::arrow::datatypes::DataType,
+) -> bool {
+    use datafusion::arrow::datatypes::DataType;
+    match (actual, input) {
+        (DataType::Struct(actual), DataType::Struct(input)) => {
+            replacement_fields_compatible(actual, input)
+        }
+        (DataType::List(actual), DataType::List(input)) => {
+            (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        }
+        (DataType::Map(actual, actual_sorted), DataType::Map(input, input_sorted)) => {
+            actual_sorted == input_sorted
+                && (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        }
+        _ => actual == input,
+    }
+}
+
+fn validate_replacement_properties(properties: &HashMap<String, String>) -> Result<()> {
+    for key in ["write.format.default", "write.delete.format.default"] {
+        if let Some(format) = properties.get(key)
+            && !format.eq_ignore_ascii_case("parquet")
+        {
+            return plan_err!(
+                "unsupported Iceberg replacement file format {format} for {key}; only parquet is supported"
+            );
+        }
+    }
+    crate::properties::validate_write_properties(properties)
+}
+
+pub(crate) fn prepare_replacement(
+    table_url: &Url,
+    mut catalog: TableReplacement,
+    base_metadata_file: Option<String>,
+    base: Option<&TableMetadata>,
+    input: &ArrowSchema,
+) -> Result<IcebergTableReplacement> {
+    if matches!(
+        catalog.authority,
+        ReplacementAuthority::IcebergRestStagedCreate { .. }
+    ) {
+        let metadata = base
+            .cloned()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST staged metadata".into()))?;
+        let schema = metadata
+            .current_schema()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST staged schema".into()))?;
+        let actual = crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?;
+        // Compare the logical Iceberg representation (e.g. tinyint/smallint become int),
+        // while retaining the authoritative server field IDs for the writer.
+        let normalized_input = crate::datasource::type_converter::iceberg_schema_to_arrow(
+            &arrow_schema_to_iceberg(input)?,
+        )?;
+        if !replacement_fields_compatible(actual.fields(), normalized_input.fields()) {
+            return plan_err!("REST staged schema differs from replacement input");
+        }
+        validate_replacement_properties(&metadata.properties)?;
+        catalog.properties = metadata
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        catalog.properties.push((
+            "format-version".into(),
+            (metadata.format_version as i32).to_string(),
+        ));
+        return Ok(IcebergTableReplacement {
+            catalog,
+            base_metadata_file: None,
+            base_codec: BaseMetadataCodec::capture(None)?,
+            metadata,
+        });
+    }
+    if catalog.existing != base.is_some() {
+        return plan_err!("Iceberg replacement catalog/storage existence mismatch");
+    }
+    let base_codec = BaseMetadataCodec::capture(base)?;
+    let input = arrow_schema_to_iceberg(input)?;
+    let schema = match base {
+        Some(base) => SchemaEvolver::assign_replacement_schema_ids(&input, base)?,
+        None => SchemaEvolver::assign_schema_field_ids(&input)?,
+    };
+    let requested_spec =
+        crate::lake_source::create_table_partition_spec(&schema, &catalog.partition_by)?;
+    let spec = match base {
+        Some(base) => requested_spec
+            .assign_ids(base)
+            .map_err(DataFusionError::Plan)?,
+        None => requested_spec,
+    };
+    // V1 retains removed partition fields as void, even when their source columns are dropped.
+    for field in spec.fields() {
+        if field.transform == Transform::Void {
+            continue;
+        }
+        let source = schema.field_by_id(field.source_id).ok_or_else(|| {
+            DataFusionError::Plan(
+                "replacement partition source is absent from the new schema".into(),
+            )
+        })?;
+        field
+            .transform
+            .result_type(&source.field_type)
+            .map_err(DataFusionError::Plan)?;
+    }
+    let table_properties = catalog
+        .property_updates
+        .iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .cloned()
+        .collect::<Vec<_>>();
+    let (requested_version, properties) =
+        crate::properties::metadata_properties_from_table_properties(&table_properties)?;
+    let explicit_version = table_properties
+        .iter()
+        .any(|(key, _)| key == "format-version");
+    let format_version = match base {
+        Some(base) if explicit_version && requested_version < base.format_version => {
+            return plan_err!(
+                "cannot downgrade Iceberg table format version from v{} to v{}",
+                base.format_version as i32,
+                requested_version as i32
+            );
+        }
+        Some(base) if !explicit_version => base.format_version,
+        _ => requested_version,
+    }
+    .max(format_version_for_schema(&schema));
+    let mut metadata = base.cloned().unwrap_or_else(|| TableMetadata {
+        format_version,
+        table_uuid: None,
+        location: table_url.to_string(),
+        last_sequence_number: 0,
+        last_updated_ms: crate::utils::timestamp::monotonic_timestamp_ms(),
+        last_column_id: 0,
+        schemas: vec![],
+        current_schema_id: 0,
+        partition_specs: vec![],
+        default_spec_id: 0,
+        last_partition_id: 999,
+        properties: HashMap::new(),
+        current_snapshot_id: None,
+        next_row_id: None,
+        encryption_keys: vec![],
+        snapshots: vec![],
+        snapshot_log: vec![],
+        metadata_log: vec![],
+        sort_orders: vec![],
+        default_sort_order_id: None,
+        refs: HashMap::new(),
+        statistics: vec![],
+        partition_statistics: vec![],
+    });
+    metadata.format_version = format_version;
+    metadata.properties.extend(properties);
+    validate_replacement_properties(&metadata.properties)?;
+    // Spark binds every historical sort order against the replacement schema when writing,
+    // even if the new default is unsorted. Keep history intact and reject unbindable changes.
+    for order in &metadata.sort_orders {
+        for field in &order.fields {
+            let source_ids = if field.source_ids.is_empty() {
+                std::slice::from_ref(&field.source_id)
+            } else {
+                &field.source_ids
+            };
+            for source_id in source_ids {
+                let source = schema.field_by_id(*source_id).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "unsupported Iceberg replacement: historical sort order {} source {source_id} is absent from the new schema",
+                        order.order_id
+                    ))
+                })?;
+                if !matches!(source.field_type.as_ref(), crate::spec::Type::Primitive(_)) {
+                    return plan_err!(
+                        "unsupported Iceberg replacement: historical sort order {} source {source_id} must remain primitive",
+                        order.order_id
+                    );
+                }
+                field.transform.result_type(&source.field_type).map_err(|error| {
+                    DataFusionError::Plan(format!(
+                        "unsupported Iceberg replacement: historical sort order {} cannot bind source {source_id}: {error}",
+                        order.order_id
+                    ))
+                })?;
+            }
+        }
+    }
+    metadata.last_column_id = metadata.last_column_id.max(schema.highest_field_id());
+    metadata.current_schema_id = schema.schema_id();
+    if !metadata
+        .schemas
+        .iter()
+        .any(|old| old.schema_id() == schema.schema_id())
+    {
+        metadata.schemas.push(schema.clone());
+    }
+    metadata.default_spec_id = spec.spec_id();
+    metadata.last_partition_id = metadata
+        .last_partition_id
+        .max(spec.last_assigned_field_id());
+    if !metadata
+        .partition_specs
+        .iter()
+        .any(|old| old.spec_id() == spec.spec_id())
+    {
+        metadata.partition_specs.push(spec);
+    }
+    let fields = catalog
+        .sort_by
+        .iter()
+        .map(|sort| {
+            let source_id = schema.field_id_by_name(&sort.column).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "replacement sort column not found: {}",
+                    sort.column
+                ))
+            })?;
+            Ok(SortField {
+                source_id,
+                source_ids: vec![],
+                transform: Transform::Identity,
+                direction: if sort.ascending {
+                    SortDirection::Ascending
+                } else {
+                    SortDirection::Descending
+                },
+                null_order: NullOrder::Last,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let order_id = if fields.is_empty() {
+        0
+    } else {
+        metadata
+            .sort_orders
+            .iter()
+            .find(|order| order.fields == fields)
+            .map(|order| order.order_id)
+            .unwrap_or_else(|| {
+                metadata
+                    .sort_orders
+                    .iter()
+                    .map(|order| order.order_id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1
+            })
+    };
+    if !metadata
+        .sort_orders
+        .iter()
+        .any(|order| order.order_id == order_id)
+    {
+        metadata.sort_orders.push(SortOrder { order_id, fields });
+    }
+    metadata.default_sort_order_id = Some(order_id as i32);
+    metadata.current_snapshot_id = None;
+    metadata.refs.remove(MAIN_BRANCH);
+    if metadata.format_version >= FormatVersion::V3 {
+        metadata.row_lineage_start_row_id();
+    }
+    metadata.ensure_required_format_fields();
+    // Preserve only catalog options from bookkeeping, never stale table properties. The
+    // authoritative metadata plus explicit updates defines the installed catalog status.
+    let mut effective_properties = catalog
+        .properties
+        .iter()
+        .chain(catalog.property_updates.iter())
+        .filter(|(key, _)| key.starts_with("option."))
+        .cloned()
+        .collect::<HashMap<_, _>>();
+    effective_properties.extend(metadata.properties.clone());
+    effective_properties.insert(
+        "format-version".into(),
+        (metadata.format_version as i32).to_string(),
+    );
+    catalog.properties = effective_properties.into_iter().collect();
+    catalog.properties.sort();
+    Ok(IcebergTableReplacement {
+        catalog,
+        base_metadata_file,
+        metadata,
+        base_codec,
+    })
+}
+
+fn requires_replanning(message: impl Into<String>) -> DataFusionError {
+    DataFusionError::External(Box::new(CommitRequiresReplanningError(message.into())))
+}
+
+// Only replacement commits invalidate captured output on these catalog failures.
+fn replacement_catalog_error(error: CatalogError) -> DataFusionError {
+    match error {
+        CatalogError::Conflict(_)
+        | CatalogError::CommitRejected(_)
+        | CatalogError::StaleMetadata(_)
+        | CatalogError::NotFound(_, _)
+        | CatalogError::AlreadyExists(_, _)
+        | CatalogError::NotSupported(_)
+        | CatalogError::UnsupportedCapability(_) => requires_replanning(error.to_string()),
+        error => DataFusionError::External(Box::new(error)),
+    }
+}
+
+fn replacement_commit_error(error: DataFusionError) -> DataFusionError {
+    match error {
+        DataFusionError::External(error) => match error.downcast::<CatalogError>() {
+            Ok(error) => replacement_catalog_error(*error),
+            Err(error) => DataFusionError::External(error),
+        },
+        error => error,
+    }
+}
+
+/// Reject a changed base rather than retrying writer outputs with potentially invalid IDs.
+async fn validate_base(
+    store: &StoreContext,
+    table_url: &Url,
+    expected: Option<&str>,
+) -> Result<()> {
+    let actual = match find_latest_metadata_file(&store.base, table_url).await {
+        Ok(path) => Some(path),
+        Err(error) if error.to_string().contains("No metadata files found") => None,
+        Err(error) => return Err(error),
+    };
+    if actual.as_deref() != expected {
+        return Err(requires_replanning(
+            "Iceberg replacement conflict: base metadata changed; replan the operation",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn commit_replacement(
+    context: &Arc<TaskContext>,
+    table_url: &Url,
+    store: &StoreContext,
+    replacement: IcebergTableReplacement,
+    commit: &IcebergCommitInfo,
+) -> Result<()> {
+    if replacement.catalog.authority.rest_metadata().is_some() {
+        return commit_rest_replacement(context, table_url, store, replacement, commit).await;
+    }
+    validate_base(store, table_url, replacement.base_metadata_file.as_deref()).await?;
+    let mut metadata = replacement.metadata;
+    let mut snapshot = prepare_bootstrap_snapshot(table_url, store, commit, &metadata).await?;
+    let previous = replacement
+        .base_metadata_file
+        .as_ref()
+        .map(|file| {
+            previous_metadata_log_entry(
+                table_url,
+                PreviousMetadataFile::ObjectPath(file),
+                metadata.last_updated_ms,
+            )
+        })
+        .transpose()?;
+    for update in snapshot.action_commit().updates() {
+        match update {
+            TableUpdate::AddSnapshot { snapshot } => {
+                metadata.last_sequence_number = snapshot.sequence_number();
+                if let Some(rows) = snapshot.added_rows {
+                    metadata.advance_next_row_id(rows);
+                }
+                metadata.snapshots.push(snapshot.clone());
+            }
+            TableUpdate::SetSnapshotRef {
+                ref_name,
+                reference,
+            } => {
+                if ref_name == MAIN_BRANCH {
+                    metadata.current_snapshot_id = Some(reference.snapshot_id);
+                    metadata.snapshot_log.push(SnapshotLog {
+                        timestamp_ms: crate::utils::timestamp::monotonic_timestamp_ms(),
+                        snapshot_id: reference.snapshot_id,
+                    });
+                }
+                metadata.refs.insert(ref_name.clone(), reference.clone());
+            }
+            _ => return plan_err!("unexpected Iceberg replacement snapshot update"),
+        }
+    }
+    if let Some(previous) = previous {
+        metadata.metadata_log.push(previous);
+    }
+    metadata.last_updated_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+    let version = replacement
+        .base_metadata_file
+        .as_deref()
+        .and_then(metadata_file_version_from_path)
+        .map_or(1, |version| version + 1);
+    let publication = MetadataFileCommit::prepare(
+        table_url,
+        &metadata,
+        version,
+        MetadataFileStyle::Versioned(replacement.base_codec),
+    )?;
+    let mut catalog = replacement.catalog;
+    // Metadata pointer properties are informational for this path-managed catalog, but must
+    // describe the same version as the installed definition.
+    catalog.properties.retain(|(key, _)| {
+        !sail_common_datafusion::catalog::managed::is_metadata_location_key(key)
+    });
+    catalog
+        .properties
+        .push(("metadata_location".into(), publication.location().into()));
+    let manager = context.extension::<CatalogManager>()?;
+    let table_url = table_url.clone();
+    let store = store.clone();
+    let base = replacement.base_metadata_file;
+    manager
+        .publish_table_replacement(
+            catalog,
+            Box::pin(async move {
+                validate_base(&store, &table_url, base.as_deref()).await?;
+                match publication.replacement_version_exists(&store).await {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        snapshot.cleanup().await;
+                        return Err(CatalogError::Conflict(
+                            "Iceberg replacement metadata version already exists".into(),
+                        ));
+                    }
+                    Err(error) => {
+                        snapshot.cleanup().await;
+                        return Err(error.into());
+                    }
+                }
+                snapshot.publication_started();
+                match publication.write_replacement(&store).await {
+                    Ok(MetadataWriteOutcome::Written) => {
+                        snapshot.commit_succeeded();
+                        publication.write_hint(&store).await;
+                        Ok(())
+                    }
+                    Ok(MetadataWriteOutcome::Conflict) => {
+                        snapshot.publication_did_not_happen();
+                        snapshot.cleanup().await;
+                        Err(CatalogError::Conflict(
+                            "Iceberg replacement metadata version already exists".into(),
+                        ))
+                    }
+                    Err(error) => Err(CatalogError::CommitStateUnknown(error.to_string().into())),
+                }
+            }),
+        )
+        .await
+        .map_err(replacement_catalog_error)
+}
+
+// [CREDIT]: https://github.com/apache/iceberg/blob/2234c549de60/core/src/main/java/org/apache/iceberg/UpdateRequirements.java#L40-L205
+fn rest_replacement_changes(
+    replacement: &IcebergTableReplacement,
+    base: &TableMetadata,
+) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
+    rest_table_changes(&replacement.catalog, &replacement.metadata, base)
+}
+
+pub(crate) fn rest_table_changes(
+    catalog: &TableReplacement,
+    metadata: &TableMetadata,
+    base: &TableMetadata,
+) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
+    let authority = &catalog.authority;
+    let create = matches!(
+        authority,
+        ReplacementAuthority::IcebergRestStagedCreate { .. }
+    );
+    let uuid = base
+        .table_uuid
+        .ok_or_else(|| DataFusionError::Plan("Missing REST table UUID".into()))?;
+    let mut requirements = vec![if create {
+        TableRequirement::NotExist
+    } else {
+        TableRequirement::UuidMatch { uuid }
+    }];
+    if !create {
+        // TODO: Iceberg REST has no assertions for global last-sequence-number, highest
+        // schema/spec/sort IDs, or the complete ref set. Metadata ABA and writes to branches
+        // created after staging cannot be fully guarded with the standard protocol.
+        // Unlike upstream replacement, fail on observed schema/ref changes: writer artifacts
+        // already contain schema IDs and sequence numbers and must never be blindly rebased.
+        requirements.push(TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: base.current_schema_id,
+        });
+        let mut refs = base
+            .refs
+            .iter()
+            .map(|(name, reference)| (name.clone(), Some(reference.snapshot_id)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        refs.entry(MAIN_BRANCH.into())
+            .or_insert(base.current_snapshot_id.filter(|id| *id >= 0));
+        requirements.extend(refs.into_iter().map(|(r#ref, snapshot_id)| {
+            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id }
+        }));
+    }
+    let mut updates = Vec::new();
+    if create {
+        updates.push(TableUpdate::AssignUuid { uuid });
+    }
+    if create || metadata.format_version != base.format_version {
+        updates.push(TableUpdate::UpgradeFormatVersion {
+            format_version: metadata.format_version,
+        });
+    }
+    let schema = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement schema".into()))?;
+    let added = create
+        || !base
+            .schemas
+            .iter()
+            .any(|old| old.schema_id() == schema.schema_id());
+    if added {
+        updates.push(TableUpdate::AddSchema {
+            schema: Box::new(schema.clone()),
+        });
+        if !create {
+            requirements.push(TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: base.last_column_id,
+            });
+        }
+    }
+    updates.push(TableUpdate::SetCurrentSchema {
+        schema_id: if added { -1 } else { schema.schema_id() },
+    });
+    let spec = metadata
+        .default_partition_spec()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
+    if create {
+        updates.push(TableUpdate::AddSpec { spec: spec.into() });
+    } else if spec.spec_id() != base.default_spec_id {
+        requirements.push(TableRequirement::DefaultSpecIdMatch {
+            default_spec_id: base.default_spec_id,
+        });
+    }
+    updates.push(TableUpdate::SetDefaultSpec {
+        spec_id: if create { -1 } else { spec.spec_id() },
+    });
+    let order = replacement_sort_order(metadata)?;
+    let added = create
+        || !base
+            .sort_orders
+            .iter()
+            .any(|old| old.order_id == order.order_id);
+    if added {
+        updates.push(TableUpdate::AddSortOrder {
+            sort_order: order.clone(),
+        });
+    }
+    if !create && metadata.default_sort_order_id != base.default_sort_order_id {
+        requirements.push(TableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
+        });
+    }
+    updates.push(TableUpdate::SetDefaultSortOrder {
+        sort_order_id: if added { -1 } else { order.order_id },
+    });
+    if create {
+        updates.push(TableUpdate::SetLocation {
+            location: metadata.location.clone(),
+        });
+    }
+    let requested_properties = catalog
+        .property_updates
+        .iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .cloned()
+        .collect::<Vec<_>>();
+    let (_, explicit_properties) =
+        crate::properties::metadata_properties_from_table_properties(&requested_properties)?;
+    let properties = metadata
+        .properties
+        .iter()
+        .filter(|(key, value)| {
+            create
+                || explicit_properties.contains_key(*key)
+                || base.properties.get(*key) != Some(*value)
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+    if !properties.is_empty() {
+        updates.push(TableUpdate::SetProperties {
+            updates: properties,
+        });
+    }
+    if !create && base.refs.contains_key(MAIN_BRANCH) {
+        updates.push(TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.into(),
+        });
+    }
+    Ok((requirements, updates))
+}
+
+fn replacement_sort_order(metadata: &TableMetadata) -> Result<&SortOrder> {
+    metadata
+        .sort_orders
+        .iter()
+        .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement sort order".into()))
+}
+
+/// Only layout sources need to bind before publication. Keep types and defaults that
+/// require the new format out of the live table's schema history until the upgrade.
+fn layout_source_schema(
+    schema: &crate::spec::Schema,
+    sources: &HashSet<i32>,
+) -> Result<crate::spec::Schema> {
+    use crate::spec::{NestedFieldRef, Schema, StructType, Type};
+
+    fn project(fields: &[NestedFieldRef], sources: &HashSet<i32>) -> Vec<NestedFieldRef> {
+        fields
+            .iter()
+            .filter_map(|field| {
+                let mut projected = field.as_ref().clone();
+                if !sources.contains(&field.id) {
+                    let Type::Struct(children) = field.field_type.as_ref() else {
+                        return None;
+                    };
+                    let children = project(children.fields(), sources);
+                    if children.is_empty() {
+                        return None;
+                    }
+                    *projected.field_type = Type::Struct(StructType::new(children));
+                }
+                projected.initial_default = None;
+                projected.write_default = None;
+                Some(Arc::new(projected))
+            })
+            .collect()
+    }
+
+    Schema::builder()
+        .with_fields(project(schema.fields(), sources))
+        .build()
+        .map_err(DataFusionError::Plan)
+}
+
+/// Register a previously unseen layout without switching the live table definition.
+/// REST assigns IDs on the server. Only after registration can manifests safely
+/// reference the layout, even if a competing writer registered a non-default layout.
+async fn register_replacement_layout(
+    context: &TaskContext,
+    replacement: &mut IcebergTableReplacement,
+    base: &mut TableMetadata,
+) -> Result<()> {
+    use crate::catalog_support::commit::{CatalogCommitOutcome, IcebergCatalogCommitCoordinator};
+    let ReplacementAuthority::IcebergRestExisting { execution, .. } =
+        &replacement.catalog.authority
+    else {
+        return Ok(());
+    };
+    let desired = &replacement.metadata;
+    let spec = desired
+        .default_partition_spec()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
+    let order = replacement_sort_order(desired)?;
+    let add_spec = !base
+        .partition_specs
+        .iter()
+        .any(|old| old.spec_id() == spec.spec_id());
+    let add_order = !base
+        .sort_orders
+        .iter()
+        .any(|old| old.order_id == order.order_id);
+    if !add_spec && !add_order {
+        return Ok(());
+    }
+    let schema = desired
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement schema".into()))?;
+    let (mut requirements, _) = rest_replacement_changes(replacement, base)?;
+    if add_spec {
+        requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id: base.last_partition_id,
+        });
+    }
+    let projected;
+    let binding_schema = if format_version_for_schema(schema) > base.format_version {
+        let sources = spec
+            .fields()
+            .iter()
+            .filter(|_| add_spec)
+            .map(|f| f.source_id)
+            .chain(
+                order
+                    .fields
+                    .iter()
+                    .filter(|_| add_order)
+                    .map(|f| f.source_id),
+            )
+            .collect();
+        projected = layout_source_schema(schema, &sources)?;
+        if format_version_for_schema(&projected) > base.format_version {
+            return plan_err!(
+                "Iceberg replacement layout sources require upgrading the table format before registration"
+            );
+        }
+        &projected
+    } else {
+        schema
+    };
+    let matching_schema = |candidate: &crate::spec::Schema, expected: &crate::spec::Schema| {
+        candidate.fields() == expected.fields()
+            && candidate
+                .identifier_field_ids()
+                .eq(expected.identifier_field_ids())
+    };
+    let existing_schema_id = base
+        .schemas
+        .iter()
+        .find(|old| matching_schema(old, binding_schema))
+        .map(|s| s.schema_id());
+    let switch_schema = existing_schema_id != Some(base.current_schema_id);
+    let mut updates = Vec::new();
+    if switch_schema {
+        if existing_schema_id.is_none() {
+            updates.push(TableUpdate::AddSchema {
+                schema: Box::new(binding_schema.clone()),
+            });
+        }
+        updates.push(TableUpdate::SetCurrentSchema {
+            schema_id: existing_schema_id.unwrap_or(-1),
+        });
+    }
+    if add_spec {
+        updates.push(TableUpdate::AddSpec { spec: spec.into() });
+    }
+    if add_order {
+        updates.push(TableUpdate::AddSortOrder {
+            sort_order: order.clone(),
+        });
+    }
+    if switch_schema {
+        updates.push(TableUpdate::SetCurrentSchema {
+            schema_id: base.current_schema_id,
+        });
+    }
+    let coordinator =
+        IcebergCatalogCommitCoordinator::new(context, &replacement.catalog.catalog_table);
+    let CatalogCommitOutcome::Committed(response) = coordinator
+        .commit(execution, requirements, updates)
+        .await
+        .map_err(replacement_commit_error)?
+    else {
+        return Err(requires_replanning(
+            "Iceberg replacement layout registration conflicted; replan the operation",
+        ));
+    };
+    let registered: TableMetadata = response
+        .payload()
+        .and_then(|p| p.get("metadata"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| {
+            requires_replanning("Missing registered Iceberg metadata; replan the operation")
+        })?;
+    if registered.table_uuid != base.table_uuid
+        || registered.current_schema_id != base.current_schema_id
+        || registered.default_spec_id != base.default_spec_id
+        || registered.default_sort_order_id != base.default_sort_order_id
+    {
+        return Err(requires_replanning(
+            "Iceberg layout registration changed the base definition; replan the operation",
+        ));
+    }
+    let registered_binding = registered
+        .schemas
+        .iter()
+        .find(|old| matching_schema(old, binding_schema))
+        .ok_or_else(|| {
+            requires_replanning(
+                "Registered Iceberg schema differs from the layout schema; replan the operation",
+            )
+        })?;
+    let writer_schema = if matching_schema(registered_binding, schema) {
+        registered_binding.clone()
+    } else {
+        // The compatible layout schema may have consumed the originally planned schema ID.
+        crate::spec::Schema::builder()
+            .with_schema_id(SchemaEvolver::next_schema_id(&registered))
+            .with_fields(schema.fields().iter().cloned())
+            .with_identifier_field_ids(schema.identifier_field_ids())
+            .build()
+            .map_err(DataFusionError::Plan)?
+    };
+    let spec_id = registered.partition_specs.iter().find(|old| old.fields() == spec.fields())
+        .ok_or_else(|| requires_replanning("Registered Iceberg partition fields differ from writer fields; replan the operation"))?.spec_id();
+    let order_id = registered
+        .sort_orders
+        .iter()
+        .find(|old| old.fields == order.fields)
+        .ok_or_else(|| {
+            requires_replanning(
+                "Registered Iceberg sort fields differ from writer fields; replan the operation",
+            )
+        })?
+        .order_id;
+    base.sort_orders = registered.sort_orders;
+    replacement
+        .metadata
+        .sort_orders
+        .clone_from(&base.sort_orders);
+    replacement.metadata.default_sort_order_id = Some(order_id as i32);
+    // Keep the original ref and default-spec assertions for the publishing commit.
+    base.schemas = registered.schemas;
+    base.partition_specs = registered.partition_specs;
+    base.last_column_id = registered.last_column_id;
+    base.last_partition_id = registered.last_partition_id;
+    replacement.metadata.schemas.clone_from(&base.schemas);
+    replacement
+        .metadata
+        .partition_specs
+        .clone_from(&base.partition_specs);
+    replacement.metadata.current_schema_id = writer_schema.schema_id();
+    if !base
+        .schemas
+        .iter()
+        .any(|old| old.schema_id() == writer_schema.schema_id())
+    {
+        replacement.metadata.schemas.push(writer_schema);
+    }
+    replacement.metadata.default_spec_id = spec_id;
+    Ok(())
+}
+
+async fn commit_rest_replacement(
+    context: &Arc<TaskContext>,
+    table_url: &Url,
+    store: &StoreContext,
+    mut replacement: IcebergTableReplacement,
+    commit: &IcebergCommitInfo,
+) -> Result<()> {
+    use crate::catalog_support::commit::{CatalogCommitOutcome, IcebergCatalogCommitCoordinator};
+    let mut base: TableMetadata = serde_json::from_str(
+        replacement
+            .catalog
+            .authority
+            .rest_metadata()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST replacement authority".into()))?,
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let planned_order_id = replacement.metadata.default_sort_order_id;
+    let planned_spec_id = replacement.metadata.default_spec_id;
+    register_replacement_layout(context, &mut replacement, &mut base).await?;
+    let mut rebound_commit;
+    let commit = if replacement.metadata.default_spec_id != planned_spec_id
+        || replacement.metadata.default_sort_order_id != planned_order_id
+    {
+        rebound_commit = commit.clone();
+        for file in rebound_commit
+            .data_files
+            .iter_mut()
+            .chain(&mut rebound_commit.delete_files)
+        {
+            file.partition_spec_id = replacement.metadata.default_spec_id;
+            if file.sort_order_id.is_some() && file.sort_order_id == planned_order_id {
+                file.sort_order_id = replacement.metadata.default_sort_order_id;
+            }
+        }
+        &rebound_commit
+    } else {
+        commit
+    };
+    let (requirements, mut updates) = rest_replacement_changes(&replacement, &base)?;
+    let mut snapshot =
+        prepare_bootstrap_snapshot(table_url, store, commit, &replacement.metadata).await?;
+    updates.extend(snapshot.action_commit().updates().iter().cloned());
+    let execution = replacement
+        .catalog
+        .authority
+        .execution()
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan("Missing REST replacement execution binding".into())
+        })?;
+    let context = context.clone();
+    // This task owns publication and cleanup. A cancelled caller cannot delete committed manifests.
+    tokio::spawn(async move {
+        let coordinator = IcebergCatalogCommitCoordinator::new(context.as_ref(), &replacement.catalog.catalog_table);
+        snapshot.publication_started();
+        match coordinator.commit(&execution, requirements, updates).await {
+            Ok(CatalogCommitOutcome::Committed(response)) => {
+                snapshot.commit_succeeded();
+                let metadata = response.payload().and_then(|payload| payload.get("metadata"))
+                    .cloned().and_then(|value| serde_json::from_value::<TableMetadata>(value).ok());
+                if metadata.as_ref().is_none_or(|metadata| metadata.table_uuid != replacement.metadata.table_uuid)
+                    || response.metadata_location().is_none()
+                {
+                    return Err(DataFusionError::External(Box::new(CatalogError::CommitStateUnknown("Invalid REST replacement commit response".to_string().into()))));
+                }
+                Ok(())
+            }
+            Ok(CatalogCommitOutcome::Conflict | CatalogCommitOutcome::NotSupported) => {
+                snapshot.publication_did_not_happen();
+                snapshot.cleanup().await;
+                Err(requires_replanning("Iceberg REST replacement rejected; replan the operation"))
+            }
+            Err(error) => {
+                let unknown = matches!(&error, DataFusionError::External(error) if error.downcast_ref::<CatalogError>().is_some_and(|error| matches!(error, CatalogError::CommitStateUnknown(_))));
+                if !unknown {
+                    snapshot.publication_did_not_happen();
+                    snapshot.cleanup().await;
+                }
+                Err(replacement_commit_error(error))
+            }
+        }
+    }).await.map_err(|error| DataFusionError::External(Box::new(CatalogError::CommitStateUnknown(error.to_string().into()))))?
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use bytes::Bytes;
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use futures::TryStreamExt;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
+    use sail_catalog::manager::CatalogManagerOptions;
+    use sail_catalog::provider::{
+        CatalogProvider, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
+        DropTableOptions, Namespace,
+    };
+    use sail_catalog_memory::MemoryCatalogProvider;
+    use sail_common_datafusion::catalog::TableKind;
+
+    use super::*;
+    use crate::io::{load_manifest, load_manifest_list};
+    use crate::operations::SnapshotUpdateKind;
+    use crate::operations::replacement_test_support::{ReplacementFault, ReplacementStore};
+    use crate::spec::{DataContentType, DataFile, DataFileFormat};
+
+    fn catalog(existing: bool) -> TableReplacement {
+        TableReplacement {
+            migration_backup: None,
+            catalog_table: vec!["memory".into(), "db".into(), "t".into()],
+            authority: sail_common_datafusion::catalog::ReplacementAuthority::Path {
+                catalog_generation: 7,
+                database_generation: 8,
+                table_generation: 9,
+            },
+            require_existing: existing,
+            existing,
+            columns: vec![(
+                "replacement".into(),
+                DataType::Int64,
+                false,
+                Default::default(),
+            )],
+            location: "memory:///table".into(),
+            format: "iceberg".into(),
+            partition_by: vec![],
+            sort_by: vec![],
+            properties: vec![("owner".into(), "old".into())],
+            property_updates: vec![("owner".into(), "new".into())],
+            is_external: true,
+        }
+    }
+
+    fn rest_catalog(existing: bool, metadata: &TableMetadata) -> Result<TableReplacement> {
+        use sail_common_datafusion::catalog::*;
+        let mut catalog = catalog(existing);
+        let execution = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".into()),
+            catalog.catalog_table.clone(),
+            CatalogTableIdentity {
+                table_id: metadata.table_uuid.map(|id| id.to_string()),
+                table_uri: Some(metadata.location.clone()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        let metadata_json = serde_json::to_string(metadata)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        catalog.authority = if existing {
+            ReplacementAuthority::IcebergRestExisting {
+                metadata_json,
+                metadata_location: "memory:///table/metadata/catalog.json".into(),
+                execution,
+            }
+        } else {
+            ReplacementAuthority::IcebergRestStagedCreate {
+                metadata_json,
+                execution,
+            }
+        };
+        Ok(catalog)
+    }
+
+    #[test]
+    fn replacement_rejections_are_terminal_but_ordinary_catalog_errors_are_not() {
+        use sail_common_datafusion::error::{
+            CommonErrorCause, PythonErrorCause, PythonErrorCauseExtractor,
+        };
+
+        struct NoPythonError;
+        impl PythonErrorCauseExtractor for NoPythonError {
+            fn extract(_: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
+                None
+            }
+        }
+        for error in [
+            CatalogError::Conflict("identity changed".into()),
+            CatalogError::CommitRejected("requirements failed".into()),
+            CatalogError::StaleMetadata("base changed".into()),
+            CatalogError::NotSupported("replacement unsupported".into()),
+            CatalogError::NotFound(sail_catalog::error::CatalogObject::Table, "dropped".into()),
+        ] {
+            assert!(CommonErrorCause::new::<NoPythonError>(&error).is_retryable());
+            assert!(matches!(
+                CommonErrorCause::new::<NoPythonError>(&replacement_catalog_error(error)),
+                CommonErrorCause::CommitRequiresReplanning(_)
+            ));
+        }
+        let unknown = replacement_catalog_error(CatalogError::CommitStateUnknown(
+            "lost response".to_string().into(),
+        ));
+        assert!(matches!(
+            CommonErrorCause::new::<NoPythonError>(&unknown),
+            CommonErrorCause::CommitStateUnknown(_)
+        ));
+        let transient =
+            replacement_catalog_error(CatalogError::External("connection unavailable".into()));
+        assert!(CommonErrorCause::new::<NoPythonError>(&transient).is_retryable());
+    }
+
+    #[test]
+    fn staged_schema_compatibility_ignores_ids_but_preserves_logical_constraints() {
+        fn field(name: &str, data_type: DataType, nullable: bool) -> Arc<Field> {
+            Arc::new(Field::new(name, data_type, nullable))
+        }
+        let source = field("n", DataType::Int32, false);
+        let widened = Arc::new(
+            Field::new("n", DataType::Int32, true)
+                .with_metadata(HashMap::from([("PARQUET:field_id".into(), "102".into())])),
+        );
+        let source_struct = DataType::Struct(vec![source.clone()].into());
+        let widened_struct = DataType::Struct(vec![widened.clone()].into());
+        assert!(replacement_types_compatible(
+            &widened_struct,
+            &source_struct
+        ));
+        assert!(!replacement_types_compatible(
+            &source_struct,
+            &widened_struct
+        ));
+        for incompatible in [
+            field("renamed", DataType::Int32, false),
+            field("n", DataType::Utf8, false),
+        ] {
+            assert!(!replacement_types_compatible(
+                &DataType::Struct(vec![incompatible].into()),
+                &source_struct
+            ));
+        }
+        let source_list = DataType::List(field("item", source_struct.clone(), false));
+        let widened_list = DataType::List(field("element", widened_struct.clone(), true));
+        assert!(replacement_types_compatible(&widened_list, &source_list));
+        assert!(!replacement_types_compatible(&source_list, &widened_list));
+        let map = |value| {
+            DataType::Map(
+                field(
+                    "entries",
+                    DataType::Struct(vec![field("key", DataType::Utf8, false), value].into()),
+                    false,
+                ),
+                false,
+            )
+        };
+        assert!(replacement_types_compatible(
+            &map(field("value", widened_struct.clone(), true)),
+            &map(field("value", source_struct.clone(), false))
+        ));
+        assert!(!replacement_types_compatible(
+            &map(field("value", source_struct.clone(), false)),
+            &map(field("value", widened_struct.clone(), true))
+        ));
+        assert!(replacement_fields_compatible(
+            &vec![field("nested", widened_struct, true)].into(),
+            &vec![field("nested", source_struct.clone(), false)].into()
+        ));
+        assert!(!replacement_fields_compatible(
+            &vec![field("nested", source_struct.clone(), false)].into(),
+            &vec![field("nested", source_struct, true)].into()
+        ));
+    }
+
+    #[test]
+    fn rest_replacement_requirements_protect_prepared_output()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut base = historical_metadata()?;
+        base.partition_specs
+            .push(crate::spec::PartitionSpec::unpartitioned_spec());
+        let input = ArrowSchema::new(vec![
+            Field::new("old", DataType::Int32, true),
+            Field::new("replacement", DataType::Int64, false),
+        ]);
+        let request = rest_catalog(true, &base)?;
+        let replacement = prepare_replacement(
+            &Url::parse("memory:///table")?,
+            request,
+            None,
+            Some(&base),
+            &input,
+        )?;
+        let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
+        assert_eq!(
+            requirements,
+            vec![
+                TableRequirement::UuidMatch {
+                    uuid: base.table_uuid.ok_or("missing UUID")?
+                },
+                TableRequirement::CurrentSchemaIdMatch {
+                    current_schema_id: base.current_schema_id
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "audit".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "frozen".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "main".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::LastAssignedFieldIdMatch {
+                    last_assigned_field_id: base.last_column_id
+                },
+                TableRequirement::DefaultSpecIdMatch {
+                    default_spec_id: base.default_spec_id,
+                },
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0))
+                },
+            ]
+        );
+        assert!(updates.contains(&TableUpdate::SetCurrentSchema { schema_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }));
+        assert!(updates.contains(&TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.into()
+        }));
+        let properties = updates
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::SetProperties { updates } => Some(updates),
+                _ => None,
+            })
+            .ok_or("missing property delta")?;
+        assert_eq!(properties, &HashMap::from([("owner".into(), "new".into())]));
+        assert!(!updates.iter().any(|update| matches!(
+            update,
+            TableUpdate::SetLocation { .. } | TableUpdate::AssignUuid { .. }
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn rest_replacement_guards_new_sort_order_ids() -> Result<(), Box<dyn std::error::Error>> {
+        use sail_common_datafusion::catalog::CatalogTableSort;
+
+        let mut base = historical_metadata()?;
+        base.partition_specs
+            .push(crate::spec::PartitionSpec::unpartitioned_spec());
+        base.sort_orders = vec![SortOrder {
+            order_id: 0,
+            fields: vec![],
+        }];
+        base.default_sort_order_id = Some(0);
+        let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
+        let url = Url::parse("memory:///table")?;
+        for added in [true, false] {
+            let mut request = rest_catalog(true, &base)?;
+            request.sort_by = vec![CatalogTableSort {
+                column: "old".into(),
+                ascending: true,
+            }];
+            let replacement = prepare_replacement(&url, request, None, Some(&base), &input)?;
+            let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
+            let order = replacement
+                .metadata
+                .sort_orders
+                .iter()
+                .find(|order| {
+                    Some(order.order_id as i32) == replacement.metadata.default_sort_order_id
+                })
+                .ok_or("missing prepared order")?;
+            assert_eq!(order.order_id, 1);
+            assert_eq!(order.fields[0].direction, SortDirection::Ascending);
+            assert_eq!(
+                requirements.contains(&TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
+                }),
+                added
+            );
+            assert_eq!(
+                updates
+                    .iter()
+                    .any(|update| matches!(update, TableUpdate::AddSortOrder { .. })),
+                added
+            );
+            if added {
+                assert!(serde_json::to_value(&requirements)?.as_array().ok_or("requirements array")?.contains(
+                    &serde_json::json!({"type": "assert-default-sort-order-id", "default-sort-order-id": 0})
+                ));
+            }
+            base = replacement.metadata;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rest_staged_create_uses_server_ids_and_full_initialization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut base = historical_metadata()?;
+        base.snapshots.clear();
+        base.snapshot_log.clear();
+        base.refs.clear();
+        base.current_snapshot_id = None;
+        let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
+        let request = rest_catalog(false, &base)?;
+        let replacement = prepare_replacement(
+            &Url::parse("memory:///table")?,
+            request,
+            None,
+            Some(&base),
+            &input,
+        )?;
+        assert_eq!(
+            replacement.metadata.current_schema_id,
+            base.current_schema_id
+        );
+        assert_eq!(replacement.metadata.schemas, base.schemas);
+        assert_eq!(replacement.metadata.partition_specs, base.partition_specs);
+        let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
+        assert_eq!(requirements, vec![TableRequirement::NotExist]);
+        assert!(updates.contains(&TableUpdate::AssignUuid {
+            uuid: base.table_uuid.ok_or("missing UUID")?
+        }));
+        assert!(updates.contains(&TableUpdate::SetLocation {
+            location: base.location.clone()
+        }));
+        assert!(updates.contains(&TableUpdate::SetCurrentSchema { schema_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSpec { spec_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }));
+        for existing in [false, true] {
+            let catalog = rest_catalog(existing, &base)?;
+            assert_eq!(
+                serde_json::from_str::<TableReplacement>(&serde_json::to_string(&catalog)?)?,
+                catalog
+            );
+        }
+        Ok(())
+    }
+
+    fn historical_metadata() -> serde_json::Result<TableMetadata> {
+        serde_json::from_value(serde_json::json!({
+            "format-version": 3, "table-uuid": "12345678-1234-1234-1234-123456789abc",
+            "location": "memory:///table", "last-sequence-number": 4,
+            "last-updated-ms": 100, "last-column-id": 10, "current-schema-id": 2,
+            "schemas": [{"type":"struct", "schema-id":2,"fields":[{"id":10,"name":"old","required":false,"type":"int"}]}],
+            "partition-specs": [{"spec-id":3,"fields":[{"source-id":10,"field-id":1002,"name":"old","transform":"identity"}]}],
+            "default-spec-id":3,"last-partition-id":1002,
+            "properties":{"retained":"yes","owner":"old"},
+            "current-snapshot-id":42,"next-row-id":123,
+            "snapshots":[{"snapshot-id":42,"sequence-number":4,"timestamp-ms":100,"manifest-list":"memory:///table/metadata/old.avro","summary":{"operation":"append"},"schema-id":2,"first-row-id":0,"added-rows":123}],
+            "snapshot-log":[{"timestamp-ms":100,"snapshot-id":42}],
+            "metadata-log":[{"timestamp-ms":90,"metadata-file":"memory:///table/metadata/v1.metadata.json"}],
+            "sort-orders":[{"order-id":4,"fields":[{"source-id":10,"transform":"identity","direction":"asc","null-order":"nulls-first"}]}],
+            "default-sort-order-id":4,
+            "refs":{"main":{"snapshot-id":42,"type":"branch"},"audit":{"snapshot-id":42,"type":"branch"},"frozen":{"snapshot-id":42,"type":"tag"}}
+        }))
+    }
+
+    #[test]
+    fn replacement_private_metadata_preserves_history_and_resets_defaults()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let base = historical_metadata()?;
+        let before = serde_json::to_value(&base)?;
+        let input = ArrowSchema::new(vec![
+            Field::new("replacement", DataType::Int64, false),
+            Field::new("old", DataType::Int32, true),
+        ]);
+        let staged = prepare_replacement(
+            &Url::parse("memory:///table")?,
+            catalog(true),
+            Some("table/metadata/v2.metadata.json".into()),
+            Some(&base),
+            &input,
+        )?;
+        let metadata = staged.metadata;
+        let after = serde_json::to_value(&metadata)?;
+        for key in [
+            "table-uuid",
+            "snapshots",
+            "snapshot-log",
+            "metadata-log",
+            "next-row-id",
+            "last-sequence-number",
+            "location",
+        ] {
+            assert_eq!(after[key], before[key], "{key}");
+        }
+        assert_eq!(serde_json::to_value(&base)?, before);
+        assert_eq!(metadata.current_snapshot_id, None);
+        assert!(!metadata.refs.contains_key("main"));
+        assert_eq!(after["refs"]["audit"], before["refs"]["audit"]);
+        assert_eq!(after["refs"]["frozen"], before["refs"]["frozen"]);
+        assert_eq!(after["schemas"][0], before["schemas"][0]);
+        assert_eq!(after["partition-specs"][0], before["partition-specs"][0]);
+        assert_eq!(after["sort-orders"][0], before["sort-orders"][0]);
+        assert!(metadata.current_schema_id > base.current_schema_id);
+        assert!(metadata.last_column_id > base.last_column_id);
+        assert!(metadata.last_partition_id >= base.last_partition_id);
+        assert!(
+            metadata
+                .partition_specs
+                .iter()
+                .find(|spec| spec.spec_id() == metadata.default_spec_id)
+                .is_some_and(|spec| spec.fields().is_empty())
+        );
+        assert_eq!(metadata.default_sort_order_id, Some(0));
+        assert_eq!(
+            metadata.properties.get("retained").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            metadata.properties.get("owner").map(String::as_str),
+            Some("new")
+        );
+        assert_eq!(
+            staged.base_metadata_file.as_deref(),
+            Some("table/metadata/v2.metadata.json")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_absent_empty_and_invalid_properties_are_private()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
+        let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+        let fresh = prepare_replacement(&url, catalog(false), None, None, &input)?;
+        assert!(fresh.metadata.snapshots.is_empty());
+        assert!(fresh.metadata.table_uuid.is_some());
+        assert!(fresh.metadata.current_snapshot_id.is_none());
+        let empty_replacement = prepare_replacement(
+            &url,
+            catalog(true),
+            Some("table/metadata/v1.metadata.json".into()),
+            Some(&fresh.metadata),
+            &input,
+        )?;
+        assert!(empty_replacement.metadata.snapshots.is_empty());
+        assert_eq!(
+            empty_replacement.metadata.table_uuid,
+            fresh.metadata.table_uuid
+        );
+        let base = historical_metadata()?;
+        let before = serde_json::to_value(&base)?;
+        assert!(prepare_replacement(&url, catalog(false), None, Some(&base), &input).is_err());
+        assert!(prepare_replacement(&url, catalog(true), None, None, &input).is_err());
+        for (key, value) in [("format-version", "garbage"), ("format-version", "99")] {
+            let mut request = catalog(true);
+            request.property_updates.push((key.into(), value.into()));
+            assert!(
+                prepare_replacement(&url, request, None, Some(&base), &input).is_err(),
+                "{key}={value}"
+            );
+            assert_eq!(serde_json::to_value(&base)?, before);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_version_uses_authoritative_default_and_rejects_downgrades()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
+        let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+        let fresh = prepare_replacement(&url, catalog(false), None, None, &input)?.metadata;
+        assert_eq!(fresh.format_version, FormatVersion::V2);
+        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            let mut base = fresh.clone();
+            base.format_version = version;
+            for requested in [
+                None,
+                Some(FormatVersion::V1),
+                Some(FormatVersion::V2),
+                Some(FormatVersion::V3),
+            ] {
+                let mut request = catalog(true);
+                request.property_updates.clear();
+                // Registration bookkeeping is not an explicit version request.
+                request
+                    .properties
+                    .push(("format-version".into(), "3".into()));
+                if let Some(requested) = requested {
+                    request
+                        .property_updates
+                        .push(("format-version".into(), (requested as i32).to_string()));
+                }
+                let before = serde_json::to_value(&base)?;
+                let result = prepare_replacement(&url, request, None, Some(&base), &input);
+                if requested.is_some_and(|requested| requested < version) {
+                    assert!(
+                        result
+                            .err()
+                            .ok_or("format downgrade must fail")?
+                            .to_string()
+                            .contains("cannot downgrade")
+                    );
+                } else {
+                    let replacement = result?;
+                    let expected = requested.unwrap_or(version);
+                    assert_eq!(replacement.metadata.format_version, expected);
+                    assert!(
+                        !replacement
+                            .metadata
+                            .properties
+                            .contains_key("format-version")
+                    );
+                    assert!(
+                        replacement
+                            .catalog
+                            .properties
+                            .contains(&("format-version".into(), (expected as i32).to_string()))
+                    );
+                }
+                assert_eq!(serde_json::to_value(&base)?, before);
+            }
+        }
+        // As on creation, schema-required versions are reflected in the effective catalog.
+        let nanos = ArrowSchema::new(vec![Field::new(
+            "replacement",
+            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Nanosecond, None),
+            false,
+        )]);
+        for existing in [false, true] {
+            let replacement = prepare_replacement(
+                &url,
+                catalog(existing),
+                None,
+                existing.then_some(&fresh),
+                &nanos,
+            )?;
+            assert_eq!(replacement.metadata.format_version, FormatVersion::V3);
+            assert!(
+                replacement
+                    .catalog
+                    .properties
+                    .contains(&("format-version".into(), "3".into()))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_applies_only_explicit_property_updates_to_authoritative_base()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
+        let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
+        let mut base = historical_metadata()?;
+        base.properties.insert("owner".into(), "external".into());
+        for override_owner in [false, true] {
+            let mut request = catalog(true);
+            request.properties.extend([
+                ("removed".into(), "stale".into()),
+                ("option.example".into(), "preserved".into()),
+                ("format-version".into(), "1".into()),
+            ]);
+            request.property_updates = if override_owner {
+                vec![("owner".into(), "requested".into())]
+            } else {
+                vec![]
+            };
+            let replacement = prepare_replacement(&url, request, None, Some(&base), &input)?;
+            let expected = if override_owner {
+                "requested"
+            } else {
+                "external"
+            };
+            assert_eq!(
+                replacement
+                    .metadata
+                    .properties
+                    .get("owner")
+                    .map(String::as_str),
+                Some(expected)
+            );
+            assert!(!replacement.metadata.properties.contains_key("removed"));
+            assert!(
+                !replacement
+                    .catalog
+                    .properties
+                    .iter()
+                    .any(|(key, _)| key == "removed")
+            );
+            assert!(
+                replacement
+                    .catalog
+                    .properties
+                    .contains(&("owner".into(), expected.into()))
+            );
+            assert!(
+                replacement
+                    .catalog
+                    .properties
+                    .contains(&("option.example".into(), "preserved".into()))
+            );
+            assert!(
+                replacement
+                    .catalog
+                    .properties
+                    .contains(&("format-version".into(), "3".into()))
+            );
+            assert!(
+                !replacement
+                    .metadata
+                    .properties
+                    .contains_key("option.example")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_rejects_unbindable_historical_sort_orders_without_changing_history()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
+        let mut base = historical_metadata()?;
+        base.sort_orders[0].fields[0].transform = Transform::Bucket(16);
+        base.sort_orders.push(SortOrder::unsorted_order());
+        base.default_sort_order_id = Some(0);
+        let before = serde_json::to_value(&base)?;
+        for field in [
+            Field::new("replacement", DataType::Int64, false),
+            Field::new("old", DataType::Boolean, true),
+        ] {
+            let input = ArrowSchema::new(vec![field]);
+            let error = prepare_replacement(&url, catalog(true), None, Some(&base), &input)
+                .err()
+                .ok_or("unbound historical sort order must fail")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported Iceberg replacement: historical sort order 4")
+            );
+            assert_eq!(serde_json::to_value(&base)?, before);
+        }
+        let input = ArrowSchema::new(vec![
+            Field::new("old", DataType::Int64, true),
+            Field::new("replacement", DataType::Utf8, false),
+        ]);
+        let replacement = prepare_replacement(&url, catalog(true), None, Some(&base), &input)?;
+        assert_eq!(replacement.metadata.sort_orders, base.sort_orders);
+        assert_eq!(replacement.metadata.default_sort_order_id, Some(0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replacement_publication_faults_preserve_artifacts_and_catalog_access()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for fault in [
+            ReplacementFault::LostAck,
+            ReplacementFault::PutThenAlreadyExists,
+            ReplacementFault::PreflightList,
+        ] {
+            for existing in [false, true] {
+                // Write planning supplies a normalized directory URL to replacement operations.
+                let url = crate::lake_source::IcebergLakeSource::parse_table_url(vec![
+                    "memory:///table".into(),
+                ])
+                .await?;
+                let store = Arc::new(ReplacementStore::new(fault));
+                let context = StoreContext::new(store.clone(), &url)?;
+                let namespace = Namespace::try_from(vec!["db".to_string()])?;
+                let provider = Arc::new(MemoryCatalogProvider::new(
+                    "memory".into(),
+                    namespace.clone(),
+                    None,
+                ));
+                let manager = Arc::new(CatalogManager::try_new(CatalogManagerOptions {
+                    catalogs: HashMap::from([(
+                        "memory".into(),
+                        provider.clone() as Arc<dyn CatalogProvider>,
+                    )]),
+                    default_catalog: "memory".into(),
+                    default_database: vec!["db".into()],
+                    global_temporary_database: vec!["global_temp".into()],
+                })?);
+                let task = SessionContext::new_with_config(
+                    SessionConfig::new().with_extension(manager.clone()),
+                )
+                .task_ctx();
+                let options = CreateTableOptions {
+                    columns: vec![CreateTableColumnOptions {
+                        metadata: Default::default(),
+                        name: "replacement".into(),
+                        data_type: DataType::Int64,
+                        nullable: false,
+                        comment: None,
+                        default: None,
+                        generated_always_as: None,
+                        identity: None,
+                    }],
+                    comment: None,
+                    constraints: vec![],
+                    location: Some(url.to_string()),
+                    format: "iceberg".into(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    mode: CreateTableMode::CreateOrReplace,
+                    properties: vec![],
+                    is_external: true,
+                    is_write_precondition: true,
+                };
+                let input =
+                    ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+                let base = if existing {
+                    let mut old = options.clone();
+                    old.columns[0].name = "old".into();
+                    provider.create_table(&namespace, "t", old).await?;
+                    let schema = ArrowSchema::new(vec![Field::new("old", DataType::Int64, false)]);
+                    let base =
+                        prepare_replacement(&url, catalog(false), None, None, &schema)?.metadata;
+                    store
+                        .inner
+                        .put(
+                            &Path::from("table/metadata/v1.metadata.json"),
+                            Bytes::from(base.to_json()?).into(),
+                        )
+                        .await?;
+                    Some(base)
+                } else {
+                    None
+                };
+                let before = provider
+                    .get_table(&namespace, "t")
+                    .await
+                    .ok()
+                    .map(|status| status.kind);
+                let base_bytes = if existing {
+                    Some(
+                        store
+                            .inner
+                            .get(&Path::from("table/metadata/v1.metadata.json"))
+                            .await?
+                            .bytes()
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+                let staged = manager
+                    .stage_table_replacement(&["t"], options.clone())
+                    .await?;
+                let replacement = prepare_replacement(
+                    &url,
+                    staged,
+                    existing.then(|| "table/metadata/v1.metadata.json".into()),
+                    base.as_ref(),
+                    &input,
+                )?;
+                store
+                    .inner
+                    .put(
+                        &Path::from("table/data/task.parquet"),
+                        Bytes::from_static(b"task data").into(),
+                    )
+                    .await?;
+                let commit = IcebergCommitInfo {
+                    snapshot_properties: Default::default(),
+                    table_uri: url.to_string(),
+                    row_count: 1,
+                    action_summary: None,
+                    data_files: vec![DataFile {
+                        content: DataContentType::Data,
+                        file_path: "memory:///table/data/task.parquet".into(),
+                        file_format: DataFileFormat::Parquet,
+                        partition: vec![],
+                        record_count: 1,
+                        file_size_in_bytes: 9,
+                        column_sizes: HashMap::new(),
+                        value_counts: HashMap::new(),
+                        null_value_counts: HashMap::new(),
+                        nan_value_counts: HashMap::new(),
+                        lower_bounds: HashMap::new(),
+                        upper_bounds: HashMap::new(),
+                        block_size_in_bytes: None,
+                        key_metadata: None,
+                        split_offsets: vec![],
+                        equality_ids: vec![],
+                        sort_order_id: None,
+                        first_row_id: None,
+                        partition_spec_id: replacement.metadata.default_spec_id,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
+                    }],
+                    delete_files: vec![],
+                    manifest_path: String::new(),
+                    manifest_list_path: String::new(),
+                    updates: vec![],
+                    requirements: vec![],
+                    table_properties: vec![],
+                    lakehouse_table: None,
+                    snapshot_update_kind: SnapshotUpdateKind::FullOverwrite,
+                    schema: None,
+                    partition_spec: None,
+                };
+                let result =
+                    commit_replacement(&task, &url, &context, replacement.clone(), &commit).await;
+                if matches!(fault, ReplacementFault::PreflightList) {
+                    let error = result.err().ok_or("preflight listing must fail")?;
+                    assert!(error.to_string().contains("preflight listing failed"));
+                    assert!(!error.to_string().contains("state is unknown"));
+                    assert_eq!(store.metadata_puts.load(Ordering::SeqCst), 0);
+                    assert_eq!(store.lists.load(Ordering::SeqCst), 3);
+                    assert_eq!(
+                        provider
+                            .get_table(&namespace, "t")
+                            .await
+                            .ok()
+                            .map(|status| status.kind),
+                        before
+                    );
+                    assert_eq!(
+                        provider.list_tables(&namespace).await?.len(),
+                        usize::from(existing)
+                    );
+                    let files = store.inner.list(None).try_collect::<Vec<_>>().await?;
+                    assert_eq!(
+                        files
+                            .iter()
+                            .filter(|file| file.location.as_ref().ends_with(".metadata.json"))
+                            .count(),
+                        usize::from(existing)
+                    );
+                    assert!(
+                        !files
+                            .iter()
+                            .any(|file| file.location.as_ref().ends_with(".avro")),
+                        "unpublished manifests must be cleaned up"
+                    );
+                    store.disabled.store(true, Ordering::SeqCst);
+                    // Retrying the same staged identity must not encounter an uncertain name.
+                    commit_replacement(&task, &url, &context, replacement, &commit).await?;
+                } else {
+                    result?;
+                }
+                let status = provider.get_table(&namespace, "t").await?;
+                let TableKind::Table {
+                    columns,
+                    properties,
+                    ..
+                } = status.kind
+                else {
+                    return Err("expected table".into());
+                };
+                assert_eq!(columns[0].name, "replacement");
+                let version = if existing { 2 } else { 1 };
+                assert!(
+                    properties.contains(&(
+                        "metadata_location".into(),
+                        format!("memory:///table/metadata/v{version}.metadata.json")
+                    )),
+                    "{properties:?}"
+                );
+                let bytes = store
+                    .inner
+                    .get(&Path::from(format!(
+                        "table/metadata/v{version}.metadata.json"
+                    )))
+                    .await?
+                    .bytes()
+                    .await?;
+                let metadata = TableMetadata::from_json(&bytes)?;
+                let snapshot = metadata
+                    .current_snapshot()
+                    .ok_or("replacement must publish a current snapshot")?;
+                let manifests = load_manifest_list(&context, snapshot.manifest_list()).await?;
+                assert_eq!(manifests.entries().len(), 1);
+                let manifest =
+                    load_manifest(&context, &manifests.entries()[0].manifest_path).await?;
+                assert_eq!(manifest.entries().len(), 1);
+                assert_eq!(manifest.entries()[0].data_file.record_count, 1);
+                context
+                    .prefixed
+                    .head(&Path::from("data/task.parquet"))
+                    .await?;
+                if let Some(before) = base_bytes {
+                    assert_eq!(
+                        store
+                            .inner
+                            .get(&Path::from("table/metadata/v1.metadata.json"))
+                            .await?
+                            .bytes()
+                            .await?,
+                        before
+                    );
+                }
+                provider
+                    .rename_table(&namespace, "t", &namespace, "renamed")
+                    .await?;
+                provider
+                    .drop_table(
+                        &namespace,
+                        "renamed",
+                        DropTableOptions {
+                            if_exists: false,
+                            purge: false,
+                        },
+                    )
+                    .await?;
+                provider.create_table(&namespace, "t", options).await?;
+                assert_eq!(provider.list_tables(&namespace).await?.len(), 1);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_append_cannot_overwrite_acknowledged_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        first_append_replacement_race(None).await
+    }
+
+    #[tokio::test]
+    async fn first_append_cannot_supersede_acknowledged_replacement_with_different_codec()
+    -> Result<(), Box<dyn std::error::Error>> {
+        first_append_replacement_race(Some("gzip")).await
+    }
+
+    async fn first_append_replacement_race(
+        replacement_codec: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use tokio::time::{Duration, timeout};
+
+        use crate::operations::bootstrap::{PersistStrategy, bootstrap_first_snapshot};
+        use crate::table::metadata_loader::{decode_metadata_file, load_metadata_file_bytes};
+
+        async fn write_row(
+            store: &ReplacementStore,
+            name: &str,
+            id: i32,
+            value: i64,
+        ) -> Result<DataFile, Box<dyn std::error::Error>> {
+            let field = Field::new(name, DataType::Int64, false)
+                .with_metadata(HashMap::from([("PARQUET:field_id".into(), id.to_string())]));
+            let schema = Arc::new(ArrowSchema::new(vec![field]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from(vec![value]))],
+            )?;
+            let mut writer = ArrowWriter::try_new(Vec::new(), schema, None)?;
+            writer.write(&batch)?;
+            let bytes = writer.into_inner()?;
+            let size = bytes.len();
+            store
+                .inner
+                .put(
+                    &Path::from(format!("table/data/{name}.parquet")),
+                    Bytes::from(bytes).into(),
+                )
+                .await?;
+            Ok(serde_json::from_value(serde_json::json!({
+                "content": "DATA", "file_path": format!("memory:///table/data/{name}.parquet"),
+                "file_format": "PARQUET", "partition": [], "record_count": 1,
+                "file_size_in_bytes": size, "partition_spec_id": 0
+            }))?)
+        }
+
+        timeout(Duration::from_secs(15), async {
+            let url = crate::lake_source::IcebergLakeSource::parse_table_url(vec![
+                "memory:///table".into(),
+            ])
+            .await?;
+            let store = Arc::new(ReplacementStore::new(ReplacementFault::BootstrapRace));
+            let context = StoreContext::new(store.clone(), &url)?;
+            let namespace = Namespace::try_from(vec!["db".to_string()])?;
+            let provider = Arc::new(MemoryCatalogProvider::new(
+                "memory".into(),
+                namespace.clone(),
+                None,
+            ));
+            let manager = Arc::new(CatalogManager::try_new(CatalogManagerOptions {
+                catalogs: HashMap::from([(
+                    "memory".into(),
+                    provider.clone() as Arc<dyn CatalogProvider>,
+                )]),
+                default_catalog: "memory".into(),
+                default_database: vec!["db".into()],
+                global_temporary_database: vec!["global_temp".into()],
+            })?);
+            let task = SessionContext::new_with_config(
+                SessionConfig::new().with_extension(manager.clone()),
+            )
+            .task_ctx();
+            let mut options = CreateTableOptions {
+                columns: vec![CreateTableColumnOptions {
+                    metadata: Default::default(),
+                    name: "old".into(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                }],
+                comment: None,
+                constraints: vec![],
+                location: Some(url.to_string()),
+                format: "iceberg".into(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                mode: CreateTableMode::CreateOrReplace,
+                properties: vec![],
+                is_external: true,
+                is_write_precondition: true,
+            };
+            provider
+                .create_table(&namespace, "t", options.clone())
+                .await?;
+            let old_schema = ArrowSchema::new(vec![Field::new("old", DataType::Int64, false)]);
+            let base = prepare_replacement(&url, catalog(false), None, None, &old_schema)?.metadata;
+            store
+                .inner
+                .put(
+                    &Path::from("table/metadata/v1.metadata.json"),
+                    Bytes::from(base.to_json()?).into(),
+                )
+                .await?;
+            let old_file = write_row(&store, "old", 1, 1).await?;
+            let new_file = write_row(&store, "replacement", 2, 2).await?;
+            let append = IcebergCommitInfo {
+                snapshot_properties: Default::default(),
+                table_uri: url.to_string(),
+                row_count: 1,
+                action_summary: None,
+                data_files: vec![old_file],
+                delete_files: vec![],
+                manifest_path: String::new(),
+                manifest_list_path: String::new(),
+                updates: vec![],
+                requirements: vec![],
+                table_properties: vec![],
+                lakehouse_table: None,
+                snapshot_update_kind: SnapshotUpdateKind::FastAppend,
+                schema: None,
+                partition_spec: None,
+            };
+            let append_task = {
+                let url = url.clone();
+                let context = context.clone();
+                let base = base.clone();
+                let append = append.clone();
+                tokio::spawn(async move {
+                    bootstrap_first_snapshot(
+                        &url,
+                        &context,
+                        &append,
+                        base,
+                        "table/metadata/v1.metadata.json",
+                        None,
+                        PersistStrategy::NewVersion,
+                    )
+                    .await
+                })
+            };
+            // The first append has captured v1 and reached its metadata PUT; no sleeps.
+            store.bootstrap_entered.wait().await;
+            options.columns[0].name = "replacement".into();
+            if let Some(codec) = replacement_codec {
+                options.properties.push(("write.metadata.compression-codec".into(), codec.into()));
+            }
+            let staged = manager.stage_table_replacement(&["t"], options).await?;
+            let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+            let replacement = prepare_replacement(
+                &url,
+                staged,
+                Some("table/metadata/v1.metadata.json".into()),
+                Some(&base),
+                &input,
+            )?;
+            let mut replacement_commit = append;
+            replacement_commit.data_files = vec![new_file];
+            replacement_commit.snapshot_update_kind = SnapshotUpdateKind::FullOverwrite;
+            commit_replacement(&task, &url, &context, replacement, &replacement_commit).await?;
+            let path = Path::from("table/metadata/v2.metadata.json");
+            let acknowledged = store.inner.get(&path).await?.bytes().await?;
+            let expected = TableMetadata::from_json(&decode_metadata_file(path.as_ref(), &acknowledged)?)?;
+            assert_eq!(
+                expected.current_schema().ok_or("missing schema")?.fields()[0].name,
+                "replacement"
+            );
+            // Complete replacement (including final listing, hint and catalog installation) first.
+            store.bootstrap_release.wait().await;
+            let append_result = append_task.await?;
+            let latest = find_latest_metadata_file(&context.base, &url).await?;
+            let visible = TableMetadata::from_json(&load_metadata_file_bytes(&context.base, &latest).await?)?;
+            eprintln!(
+                "codec={replacement_codec:?} append_result={append_result:?} acknowledged={} discovered={latest} visible_schema={:?}",
+                path, visible.current_schema()
+            );
+            assert_eq!(
+                latest, path.as_ref(),
+                "a stale append must not supersede an acknowledged replacement via another codec filename"
+            );
+            assert!(
+                append_result
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains("replan")),
+                "stale append must fail rather than retry its old-schema files: {append_result:?}"
+            );
+            let actual_bytes = store.inner.get(&path).await?.bytes().await?;
+            let actual = TableMetadata::from_json(&decode_metadata_file(path.as_ref(), &actual_bytes)?)?;
+            for (label, metadata) in [("replacement", &expected), ("final", &actual)] {
+                let snapshot = metadata.current_snapshot().ok_or("missing snapshot")?;
+                let list = load_manifest_list(&context, snapshot.manifest_list()).await?;
+                let manifest = load_manifest(&context, &list.entries()[0].manifest_path).await?;
+                eprintln!(
+                    "{label} data file={}",
+                    manifest.entries()[0].data_file.file_path
+                );
+                assert_eq!(manifest.entries()[0].data_file.record_count, 1);
+                assert_eq!(
+                    manifest.entries()[0].data_file.file_path,
+                    "memory:///table/data/replacement.parquet"
+                );
+            }
+            let files = store.inner.list(None).try_collect::<Vec<_>>().await?;
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|file| file.location.as_ref().ends_with(".avro"))
+                    .count(),
+                2,
+                "only replacement manifests remain after the definite append conflict"
+            );
+            context
+                .prefixed
+                .head(&Path::from("data/old.parquet"))
+                .await?;
+            eprintln!(
+                "append_ok={} replacement_snapshot={:?} final_snapshot={:?} final_schema={:?}",
+                append_result.is_ok(),
+                expected.current_snapshot_id,
+                actual.current_snapshot_id,
+                actual.current_schema()
+            );
+            assert_eq!(
+                actual_bytes, acknowledged,
+                "acknowledged replacement metadata must be immutable"
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_rejects_unsupported_write_format() -> Result<(), Box<dyn std::error::Error>> {
+        let base = historical_metadata()?;
+        let mut request = catalog(true);
+        request
+            .property_updates
+            .push(("write.format.default".into(), "orc".into()));
+        let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+        assert!(
+            prepare_replacement(
+                &Url::parse("memory:///table")?,
+                request,
+                None,
+                Some(&base),
+                &input
+            )
+            .is_err(),
+            "write.format.default=orc must not silently select a Parquet writer"
+        );
+        Ok(())
+    }
+}

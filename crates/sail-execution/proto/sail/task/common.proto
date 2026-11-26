@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package sail.task;
@@ -11,6 +13,8 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  // Whether each consumer task reads its own replica of the input streams.
+  bool replicated = 3;
 }
 
 message TaskInputLocator {
@@ -84,6 +88,7 @@ message TaskOutputDistribution {
     TaskOutputRoundRobinDistribution round_robin = 2;
     TaskOutputRoundRobinRowDistribution round_robin_row = 3;
     TaskOutputRangeDistribution range = 4;
+    TaskOutputChannelDistribution channel = 5;
   }
 }
 
@@ -105,6 +110,11 @@ message TaskOutputRangeDistribution {
   uint64 channels = 2;
 }
 
+// Each row names its channel in its last column, which is not written.
+message TaskOutputChannelDistribution {
+  uint64 channels = 1;
+}
+
 message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
@@ -115,6 +125,7 @@ message TaskOutputLocator {
 
 message TaskOutputPipelinedLocator {
   uint64 replicas = 1;
+  bool bounded = 2;
 }
 
 message TaskOutputBlockingLocator {

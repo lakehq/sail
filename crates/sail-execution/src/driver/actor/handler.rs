@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -9,6 +11,7 @@ use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_physical_plan::range_split::range_split_from_batches;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -20,7 +23,8 @@ use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
-    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
+    TaskStreamKeySet, WorkerId,
 };
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -292,6 +296,25 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_range_split_points_read(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        shuffle: usize,
+        partitions: ExecutionResult<usize>,
+    ) -> ActorAction {
+        for action in self
+            .job_scheduler
+            .resolve_range_shuffle(job_id, shuffle, partitions)
+        {
+            self.run_job_action(ctx, action);
+        }
+        self.refresh_job(ctx, job_id);
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_probe_pending_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -361,17 +384,17 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.worker_pool
-                .fetch_task_stream(ctx, worker_id, &key, schema),
+                .fetch_task_streams(ctx, worker_id, keys, schema),
         );
         ActorAction::Continue
     }
@@ -456,6 +479,7 @@ impl DriverActor {
                 handle,
                 key,
                 schema,
+                retry_cause,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -488,10 +512,12 @@ impl DriverActor {
                         }
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => {
-                        let _ = result.send(
-                            self.worker_pool
-                                .fetch_task_stream(ctx, *worker_id, &key, schema),
-                        );
+                        let _ = result.send(self.worker_pool.fetch_task_streams(
+                            ctx,
+                            *worker_id,
+                            key.clone().into(),
+                            schema,
+                        ));
                     }
                 }
                 let stream = futures::stream::once(async move {
@@ -506,6 +532,7 @@ impl DriverActor {
                         .send(JobOutputItem::Stream {
                             key,
                             stream: Box::pin(stream),
+                            retry_cause,
                         })
                         .await;
                 });
@@ -513,6 +540,50 @@ impl DriverActor {
             JobAction::FailJobOutput { handle, cause } => {
                 ctx.spawn(async move {
                     handle.send(JobOutputItem::Error { cause }).await;
+                });
+            }
+            JobAction::ReadRangeSplitPoints {
+                job_id,
+                shuffle,
+                key,
+                schema,
+            } => {
+                // The split points are picked on the driver, so their stream is local.
+                let task_runner = self.task_runner.clone();
+                let driver = ctx.handle().clone();
+                ctx.spawn(async move {
+                    let partitions = async {
+                        let task_runner = task_runner.ok_or_else(|| {
+                            ExecutionError::InternalError("task runner is not started".to_string())
+                        })?;
+                        let (result, receiver) = oneshot::channel();
+                        task_runner
+                            .send(TaskRunnerMessage::FetchDriverStream {
+                                key,
+                                schema,
+                                result,
+                            })
+                            .await?;
+                        let batches =
+                            receiver
+                                .await??
+                                .try_collect::<Vec<_>>()
+                                .await
+                                .map_err(|e| {
+                                    ExecutionError::InternalError(format!(
+                                        "cannot read the range split points: {e}"
+                                    ))
+                                })?;
+                        Ok(range_split_from_batches(&batches)?.partitions())
+                    }
+                    .await;
+                    let _ = driver
+                        .send(DriverMessage::RangeSplitPointsRead {
+                            job_id,
+                            shuffle,
+                            partitions,
+                        })
+                        .await;
                 });
             }
             JobAction::CleanUpJob {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -8,6 +10,7 @@ use sail_common::spec;
 use sail_logical_plan::join_hint::JoinHintNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
@@ -155,6 +158,7 @@ impl MissingInputBoundaries {
                     || node.is::<RequiredSortNode>()
                     || node.is::<MonotonicIdNode>()
                     || node.is::<SparkPartitionIdNode>()
+                    || node.is::<SeededRandomNode>()
             }
             // DataFrame deduplication retains its original keys when carrying extra outputs.
             LogicalPlan::Distinct(Distinct::On(_)) => true,

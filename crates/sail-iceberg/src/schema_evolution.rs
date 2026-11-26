@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
@@ -876,7 +866,7 @@ impl SchemaEvolver {
         })
     }
 
-    fn next_schema_id(table_meta: &TableMetadata) -> i32 {
+    pub(crate) fn next_schema_id(table_meta: &TableMetadata) -> i32 {
         table_meta
             .schemas
             .iter()
@@ -893,7 +883,7 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use datafusion::arrow::datatypes::{Field, Fields, Schema};
+    use datafusion::arrow::datatypes::{Field, Fields, Metadata, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
@@ -1204,7 +1194,7 @@ mod tests {
         let inner_field = Field::new("child", DataType::Int32, false).with_metadata(
             [(PARQUET_FIELD_ID_META_KEY.to_string(), "777".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         );
         let arrow_struct = Field::new(
             "parent",
@@ -1214,7 +1204,7 @@ mod tests {
         .with_metadata(
             [(PARQUET_FIELD_ID_META_KEY.to_string(), "555".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         );
 
         let mut next_id = 10;

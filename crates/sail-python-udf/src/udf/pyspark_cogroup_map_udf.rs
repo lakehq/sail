@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayData, ArrayRef, AsArray};
@@ -17,8 +19,9 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
     name: String,
@@ -72,6 +75,15 @@ impl PySparkCoGroupMapUDF {
             is_pandas,
             udf: LazyPyObject::new(),
         })
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
+        }
     }
 
     pub fn payload(&self) -> &[u8] {
@@ -167,13 +179,13 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = with_blocking_python(|py| self.udf(py))?;
         let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let data = Python::attach(|py| -> PyUdfResult<_> {
+                let data = with_blocking_python(|py| -> PyUdfResult<_> {
                     let output = udf.call1(
                         py,
                         (

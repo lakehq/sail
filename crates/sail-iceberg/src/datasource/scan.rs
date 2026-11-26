@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,14 +26,15 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
 };
 use url::Url;
 
+use crate::datasource::data_file_last_modified;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::predicate::Predicate;
@@ -52,21 +43,23 @@ use crate::io::StoreContext;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::{IcebergManifestScanExec, ManifestPruning};
-use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::physical_plan::merge_metadata_exec::{
+    IcebergMergeMetadataExec, UnsupportedIcebergRowScanExec,
+};
 use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
     RowLevelMetadataColumns, parquet_row_position_field,
 };
-use crate::spec::delete_index::DeleteFileRef;
+use crate::spec::delete_index::{DeleteFileRef, EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
-use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
+use crate::spec::{DataFile, DataFileFormat, ManifestContentType, PartitionSpec, Schema, Snapshot};
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 mod planning;
-pub(crate) use planning::IcebergScanPlan;
+pub(crate) use planning::{IcebergScanPlan, ManifestDataFile};
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
     Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
@@ -182,12 +175,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         log::trace!(
             "Converted schema to Arrow with {} fields",
@@ -229,12 +217,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         Ok(Self {
             row_level_options: Default::default(),
@@ -332,61 +315,6 @@ impl IcebergScan {
         Ok(())
     }
 
-    fn reorder_arrow_schema_for_identity_partitions(
-        schema: &Schema,
-        partition_specs: &[PartitionSpec],
-        default_spec_id: i32,
-        arrow_schema: &ArrowSchema,
-    ) -> ArrowSchema {
-        // BDD scenarios expect "data columns" first and identity-partition columns last (in spec order),
-        // but only for identity-only partition specs. For mixed transform specs (e.g. `years(x), y`)
-        // we keep the original schema order.
-        let Some(spec) = partition_specs
-            .iter()
-            .find(|s| s.spec_id() == default_spec_id)
-        else {
-            return arrow_schema.clone();
-        };
-        if spec
-            .fields()
-            .iter()
-            .any(|pf| !matches!(pf.transform, Transform::Identity))
-        {
-            return arrow_schema.clone();
-        }
-
-        let mut identity_cols: Vec<String> = Vec::new();
-        for pf in spec.fields().iter() {
-            if matches!(pf.transform, Transform::Identity)
-                && let Some(field) = schema.field_by_id(pf.source_id)
-            {
-                identity_cols.push(field.name.clone());
-            }
-        }
-        if identity_cols.is_empty() {
-            return arrow_schema.clone();
-        }
-
-        let identity_set: std::collections::HashSet<&str> =
-            identity_cols.iter().map(|s| s.as_str()).collect();
-        let mut out_fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
-
-        // Keep non-partition columns in original order.
-        for f in arrow_schema.fields().iter() {
-            if !identity_set.contains(f.name().as_str()) {
-                out_fields.push(Arc::new((**f).clone()));
-            }
-        }
-        // Append identity partition columns in spec order.
-        for name in identity_cols {
-            if let Ok(idx) = arrow_schema.index_of(&name) {
-                out_fields.push(Arc::new(arrow_schema.field(idx).clone()));
-            }
-        }
-
-        ArrowSchema::new(out_fields)
-    }
-
     /// Get the table URI
     pub fn table_uri(&self) -> &str {
         &self.table_uri
@@ -433,7 +361,7 @@ impl IcebergScan {
             selected
                 .candidates
                 .into_iter()
-                .map(|(file, _)| file.file_path)
+                .map(|file| file.data_file.file_path)
                 .collect()
         }))
     }
@@ -498,7 +426,7 @@ impl IcebergScan {
             .load_data_files_with_seq(&[], &store_ctx, &manifest_list)
             .await?
             .into_iter()
-            .map(|(file, _)| file)
+            .map(|file| file.data_file)
             .collect::<Vec<_>>();
         // Each file is probed with a single planning-only row that carries the file's
         // identity-partition values and NULL for every other column. The probe schema
@@ -575,14 +503,15 @@ impl IcebergScan {
         }
     }
 
+    /// Each data file is paired with the ID of the snapshot that added it.
     fn create_partitioned_files(
         &self,
         store_ctx: &StoreContext,
-        data_files: Vec<DataFile>,
+        data_files: Vec<(DataFile, i64)>,
     ) -> Result<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
-        for data_file in data_files {
+        for (data_file, added_snapshot_id) in data_files {
             let raw_path = data_file.file_path();
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             log::trace!("Processing data file: {}", file_path);
@@ -591,7 +520,7 @@ impl IcebergScan {
 
             let object_meta = ObjectMeta {
                 location: file_path,
-                last_modified: chrono::Utc::now(),
+                last_modified: data_file_last_modified(Some(added_snapshot_id)),
                 size: data_file.file_size_in_bytes(),
                 e_tag: None,
                 version: None,
@@ -662,11 +591,11 @@ impl IcebergScan {
     fn create_merge_partitioned_files(
         &self,
         store_ctx: &StoreContext,
-        data_files: Vec<DataFile>,
+        data_files: Vec<(DataFile, i64)>,
     ) -> Result<Vec<PartitionedFile>> {
         let file_metadata = data_files
             .iter()
-            .map(|file| {
+            .map(|(file, _)| {
                 Ok((
                     file.file_path.clone(),
                     file.partition_spec_id,
@@ -721,12 +650,6 @@ impl IcebergScan {
                 .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
         )?;
         let schema = iceberg_schema_to_arrow(&read_scan.schema)?;
-        let schema = Self::reorder_arrow_schema_for_identity_partitions(
-            &read_scan.schema,
-            &self.partition_specs,
-            self.default_spec_id,
-            &schema,
-        );
         read_scan.arrow_schema = Arc::new(match &self.name_mapping {
             Some(mapping) => {
                 crate::datasource::type_converter::apply_name_mapping(&schema, mapping)?
@@ -914,6 +837,21 @@ impl IcebergScan {
                             }),
                             min_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar.clone()) },
                             max_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar) },
+                            // A missing size does not make the column unknown: a file either
+                            // does not store it or stores one value for every row, whichever
+                            // of the two or a metrics mode of `none` is behind it, so reading
+                            // the column does not send the scan back to the size of the whole
+                            // file. Only the output of the column is left to count.
+                            byte_size: Precision::Inexact(
+                                Self::column_output_size(
+                                    field,
+                                    data_file.record_count(),
+                                    data_file.column_sizes(),
+                                )
+                                .unwrap_or_else(|| {
+                                    Self::offsets_size(data_file.record_count())
+                                }) as usize,
+                            ),
                             ..ColumnStatistics::new_unknown()
                         };
                     }
@@ -941,13 +879,21 @@ impl IcebergScan {
                     .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
+                let byte_size = Self::column_output_size(
+                    field,
+                    data_file.record_count(),
+                    data_file.column_sizes(),
+                )
+                .map(|size| Precision::Inexact(size as usize))
+                .unwrap_or(Precision::Absent);
+
                 ColumnStatistics {
                     null_count,
                     max_value,
                     min_value,
                     distinct_count,
                     sum_value: Precision::Absent,
-                    byte_size: Precision::Absent,
+                    byte_size,
                 }
             })
             .collect();
@@ -957,6 +903,89 @@ impl IcebergScan {
             total_byte_size,
             column_statistics,
         }
+    }
+
+    /// Estimated size of `field` in the output of the scan, which is what `JoinSelection`
+    /// compares when it picks the side of a hash join to build.
+    ///
+    /// A fixed-width value has a known size whatever the file compressed it to, and a
+    /// highly compressible column would otherwise look far smaller than the rows it
+    /// produces. For any other type the manifest only has the compressed bytes, so the
+    /// estimate is those bytes plus the offset that each row takes at the least.
+    fn column_output_size(
+        field: &Field,
+        rows: u64,
+        column_sizes: &HashMap<i32, u64>,
+    ) -> Option<u64> {
+        if let Some(width) = field.data_type().primitive_width() {
+            return Some(rows.saturating_mul(width as u64));
+        }
+        if let DataType::Struct(fields) = field.data_type() {
+            return fields.iter().try_fold(0u64, |total, child| {
+                Self::column_output_size(child, rows, column_sizes)
+                    .map(|size| total.saturating_add(size))
+            });
+        }
+        Self::column_byte_size(column_sizes, field)
+            .map(|size| size.saturating_add(Self::offsets_size(rows)))
+    }
+
+    /// Size of the 32-bit offsets of a variable-width array with `rows` rows.
+    fn offsets_size(rows: u64) -> u64 {
+        rows.saturating_mul(size_of::<i32>() as u64)
+    }
+
+    /// On-disk size of `field` according to the manifest's `column_sizes`.
+    ///
+    /// Iceberg records a size per leaf column, so a nested field is the sum over its
+    /// leaves unless the field itself has an entry. The sizes are compressed bytes,
+    /// the same unit as `file_size_in_bytes`.
+    fn column_byte_size(column_sizes: &HashMap<i32, u64>, field: &Field) -> Option<u64> {
+        if let Some(field_id) = iceberg_field_id(field).unwrap_or_default()
+            && let Some(size) = column_sizes.get(&field_id)
+        {
+            return Some(*size);
+        }
+        let children: &[_] = match field.data_type() {
+            DataType::Struct(fields) => fields,
+            DataType::List(field)
+            | DataType::ListView(field)
+            | DataType::LargeList(field)
+            | DataType::LargeListView(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::Map(field, _) => std::slice::from_ref(field),
+            _ => return None,
+        };
+        children.iter().try_fold(0u64, |total, child| {
+            Self::column_byte_size(column_sizes, child).map(|size| total.saturating_add(size))
+        })
+    }
+
+    /// Size of the columns a projected scan reads, or `None` when the scan reads every
+    /// column, which is the whole file including its overhead, or when the manifest does
+    /// not record all of them.
+    ///
+    /// DataFusion projects column statistics but derives `total_byte_size` from the
+    /// fixed widths of the projected schema, keeping the input value whenever one of
+    /// the projected types has no fixed width. A wide table read through a narrow
+    /// projection is therefore still sized as the whole file, and `JoinSelection`
+    /// compares the hash join sides by that size.
+    pub(crate) fn projected_byte_size(
+        statistics: &Statistics,
+        projection: Option<&Vec<usize>>,
+    ) -> Option<usize> {
+        let projection = projection?;
+        if projection.len() >= statistics.column_statistics.len() {
+            return None;
+        }
+        projection.iter().try_fold(0usize, |total, index| {
+            statistics
+                .column_statistics
+                .get(*index)?
+                .byte_size
+                .get_value()
+                .map(|size| total.saturating_add(*size))
+        })
     }
 
     fn constant_projection_scan(
@@ -1114,17 +1143,31 @@ impl IcebergScan {
             )));
         }
         let (_, parquet_pushdown_filters) = self.separate_filters(&planned.residual_filters());
-        let mut clean_files = Vec::new();
+        let mut clean_parquet = Vec::new();
+        let mut clean_avro = Vec::new();
         let mut dirty_units = Vec::new();
         let mut all_data_files = Vec::new();
         for task in &planned.tasks {
             let file = task.data_file.clone();
             all_data_files.push(file.clone());
             if task.deletes.is_empty() {
-                clean_files.push(file);
+                let id = task.added_snapshot_id;
+                match file.file_format {
+                    DataFileFormat::Parquet => clean_parquet.push((file, id)),
+                    DataFileFormat::Avro => clean_avro.push((file, id)),
+                    format => {
+                        return plan_err!("Unsupported Iceberg data file format: {format:?}");
+                    }
+                }
             } else {
+                if file.file_format != DataFileFormat::Parquet {
+                    return plan_err!(
+                        "Row-level operations on imported Avro/ORC files are not supported"
+                    );
+                }
                 dirty_units.push((
                     file,
+                    task.added_snapshot_id,
                     task.deletes.positional.clone(),
                     task.deletes.equality.clone(),
                 ));
@@ -1149,21 +1192,30 @@ impl IcebergScan {
         }
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+                session.session_id(),
+            ),
         ));
 
-        if dirty_units.is_empty() {
+        if dirty_units.is_empty() && clean_avro.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
-            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
+            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_parquet)?;
             let file_groups = self.create_file_groups(partitioned_files);
             let parquet_source = self.build_parquet_source(session, nan_free, reader_factory);
             let expanded_projection =
                 self.expanded_projection(projection, &parquet_pushdown_filters);
+            if let Some(byte_size) =
+                Self::projected_byte_size(&table_stats, expanded_projection.as_ref())
+            {
+                table_stats.total_byte_size = Precision::Inexact(byte_size);
+            }
             let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
                 .with_file_groups(if file_groups.is_empty() {
                     vec![FileGroup::from(vec![])]
@@ -1195,33 +1247,36 @@ impl IcebergScan {
             return Ok(plan);
         }
 
-        // Delete-aware path: build clean + per-dirty-file branches. We apply
-        // predicates, projection, and limit ABOVE the Union so that positional
-        // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
-        // unfiltered Parquet read of each dirty file.
-
-        let mut branches: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-
-        // Branch A: clean files scanned as one DataSourceExec. Neither projection nor
-        // predicate is pushed down at this level because the upper layers will apply
-        // them uniformly across branches.
-        if !clean_files.is_empty() {
-            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source =
-                self.build_parquet_source(session, false, Arc::clone(&reader_factory));
-            let file_scan_config =
-                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
-                    .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
-                    .build();
-            branches.push(create_data_scan(session, file_scan_config).await?);
+        // Apply filters, projection, and limit above all branches to preserve
+        // the original row positions in files with positional deletes.
+        let mut branches = Vec::new();
+        for (format, files) in [
+            (DataFileFormat::Parquet, clean_parquet),
+            (DataFileFormat::Avro, clean_avro),
+        ] {
+            if files.is_empty() {
+                continue;
+            }
+            let source = if format == DataFileFormat::Parquet {
+                self.build_parquet_source(session, false, Arc::clone(&reader_factory))
+            } else {
+                Arc::new(super::imported_source::IcebergImportedFileSource::new(
+                    TableSchema::from(self.arrow_schema.clone()),
+                ))
+            };
+            let files = self.create_partitioned_files(&store_ctx, files)?;
+            let config = FileScanConfigBuilder::new(object_store_url.clone(), source)
+                .with_file_groups(self.create_file_groups(files))
+                .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
+                .build();
+            branches.push(create_data_scan(session, config).await?);
         }
 
-        // Branch B: one branch per dirty file.
-        for (df, pos_deletes, eq_deletes) in dirty_units {
+        // One branch per file with applicable deletes.
+        for (df, added_snapshot_id, pos_deletes, eq_deletes) in dirty_units {
             let delete_scan = self.equality_scan(&eq_deletes)?;
-            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned = delete_scan
+                .create_partitioned_files(&store_ctx, vec![(df.clone(), added_snapshot_id)])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
             let parquet_source =
                 delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
@@ -1240,25 +1295,21 @@ impl IcebergScan {
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
                 data_file_raw_path,
-                pos_deletes,
-                eq_deletes,
+                pos_deletes
+                    .iter()
+                    .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
+                eq_deletes
+                    .iter()
+                    .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
             ));
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
 
-        // Union the branches.
-        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
-            // SAFETY: length was just checked above.
-            branches.into_iter().next().ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal(
-                    "unreachable: branches.len() == 1 but next() returned None".to_string(),
-                )
-            })?
-        } else {
-            UnionExec::try_new(branches)?
-        };
+        let unioned = UnionExec::try_new(branches)?;
 
         // Apply predicate above (covers both clean & dirty branches).
         let after_filter: Arc<dyn ExecutionPlan> = if !parquet_pushdown_filters.is_empty() {
@@ -1363,36 +1414,43 @@ impl IcebergScan {
         let mut dirty_units = Vec::new();
 
         for task in planned.tasks {
-            let data_file = task.data_file;
-            let sequence_number = task.data_sequence_number;
-            let matched = task.deletes;
-            if matched.is_empty() {
+            match task.data_file.file_format {
+                DataFileFormat::Avro | DataFileFormat::Orc => {
+                    return Ok(Arc::new(UnsupportedIcebergRowScanExec::new(
+                        self.projected_arrow_schema(projection)?,
+                    )));
+                }
+                DataFileFormat::Puffin => {
+                    return plan_err!("Unsupported Iceberg data file format: Puffin");
+                }
+                DataFileFormat::Parquet => {}
+            }
+            if task.deletes.is_empty() {
                 if self.has_row_lineage() {
                     file_lineage.insert(
-                        data_file.file_path.clone(),
+                        task.data_file.file_path.clone(),
                         crate::row_lineage::RowLineage {
-                            first_row_id: data_file.first_row_id,
-                            data_sequence_number: sequence_number,
+                            first_row_id: task.data_file.first_row_id,
+                            data_sequence_number: task.data_sequence_number,
                         },
                     );
                 }
-                clean_files.push(data_file);
+                clean_files.push((task.data_file, task.added_snapshot_id));
             } else {
-                dirty_units.push((
-                    data_file,
-                    sequence_number,
-                    matched.positional,
-                    matched.equality,
-                ));
+                dirty_units.push(task);
             }
         }
 
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+                session.session_id(),
+            ),
         ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
@@ -1414,12 +1472,7 @@ impl IcebergScan {
                 file_column_name.as_str(),
                 Arc::clone(&reader_factory),
             );
-            let output_partitioning = output_partitioning_from_partition_fields(
-                parquet_source.table_schema().table_schema(),
-                parquet_source.table_schema().table_partition_cols(),
-                file_groups.len(),
-            )
-            .unwrap_or_else(|| Partitioning::UnknownPartitioning(file_groups.len()));
+            let output_partitioning = Partitioning::UnknownPartitioning(file_groups.len());
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
@@ -1445,20 +1498,24 @@ impl IcebergScan {
             ));
         }
 
-        for (df, sequence_number, positional_deletes, equality_deletes) in dirty_units {
+        for task in dirty_units {
+            let df = task.data_file;
+            let positional_deletes = task.deletes.positional;
+            let equality_deletes = task.deletes.equality;
             let mut delete_scan = self.equality_scan(&equality_deletes)?;
             let row_lineage = self
                 .has_row_lineage()
                 .then_some(crate::row_lineage::RowLineage {
                     first_row_id: df.first_row_id,
-                    data_sequence_number: sequence_number,
+                    data_sequence_number: task.data_sequence_number,
                 });
             if row_lineage.is_some() {
                 delete_scan.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
                     &delete_scan.arrow_schema,
                 )?);
             }
-            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned = delete_scan
+                .create_partitioned_files(&store_ctx, vec![(df.clone(), task.added_snapshot_id)])?;
             let parquet_source =
                 delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
@@ -1495,8 +1552,14 @@ impl IcebergScan {
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 with_metadata,
                 df.file_path.clone(),
-                positional_deletes,
-                equality_deletes,
+                positional_deletes
+                    .iter()
+                    .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
+                equality_deletes
+                    .iter()
+                    .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
             ));
@@ -1578,7 +1641,7 @@ impl IcebergScan {
     /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
     /// Instead of eagerly loading file metadata on the driver, an `IcebergManifestScanExec`
     /// node produces file metadata that feeds through `IcebergDiscoveryExec` (tagging) and
-    /// into `IcebergScanByDataFilesExec` which dynamically opens Parquet files via a
+    /// into `IcebergScanByDataFilesExec` which dynamically opens data files via a
     /// streaming `try_unfold` loop.
     ///
     /// Physical plan pipeline:
@@ -1587,7 +1650,7 @@ impl IcebergScan {
     ///   ↓
     /// IcebergDiscoveryExec (annotate stream with partition_scan flag)
     ///   ↓
-    /// IcebergScanByDataFilesExec (consume file paths → dynamic Parquet scan)
+    /// IcebergScanByDataFilesExec (consume file paths → format-specific scan)
     ///   ↓
     /// Data output (actual table rows)
     /// ```
@@ -1898,6 +1961,30 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_files_describe_a_data_file_the_same_way_in_every_scan() -> Result<()> {
+        // The Parquet metadata cache validates entries by size and last_modified, so two scans
+        // of the same data file must build identical object metadata for footers to be reused,
+        // while a new file that reuses the path in a later snapshot must not match.
+        let (read_scan, file) = statistics_fixture()?;
+        let table_url = Url::parse(read_scan.table_uri())
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let store_ctx =
+            StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)?;
+        let first = read_scan.create_partitioned_files(&store_ctx, vec![(file.clone(), 1)])?;
+        let second = read_scan.create_partitioned_files(&store_ctx, vec![(file.clone(), 1)])?;
+        let reused = read_scan.create_partitioned_files(&store_ctx, vec![(file, 2)])?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].object_meta, second[0].object_meta);
+        assert_eq!(first[0].object_meta.size, 100);
+        assert_ne!(
+            first[0].object_meta.last_modified,
+            reused[0].object_meta.last_modified
+        );
+        Ok(())
+    }
+
+    #[test]
     fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
         let (read_scan, mut file) = statistics_fixture()?;
         for nan_count in [None, Some(1), Some(0)] {
@@ -1937,14 +2024,374 @@ mod tests {
         Ok(())
     }
 
+    /// A table whose `payload` column holds nearly every byte of the file, so a
+    /// projection without it reads a small fraction of the file.
+    fn wide_column_fixture() -> Result<(IcebergScan, DataFile)> {
+        use crate::spec::types::StructType;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields([
+                Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "tag",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+                Arc::new(NestedField::optional(
+                    3,
+                    "payload",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+                Arc::new(NestedField::optional(
+                    4,
+                    "meta",
+                    Type::Struct(StructType::new(vec![
+                        Arc::new(NestedField::optional(
+                            5,
+                            "source",
+                            Type::Primitive(PrimitiveType::String),
+                        )),
+                        Arc::new(NestedField::optional(
+                            6,
+                            "version",
+                            Type::Primitive(PrimitiveType::Long),
+                        )),
+                    ])),
+                )),
+            ])
+            .build()
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let read_scan = IcebergScan::new_empty(
+            "file:///tmp/wide-columns/",
+            schema,
+            vec![PartitionSpec::unpartitioned_spec()],
+            0,
+        )?;
+        let mut file: DataFile = serde_json::from_value(serde_json::json!({
+            "content": "DATA", "file_path": "data.parquet", "file_format": "PARQUET",
+            "partition": [], "record_count": 1000, "file_size_in_bytes": 1_024_000,
+            "partition_spec_id": 0
+        }))
+        .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        // Iceberg records a size per leaf column: the `meta` struct itself has none.
+        file.column_sizes = HashMap::from([
+            (1, 8_000),
+            (2, 12_000),
+            (3, 1_000_000),
+            (5, 2_000),
+            (6, 1_000),
+        ]);
+        Ok((read_scan, file))
+    }
+
+    #[test]
+    fn column_statistics_estimate_the_output_of_each_column() -> Result<()> {
+        let (read_scan, file) = wide_column_fixture()?;
+        let statistics = read_scan.create_file_statistics(&file);
+        assert_eq!(statistics.total_byte_size, Precision::Exact(1_024_000));
+        assert_eq!(
+            statistics
+                .column_statistics
+                .iter()
+                .map(|column| column.byte_size)
+                .collect::<Vec<_>>(),
+            vec![
+                Precision::Inexact(8_000),
+                Precision::Inexact(16_000),
+                Precision::Inexact(1_004_000),
+                Precision::Inexact(14_000),
+            ]
+        );
+
+        let aggregated = read_scan.aggregate_statistics(&[file.clone(), file.clone()]);
+        assert_eq!(aggregated.total_byte_size, Precision::Exact(2_048_000));
+        assert_eq!(
+            aggregated.column_statistics[2].byte_size,
+            Precision::Inexact(2_008_000)
+        );
+
+        let mut without_sizes = file;
+        without_sizes.column_sizes.clear();
+        let statistics = read_scan.create_file_statistics(&without_sizes);
+        assert_eq!(
+            statistics
+                .column_statistics
+                .iter()
+                .map(|column| column.byte_size)
+                .collect::<Vec<_>>(),
+            vec![
+                Precision::Inexact(8_000),
+                Precision::Absent,
+                Precision::Absent,
+                Precision::Absent,
+            ]
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0])),
+            Some(8_000)
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1])),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_projection_of_every_column_is_not_narrowed() -> Result<()> {
+        let (read_scan, file) = wide_column_fixture()?;
+        let statistics = read_scan.create_file_statistics(&file);
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1, 2])),
+            Some(1_028_000)
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![3, 2, 1, 0])),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_compressible_column_is_sized_by_the_rows_it_produces() -> Result<()> {
+        let (read_scan, mut file) = wide_column_fixture()?;
+        file.column_sizes = HashMap::from([(1, 10), (2, 5), (3, 1_000_000), (5, 1), (6, 1)]);
+        let statistics = read_scan.create_file_statistics(&file);
+        let size = |projection: Vec<usize>| {
+            IcebergScan::projected_byte_size(&statistics, Some(&projection))
+        };
+        assert_eq!(size(vec![0]), Some(8_000));
+        assert_eq!(size(vec![1]), Some(4_005));
+        assert_eq!(size(vec![0, 1]), Some(12_005));
+        assert_eq!(size(vec![3]), Some(12_001));
+        Ok(())
+    }
+
+    #[test]
+    fn column_byte_size_sums_the_leaves_of_nested_types() {
+        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+        let leaf = |name: &str, id: i32| {
+            Field::new(name, DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        };
+        let list = Field::new_list("list", leaf("element", 1), true);
+        let map = Field::new_map(
+            "map",
+            "entries",
+            leaf("key", 2),
+            leaf("value", 3),
+            false,
+            true,
+        );
+        let sizes = HashMap::from([(1, 10), (2, 20), (3, 30)]);
+
+        assert_eq!(IcebergScan::column_byte_size(&sizes, &list), Some(10));
+        assert_eq!(IcebergScan::column_byte_size(&sizes, &map), Some(50));
+        // One leaf without a recorded size leaves the whole field unknown.
+        assert_eq!(
+            IcebergScan::column_byte_size(&HashMap::from([(2, 20)]), &map),
+            None
+        );
+    }
+
+    /// Serves one data file of `read_scan` whose manifest sizes are fractions of the
+    /// real file, and returns the byte size the planned scan estimates for `projection`
+    /// together with the file size the manifest reports.
+    async fn planned_byte_size(
+        mut read_scan: IcebergScan,
+        mut file: DataFile,
+        spec: PartitionSpec,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<(Precision<usize>, u64)> {
+        use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray, StructArray};
+        use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+        use datafusion::prelude::SessionContext;
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+        use parquet::arrow::ArrowWriter;
+
+        let rows = 1000;
+        let strings = |prefix: &'static str, width: usize| {
+            Arc::new(StringArray::from_iter_values(
+                (0..rows).map(|row| format!("{prefix}-{row}-{}", "x".repeat(width))),
+            )) as ArrayRef
+        };
+        let columns = read_scan
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| match (field.name().as_str(), field.data_type()) {
+                ("id", _) => Ok(Arc::new(Int64Array::from_iter_values(0..rows)) as ArrayRef),
+                // The partition column has to hold one value for the whole file.
+                ("tag", _) => Ok(
+                    Arc::new(StringArray::from_iter_values((0..rows).map(|_| "tag"))) as ArrayRef,
+                ),
+                ("payload", _) => Ok(strings("payload", 200)),
+                ("meta", DataType::Struct(fields)) => Ok(Arc::new(StructArray::new(
+                    fields.clone(),
+                    vec![
+                        strings("source", 0),
+                        Arc::new(Int64Array::from_iter_values(0..rows)),
+                    ],
+                    None,
+                )) as ArrayRef),
+                (name, data_type) => plan_err!("unexpected field {name} of type {data_type}"),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(Arc::clone(&read_scan.arrow_schema), columns)?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None)?;
+        writer.write(&batch)?;
+        let bytes = writer.into_inner()?;
+
+        // The manifest numbers drive the statistics; the file itself only has to be
+        // readable, because planning loads its footer.
+        let file_size = bytes.len() as u64;
+        file.file_size_in_bytes = file_size;
+        file.column_sizes = HashMap::from([
+            (1, file_size / 100),
+            (2, file_size / 100),
+            (3, file_size * 9 / 10),
+            (5, file_size / 100),
+            (6, file_size / 100),
+        ]);
+        let path = Path::from(file.file_path.as_str());
+        let context = SessionContext::new();
+        let store = commit_data_files(&mut read_scan, &context, spec, vec![file]).await?;
+        store.prefixed.put(&path, bytes.into()).await?;
+        let plan = read_scan
+            .create_physical_plan(&context.state(), projection, &[], None, None)
+            .await?;
+        let statistics = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
+        Ok((statistics.total_byte_size, file_size))
+    }
+
+    #[tokio::test]
+    async fn projecting_a_scan_drops_the_bytes_of_the_unread_columns() -> Result<()> {
+        let (read_scan, file) = wide_column_fixture()?;
+        let (whole, file_size) =
+            planned_byte_size(read_scan, file, PartitionSpec::unpartitioned_spec(), None).await?;
+        assert_eq!(
+            whole,
+            Precision::Inexact(file_size as usize),
+            "a scan of every column is sized as the whole file"
+        );
+
+        let (read_scan, file) = wide_column_fixture()?;
+        let (whole, file_size) = planned_byte_size(
+            read_scan,
+            file,
+            PartitionSpec::unpartitioned_spec(),
+            Some(&vec![0, 1, 2, 3]),
+        )
+        .await?;
+        assert_eq!(
+            whole,
+            Precision::Inexact(file_size as usize),
+            "listing every column is still a scan of every column"
+        );
+
+        let (read_scan, file) = wide_column_fixture()?;
+        let (narrow, file_size) = planned_byte_size(
+            read_scan,
+            file,
+            PartitionSpec::unpartitioned_spec(),
+            Some(&vec![0, 1]),
+        )
+        .await?;
+        let expected = 12_000 + (file_size / 100) as usize;
+        assert_eq!(narrow, Precision::Inexact(expected));
+        assert!(
+            expected * 10 < file_size as usize,
+            "the narrow projection must not be sized as the whole file"
+        );
+        Ok(())
+    }
+
+    /// Projecting an identity partition column makes the scan rebuild its file groups
+    /// around the partition defaults, which replaces the statistics.
+    #[tokio::test]
+    async fn projecting_a_partitioned_scan_drops_the_bytes_of_the_unread_columns() -> Result<()> {
+        let spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field(2, "tag", Transform::Identity)
+            .build();
+        let (mut read_scan, mut file) = wide_column_fixture()?;
+        read_scan = IcebergScan::new_empty(
+            read_scan.table_uri(),
+            read_scan.schema.clone(),
+            vec![spec.clone()],
+            0,
+        )?;
+        file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+            "tag".to_string(),
+        )))];
+        let names = read_scan
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "tag", "payload", "meta"]);
+
+        let (narrow, file_size) =
+            planned_byte_size(read_scan, file, spec, Some(&vec![0, 1])).await?;
+        let expected = 12_000 + (file_size / 100) as usize;
+        assert_eq!(narrow, Precision::Inexact(expected));
+        assert!(
+            expected * 10 < file_size as usize,
+            "the narrow projection must not be sized as the whole file"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_identity_partition_column_without_a_size_counts_its_offsets() -> Result<()> {
+        let spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field(2, "tag", Transform::Identity)
+            .build();
+        let (read_scan, mut file) = wide_column_fixture()?;
+        let read_scan = IcebergScan::new_empty(
+            read_scan.table_uri(),
+            read_scan.schema.clone(),
+            vec![spec],
+            0,
+        )?;
+        file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+            "tag".to_string(),
+        )))];
+        file.column_sizes.remove(&2);
+        let statistics = read_scan.create_file_statistics(&file);
+        assert_eq!(
+            statistics.column_statistics[1].byte_size,
+            Precision::Inexact(4_000)
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1])),
+            Some(12_000)
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[expect(clippy::expect_used)]
     async fn ineligible_metadata_aggregates_do_not_read_manifests() -> Result<()> {
-        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
+        use datafusion::functions_aggregate::expr_fn::{count, sum};
         use datafusion::logical_expr::expr::NullTreatment;
-        use datafusion::logical_expr::{ExprFunctionExt, LogicalPlan, LogicalPlanBuilder};
+        use datafusion::logical_expr::{
+            AggregateUDF, ExprFunctionExt, LogicalPlan, LogicalPlanBuilder,
+        };
         use datafusion::prelude::{SessionContext, col, lit};
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+        use sail_common_datafusion::min_max::min_max_agg::Min;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
         use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
@@ -1981,7 +2428,8 @@ mod tests {
                 "ordered aggregate",
                 vec![],
                 vec![
-                    min(col("id"))
+                    AggregateUDF::from(Min::new())
+                        .call(vec![col("id")])
                         .order_by(vec![col("id").sort(true, true)])
                         .build()?,
                 ],
@@ -1990,7 +2438,8 @@ mod tests {
                 "null treatment",
                 vec![],
                 vec![
-                    min(col("id"))
+                    AggregateUDF::from(Min::new())
+                        .call(vec![col("id")])
                         .null_treatment(NullTreatment::IgnoreNulls)
                         .build()?,
                 ],
@@ -2059,14 +2508,15 @@ mod tests {
     async fn metadata_aggregate_reuses_file_plan_for_partial_and_fallback() -> Result<()> {
         use datafusion::arrow::array::{Float64Array, Int32Array};
         use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
-        use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+        use datafusion::functions_aggregate::expr_fn::{count, sum};
+        use datafusion::logical_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilder};
         use datafusion::prelude::{SessionContext, col, lit};
         use object_store::ObjectStoreExt;
         use object_store::path::Path;
         use parquet::arrow::ArrowWriter;
         use sail_common_datafusion::datasource::MergeCapableSource;
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+        use sail_common_datafusion::min_max::min_max_agg::Min;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
 
@@ -2098,7 +2548,7 @@ mod tests {
         let mut rewritten_scans = vec![];
         for expressions in [
             vec![count(lit(1)), sum(col("score"))],
-            vec![min(col("score"))],
+            vec![AggregateUDF::from(Min::new()).call(vec![col("score")])],
         ] {
             let plan = LogicalPlanBuilder::scan("t", source.clone(), None)?
                 .aggregate(Vec::<Expr>::new(), expressions)?
@@ -2115,7 +2565,10 @@ mod tests {
         }
         assert_eq!(rewritten_scans.len(), 2);
         let aggregate = LogicalPlanBuilder::scan("t", source, None)?
-            .aggregate(Vec::<Expr>::new(), vec![min(col("score"))])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![AggregateUDF::from(Min::new()).call(vec![col("score")])],
+            )?
             .build()?;
         let repeated = LogicalPlanBuilder::from(aggregate.clone())
             .union(aggregate)?

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use tokio::runtime::{Handle, Runtime};
 
 use crate::config::RuntimeConfig;
@@ -60,5 +62,30 @@ impl RuntimeHandle {
 
     pub fn io(&self) -> &Handle {
         &self.io
+    }
+}
+
+/// Register shutdown signals before a standalone Sail process starts serving.
+pub fn stop_signal() -> std::io::Result<impl Future<Output = ()>> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        })
+    }
+
+    #[cfg(windows)]
+    {
+        let mut interrupt = tokio::signal::windows::ctrl_c()?;
+        Ok(async move {
+            interrupt.recv().await;
+        })
     }
 }

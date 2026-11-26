@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -17,9 +19,10 @@ use crate::lake_source::{
     IcebergLakeSource, IcebergReadPurpose, IcebergWriteNode, IcebergWriteNodeOptions,
     load_iceberg_read_table,
 };
-use crate::physical_plan::file_tasks_exec::IcebergFileTask;
+use crate::physical_plan::file_tasks_exec::{IcebergFileTask, RewriteScanContext};
+use crate::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Snapshot};
-use crate::table::files::{balance_by_size, collect_live_files};
+use crate::table::files::{balance_by_size, collect_live_entries};
 
 const DEFAULT_TARGET_FILE_SIZE: u64 = 512 * 1024 * 1024;
 const DEFAULT_MIN_INPUT_FILES: usize = 5;
@@ -29,6 +32,7 @@ const DEFAULT_MAX_CONCURRENT_FILE_GROUPS: usize = 5;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct RewriteDataFilesPlan {
     expected_snapshot_id: Option<i64>,
+    starting_sequence_number: Option<i64>,
     removed_data_file_paths: Vec<String>,
     rewritten_data_files_count: i32,
     rewritten_bytes_count: i64,
@@ -37,6 +41,10 @@ pub struct RewriteDataFilesPlan {
 impl RewriteDataFilesPlan {
     pub fn expected_snapshot_id(&self) -> Option<i64> {
         self.expected_snapshot_id
+    }
+
+    pub fn starting_sequence_number(&self) -> Option<i64> {
+        self.starting_sequence_number
     }
 
     pub fn removed_data_file_paths(&self) -> &[String] {
@@ -185,40 +193,112 @@ pub(super) async fn plan_rewrite_data_files(
     let current_snapshot = metadata.current_snapshot();
     let expected_snapshot_id = current_snapshot.map(Snapshot::snapshot_id);
     let rewrite_options = rewrite_options(call, &metadata.properties)?;
-    let live_files = collect_live_files(
+    let delete_index = if let Some(snapshot) = current_snapshot {
+        let manifests = crate::io::load_manifest_list_with_version(
+            table.store_context(),
+            snapshot.manifest_list(),
+            metadata.format_version,
+        )
+        .await?;
+        crate::io::load_delete_file_index(
+            &metadata.partition_specs,
+            metadata.format_version,
+            table.store_context(),
+            &manifests,
+        )
+        .await?
+    } else {
+        Default::default()
+    };
+    let name_mapping = metadata
+        .properties
+        .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
+        .map(|mapping| serde_json::from_str(mapping))
+        .transpose()
+        .map_err(|error| {
+            datafusion_common::plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
+        })?;
+    let preserve_lineage = metadata.format_version == FormatVersion::V3;
+    let live_files = collect_live_entries(
         table.store_context(),
         metadata,
         session.config().target_partitions(),
-        |file| {
-            let defaults = IdentityPartitionDefaults::from_file(
-                &file,
-                &metadata.partition_specs,
+        |entry| {
+            if entry.data_file.content != DataContentType::Data {
+                return Ok(None);
+            }
+            let sequence = entry.sequence_number.ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!("Missing Iceberg data sequence number")
+            })?;
+            let deletes = delete_index.for_data_file(&entry.data_file, sequence);
+            let read_schema = crate::equality_schema::equality_read_schema(
                 current_schema,
+                &metadata.schemas,
+                deletes
+                    .equality
+                    .iter()
+                    .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
             )?;
-            let mut file = RewriteFile::from(file);
+            let defaults = IdentityPartitionDefaults::from_file(
+                &entry.data_file,
+                &metadata.partition_specs,
+                &read_schema,
+            )?;
+            let scan_context = if preserve_lineage || !deletes.is_empty() {
+                let mut arrow_schema = iceberg_schema_to_arrow(&read_schema)?;
+                if let Some(mapping) = &name_mapping {
+                    arrow_schema = apply_name_mapping(&arrow_schema, mapping)?;
+                }
+                if preserve_lineage {
+                    arrow_schema = crate::row_lineage::append_lineage_fields(&arrow_schema)?;
+                }
+                Some(
+                    serde_json::to_string(&RewriteScanContext {
+                        read_schema: arrow_schema,
+                        iceberg_schema: read_schema,
+                        positional_deletes: deletes
+                            .positional
+                            .iter()
+                            .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                            .collect::<Result<_>>()?,
+                        equality_deletes: deletes
+                            .equality
+                            .iter()
+                            .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                            .collect::<Result<_>>()?,
+                        first_row_id: entry.data_file.first_row_id,
+                        data_sequence_number: sequence,
+                        preserve_lineage,
+                    })
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?,
+                )
+            } else {
+                None
+            };
+            // A partition-wide delete file can include records for other data files.
+            let deleted_records = deletes
+                .positional
+                .iter()
+                .filter(|delete| {
+                    crate::spec::delete_index::referenced_path(&delete.data_file).is_some()
+                })
+                .map(|delete| delete.data_file.record_count)
+                .fold(0u64, u64::saturating_add);
+            let mut file = RewriteFile::from(entry.data_file);
+            // Iceberg's default delete-ratio-threshold is 0.3, inclusive.
+            file.high_delete_ratio =
+                file.record_count > 0 && (deleted_records as f64 / file.record_count as f64) >= 0.3;
             file.identity_partition_defaults = defaults;
+            file.rewrite_scan_context = scan_context;
             Ok(Some(file))
         },
     )
     .await?;
-    let active_delete_files = live_files
-        .iter()
-        .filter(|file| !matches!(file.content, DataContentType::Data))
-        .count();
 
     let mut groups = select_file_groups(&live_files, &rewrite_options)?;
     let selected_files = groups.iter().flatten().collect::<Vec<_>>();
-
-    if !selected_files.is_empty() && active_delete_files > 0 {
-        return not_impl_err!(
-            "rewrite_data_files does not yet support tables with active delete files"
-        );
-    }
-    if !selected_files.is_empty() && matches!(metadata.format_version, FormatVersion::V3) {
-        return not_impl_err!(
-            "rewrite_data_files does not yet support Iceberg v3 row-lineage preservation"
-        );
-    }
 
     let selected_data_file_paths = selected_files
         .iter()
@@ -233,6 +313,11 @@ pub(super) async fn plan_rewrite_data_files(
     })?;
     let plan = RewriteDataFilesPlan {
         expected_snapshot_id,
+        // V3 upgraded files have null lineage. Use the new commit's data/file sequence so
+        // readers inheriting either sequence agree. Native V3 lineage is materialized.
+        // Strict snapshot CAS (no rebase) makes advancing this sequence safe for deletes.
+        starting_sequence_number: (!preserve_lineage)
+            .then(|| current_snapshot.map_or(0, Snapshot::sequence_number)),
         removed_data_file_paths: selected_data_file_paths.clone(),
         rewritten_data_files_count: i32::try_from(selected_files.len()).map_err(|error| {
             datafusion_common::DataFusionError::Plan(format!(
@@ -255,14 +340,11 @@ pub(super) async fn plan_rewrite_data_files(
         |index| groups[*index].iter().map(|file| file.size).sum(),
     );
     let mut arrow_schema = iceberg_schema_to_arrow(current_schema)?;
-    if let Some(mapping) = metadata
-        .properties
-        .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
-    {
-        let mapping = serde_json::from_str(mapping).map_err(|error| {
-            datafusion_common::plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
-        })?;
-        arrow_schema = apply_name_mapping(&arrow_schema, &mapping)?;
+    if let Some(mapping) = &name_mapping {
+        arrow_schema = apply_name_mapping(&arrow_schema, mapping)?;
+    }
+    if preserve_lineage {
+        arrow_schema = crate::row_lineage::append_lineage_fields(&arrow_schema)?;
     }
     let scan_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
     let scan = LogicalPlan::Extension(Extension {
@@ -289,6 +371,7 @@ pub(super) async fn plan_rewrite_data_files(
                 defer_commit: true,
                 target_file_size: Some(rewrite_options.target_file_size),
                 preserve_input_partitions: true,
+                rewrite_lineage: preserve_lineage,
             },
         )?),
     });
@@ -317,7 +400,7 @@ fn validate_arguments(call: &LakeProcedureCall) -> Result<()> {
         return not_impl_err!("rewrite_data_files where predicates are not implemented yet");
     }
     if optional_string(invocation, "branch")?
-        .is_some_and(|branch| !branch.eq_ignore_ascii_case("main"))
+        .is_some_and(|branch| branch != crate::spec::snapshots::MAIN_BRANCH)
     {
         return not_impl_err!("rewrite_data_files currently supports only the main branch");
     }
@@ -336,6 +419,7 @@ struct RewriteOptions {
 
 /// Only retain fields needed for grouping; manifest column metrics stay out of the driver plan.
 struct RewriteFile {
+    high_delete_ratio: bool,
     content: DataContentType,
     file_path: String,
     file_format: DataFileFormat,
@@ -344,11 +428,13 @@ struct RewriteFile {
     file_size_in_bytes: u64,
     partition_spec_id: i32,
     identity_partition_defaults: IdentityPartitionDefaults,
+    rewrite_scan_context: Option<String>,
 }
 
 impl From<DataFile> for RewriteFile {
     fn from(file: DataFile) -> Self {
         Self {
+            high_delete_ratio: false,
             content: file.content,
             file_path: file.file_path,
             file_format: file.file_format,
@@ -357,6 +443,7 @@ impl From<DataFile> for RewriteFile {
             file_size_in_bytes: file.file_size_in_bytes,
             partition_spec_id: file.partition_spec_id,
             identity_partition_defaults: Default::default(),
+            rewrite_scan_context: None,
         }
     }
 }
@@ -453,10 +540,16 @@ fn select_file_groups(
         .filter(|file| matches!(file.content, DataContentType::Data))
         .filter(|file| {
             options.rewrite_all
+                || file.high_delete_ratio
                 || file.file_size_in_bytes < options.min_file_size
                 || file.file_size_in_bytes > options.max_file_size
         })
         .collect::<Vec<_>>();
+    let delete_candidates: HashSet<_> = candidates
+        .iter()
+        .filter(|file| file.high_delete_ratio)
+        .map(|file| file.file_path.as_str())
+        .collect();
     let unsupported_files = candidates
         .iter()
         .filter(|file| file.file_format != DataFileFormat::Parquet)
@@ -475,8 +568,15 @@ fn select_file_groups(
         let enough_input_files = group.len() > 1 && group.len() >= options.min_input_files;
         let enough_content = group.len() > 1 && input_size > options.target_file_size;
         let oversized_content = input_size > options.max_file_size;
+        let high_delete_ratio = group
+            .iter()
+            .any(|file| delete_candidates.contains(file.path.as_str()));
         if !group.is_empty()
-            && (options.rewrite_all || enough_input_files || enough_content || oversized_content)
+            && (options.rewrite_all
+                || enough_input_files
+                || enough_content
+                || oversized_content
+                || high_delete_ratio)
         {
             if group
                 .iter()
@@ -508,6 +608,7 @@ fn rewrite_groups(
                 records: file.record_count,
                 spec_id: file.partition_spec_id,
                 identity_partition_defaults: file.identity_partition_defaults.clone(),
+                rewrite_scan_context: file.rewrite_scan_context.clone(),
             });
     }
     let mut groups: Vec<Vec<IcebergFileTask>> = Vec::new();
@@ -573,6 +674,7 @@ mod tests {
 
     fn data_file(path: &str, size: u64, partition: i32) -> RewriteFile {
         RewriteFile {
+            high_delete_ratio: false,
             content: DataContentType::Data,
             file_path: path.to_string(),
             file_format: DataFileFormat::Parquet,
@@ -581,6 +683,7 @@ mod tests {
             file_size_in_bytes: size,
             partition_spec_id: 0,
             identity_partition_defaults: Default::default(),
+            rewrite_scan_context: None,
         }
     }
 
@@ -611,6 +714,40 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec!["p1-a", "p1-b", "p3-large"]);
+        Ok(())
+    }
+
+    // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/test/java/org/apache/iceberg/actions/TestBinPackRewriteFilePlanner.java#L371-L453
+    #[test]
+    fn binpack_selects_groups_by_file_count_or_content_size() -> Result<()> {
+        for (sizes, min, target, max, min_count, expected) in [
+            (vec![100, 450, 1000], 250, 500, 750, 5, vec![100, 1000]),
+            (vec![100; 4], 150, 1000, 5000, 3, vec![100; 4]),
+            (vec![100; 3], 200, 250, 500, 5, vec![100; 3]),
+            (vec![2000], 200, 250, 500, 5, vec![2000]),
+            (vec![10, 20, 30], 30, 500, 750, 1, vec![10, 20]),
+        ] {
+            let files = sizes
+                .iter()
+                .enumerate()
+                .map(|(index, &size)| data_file(&format!("file-{index}"), size, 0))
+                .collect::<Vec<_>>();
+            let options = RewriteOptions {
+                min_file_size: min,
+                target_file_size: target,
+                max_file_size: max,
+                min_input_files: min_count,
+                rewrite_all: false,
+                max_file_group_size: DEFAULT_MAX_FILE_GROUP_SIZE,
+                max_concurrent_file_groups: DEFAULT_MAX_CONCURRENT_FILE_GROUPS,
+            };
+            let groups = select_file_groups(&files, &options)?;
+            assert_eq!(groups.len(), 1);
+            assert_eq!(
+                groups[0].iter().map(|file| file.size).collect::<Vec<_>>(),
+                expected
+            );
+        }
         Ok(())
     }
 

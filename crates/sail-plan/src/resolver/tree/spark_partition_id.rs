@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 use std::sync::Arc;
 
@@ -6,7 +8,7 @@ use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
 use crate::resolver::state::PlanResolverState;
@@ -27,8 +29,8 @@ impl<'s> PlanRewriter<'s> for SparkPartitionIdRewriter<'s> {
         }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -42,7 +44,7 @@ impl TreeNodeRewriter for SparkPartitionIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if !inner.is::<SparkPartitionId>() {
+        if !inner.is::<PartitionId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 

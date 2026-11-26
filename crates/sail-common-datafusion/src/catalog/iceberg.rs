@@ -1,4 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::managed;
+
+/// File-table backups share a root with Iceberg metadata and newly written data.
+pub const MIGRATION_BACKUP_PROPERTY: &str = "__sail.iceberg.migration-backup";
 
 pub const ICEBERG_TABLE_TYPE_KEY: &str = managed::TABLE_TYPE_KEY;
 pub const ICEBERG_CLASSIFICATION_KEY: &str = managed::CLASSIFICATION_KEY;

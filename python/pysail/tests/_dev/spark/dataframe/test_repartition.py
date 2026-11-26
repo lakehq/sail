@@ -1,0 +1,991 @@
+# SPDX-License-Identifier: Apache-2.0
+
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import pandas as pd
+import pyspark.sql.functions as F  # noqa: N812
+import pytest
+from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException, IllegalArgumentException, PySparkException
+from pyspark.sql import Row
+
+from pysail.testing.spark.utils.plan import normalize_plan_text
+
+
+def partition_count(df):
+    def counter(_iterator):
+        yield pd.DataFrame({"n": [1]})
+
+    return df.mapInPandas(counter, schema="n: long").count()
+
+
+def input_partition_groups(df):
+    def counter(iterator):
+        input_pids = set()
+        for pdf in iterator:
+            input_pids.update(pdf["input_pid"].tolist())
+        yield pd.DataFrame({"input_pids": [",".join(str(pid) for pid in sorted(input_pids))]})
+
+    rows = df.mapInPandas(counter, schema="input_pids: string").collect()
+    return [set() if row["input_pids"] == "" else {int(pid) for pid in row["input_pids"].split(",")} for row in rows]
+
+
+def normalized_plan(df):
+    return normalize_plan_text(df._explain_string())  # noqa: SLF001
+
+
+@pytest.mark.spark(cross_version=True)
+def test_explicit_repartition(spark):
+    assert partition_count(spark.range(0, 10, 1, 2)) == 2
+    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5
+    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
+# Uses Connect partition IDs/counts instead of the RDD API.
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.spark(cross_version=True)
+def test_range_repartition_preserves_rows_and_partition_count(spark, descending):
+    source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    key = F.col("key").desc() if descending else F.col("key").asc()
+    result = source.repartitionByRange(3, key)
+    assert partition_count(result) == 3
+    assert result.schema == source.schema
+    assert result.orderBy("id").collect() == source.orderBy("id").collect()
+
+
+# Regression extending Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
+# Uses Connect partition IDs/counts instead of the RDD API.
+@pytest.mark.parametrize("descending", [False, True])
+def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descending):
+    source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    key = F.col("key").desc() if descending else F.col("key").asc()
+    rows = source.repartitionByRange(3, key).select("key", F.spark_partition_id().alias("pid")).collect()
+    groups = {pid: [row.key for row in rows if row.pid == pid] for pid in range(3)}
+    assert all(groups.values())
+    for lower, upper in zip(range(2), range(1, 3), strict=True):
+        if descending:
+            assert min(groups[lower]) > max(groups[upper])
+        else:
+            assert max(groups[lower]) < min(groups[upper])
+
+
+def test_range_repartition_orders_compound_keys_by_each_direction(spark):
+    source = spark.range(12).select((F.col("id") / 6).cast("int").alias("a"), (F.col("id") % 6).alias("b"))
+    rows = source.repartitionByRange(3, "a", F.col("b").desc()).select("a", "b", F.spark_partition_id().alias("pid"))
+    assert sorted((row.pid, row.a, row.b) for row in rows.collect()) == [
+        (0, 0, 2),
+        (0, 0, 3),
+        (0, 0, 4),
+        (0, 0, 5),
+        (1, 0, 0),
+        (1, 0, 1),
+        (1, 1, 4),
+        (1, 1, 5),
+        (2, 1, 0),
+        (2, 1, 1),
+        (2, 1, 2),
+        (2, 1, 3),
+    ]
+
+
+def test_range_repartition_rejects_non_positive_sample_size(spark):
+    try:
+        spark.conf.set("spark.sql.execution.rangeExchange.sampleSizePerPartition", "0")
+        with pytest.raises(
+            IllegalArgumentException, match="Sample points per partition must be greater than 0 but found 0"
+        ):
+            spark.range(12).repartitionByRange(3, "id").collect()
+    finally:
+        spark.conf.unset("spark.sql.execution.rangeExchange.sampleSizePerPartition")
+
+
+def failing_key(_value):
+    msg = "range key computed"
+    raise ValueError(msg)
+
+
+def test_range_sample_size_rejects_a_value_that_is_not_an_int(spark):
+    key = "spark.sql.execution.rangeExchange.sampleSizePerPartition"
+    try:
+        spark.conf.set(key, "7")
+        with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TYPE_MISMATCH"):
+            spark.conf.set(key, "abc")
+        # The rejected value is not stored, so it cannot fail other queries.
+        assert spark.conf.get(key) == "7"
+        assert spark.range(3).count() == 3
+    finally:
+        spark.conf.unset(key)
+
+
+def test_range_repartition_samples_only_when_the_query_runs(spark):
+    key = F.udf(failing_key, "long")("id")
+    df = spark.range(12).withColumn("key", key).repartitionByRange(3, "key")
+    # Spark samples the input when the exchange runs, so EXPLAIN computes no key.
+    df._explain_string(extended=True)  # noqa: SLF001
+    with pytest.raises(Exception, match="range key computed"):
+        df.collect()
+
+
+# JVM Spark cancels the query, but its task over the range runs on and holds the only
+# task slot of local mode, which the later tests wait for.
+@pytest.mark.spark(skip_if_jvm=True, reason="the interrupted task keeps the task slot of JVM Spark")
+def test_range_repartition_sample_can_be_interrupted(spark):
+    # The sample of so many rows takes minutes. It runs under the operation, so the
+    # operation can be interrupted while it samples.
+    df = spark.range(0, 10**11).repartitionByRange(2, "id")
+    # The query is not waited for if the test fails, since it would run for minutes.
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        result = executor.submit(df.collect)
+        start = time.monotonic()
+        interrupted = []
+        while not interrupted and time.monotonic() - start < 10:
+            time.sleep(0.2)
+            interrupted = spark.interruptAll()
+        assert interrupted, "the operation was not found while it sampled"
+        with pytest.raises(PySparkException):
+            result.result(timeout=20)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def test_range_repartition_samples_input_with_scalar_subquery(spark):
+    rows = spark.sql(
+        "SELECT id, spark_partition_id() AS pid FROM ("
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id FROM range(12) "
+        "WHERE id < (SELECT max(id) + 1 FROM range(12)))"
+    ).collect()
+    assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
+
+
+def test_range_repartition_samples_imbalanced_input_again(spark):
+    # Of 201 input partitions only one has rows, so the first sample keeps one key
+    # of it. The partition is sampled again in proportion to its rows.
+    source = spark.range(0, 100_000, 1, 1).union(spark.range(0, 0, 1, 200))
+    rows = source.repartitionByRange(2, "id").groupBy(F.spark_partition_id().alias("pid")).count().collect()
+    counts = {row.pid: row["count"] for row in rows}
+    assert sum(counts.values()) == 100_000
+    assert len(counts) == 2, counts
+    assert all(count > 30_000 for count in counts.values()), counts
+
+
+SHARED_CTE = "WITH c AS (SELECT id, rand() AS v FROM range(0, 12, 1, 2)) "
+# Of 201 partitions only one has rows, so the sample samples it again.
+IMBALANCED_SHARED_CTE = (
+    "WITH c AS (SELECT id, rand() AS v FROM "
+    "(SELECT id FROM range(0, 20000, 1, 1) UNION ALL SELECT id FROM range(0, 0, 1, 200))) "
+)
+
+
+@pytest.mark.parametrize(
+    ("cte", "rows"),
+    [(SHARED_CTE, 12), (IMBALANCED_SHARED_CTE, 20000)],
+    ids=["balanced", "imbalanced"],
+)
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT id, v FROM c UNION ALL SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c",
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c UNION ALL SELECT id, v FROM c",
+    ],
+    ids=["range-second", "range-first"],
+)
+def test_range_repartition_of_a_shared_cte_reads_the_rows_of_the_other_reference(spark, cte, rows, query):
+    # The sample reads the CTE before the query runs, and the other reference reads the
+    # same evaluation.
+    result = spark.sql(cte + query).collect()
+    values = {}
+    for row in result:
+        values.setdefault(row.id, set()).add(row.v)
+    assert len(result) == 2 * rows
+    assert sorted(values) == list(range(rows))
+    assert all(len(v) == 1 for v in values.values())
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT a.id FROM (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c) a JOIN c b ON a.v = b.v",
+        "SELECT a.id FROM c b JOIN (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c) a ON a.v = b.v",
+        "SELECT id FROM c WHERE v IN (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ v FROM c)",
+    ],
+    ids=["join-range-left", "join-range-right", "in-subquery"],
+)
+def test_range_repartition_of_a_shared_cte_joins_the_other_reference(spark, query):
+    rows = spark.sql(SHARED_CTE + query).collect()
+    assert sorted(row.id for row in rows) == list(range(12))
+
+
+def assert_range_repartition_plan(df, sorts):
+    plan = normalize_plan_text(df._explain_string(extended=True))  # noqa: SLF001
+    keys = ", ".join(rf"\S+ {sort}" for sort in sorts)
+    assert re.search(rf"ExplicitRepartition: kind=range, n=Some\(3\), expr=\[{keys}\]", plan), plan
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.parametrize(
+    ("operation", "sorts"),
+    [
+        (lambda df: df.repartitionByRange(3, "id"), ["ASC NULLS FIRST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").desc()), ["DESC NULLS LAST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").asc_nulls_last()), ["ASC NULLS LAST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").desc_nulls_first()), ["DESC NULLS FIRST"]),
+        (lambda df: df.repartitionByRange(3, "id", F.col("key").desc()), ["ASC NULLS FIRST", "DESC NULLS LAST"]),
+        (lambda df: df.repartition(3, F.col("id").asc()), ["ASC NULLS FIRST"]),
+        (lambda df: df.select("key").repartitionByRange(3, "id"), ["ASC NULLS FIRST"]),
+    ],
+    ids=["default", "descending", "nulls-last", "nulls-first", "two-keys", "repartition-sort-order", "removed-key"],
+)
+def test_range_repartition_plans_range_kind(spark, operation, sorts):
+    assert_range_repartition_plan(operation(spark.range(12).withColumn("key", F.col("id") % 4)), sorts)
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.parametrize("parameters", ["3, id", "3, 'id'"])
+def test_repartition_by_range_hint_plans_range_kind(spark, parameters):
+    assert_range_repartition_plan(
+        spark.sql(f"SELECT /*+ REPARTITION_BY_RANGE({parameters}) */ id FROM range(12)"),  # noqa: S608
+        ["ASC NULLS FIRST"],
+    )
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+def test_repartition_by_range_hint_without_columns_plans_round_robin(spark):
+    plan = normalized_plan(spark.sql("SELECT /*+ REPARTITION_BY_RANGE(3) */ id FROM range(12)"))
+    assert "RepartitionExec: partitioning=RoundRobinBatch(3)" in plan
+
+
+@pytest.mark.parametrize("parameters", ["id + 1", "id, 3"])
+def test_repartition_by_range_hint_rejects_invalid_parameters(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ REPARTITION_BY_RANGE({parameters}) */ id FROM range(12)").collect()  # noqa: S608
+
+
+def test_repartition_rejects_mixed_sort_order_and_hash_expressions(spark):
+    with pytest.raises(IllegalArgumentException, match="are of type `SortOrder`, which means `RangePartitioning`"):
+        spark.range(12).repartition(3, F.col("id").asc(), F.col("id") + 1).collect()
+
+
+@pytest.mark.parametrize("rows", [0, 24], ids=["empty", "rows"])
+@pytest.mark.parametrize("num_partitions", [1, 3])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "map(id, id)",
+        "array(map(id, id))",
+        "named_struct('m', map(id, id))",
+        "array(named_struct('m', map(id, id)))",
+        "make_interval(0, 0, 0, 0, 0, 0, id)",
+    ],
+    ids=["map", "array-of-map", "struct-of-map", "array-of-struct-of-map", "calendar-interval"],
+)
+def test_range_repartition_rejects_an_unorderable_key(spark, key, num_partitions, rows):
+    # Spark checks the key type during analysis, so the input and the count do not matter.
+    source = spark.range(rows).selectExpr(f"{key} AS k")
+    with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.INVALID_ORDERING_TYPE"):
+        source.repartitionByRange(num_partitions, "k").collect()
+
+
+def spark_order(value):
+    """The order of a value in Spark's ascending ordering, where a null value, element,
+    or field comes first, and arrays and structs (lists here) compare element by element."""
+    if value is None:
+        return (False, 0)
+    if isinstance(value, list):
+        return (True, [spark_order(element) for element in value])
+    return (True, value)
+
+
+NESTED_KEYS = {
+    "array": ("array(id % 4, id)", lambda i: [i % 4, i]),
+    "array-with-null-elements": (
+        "array(IF(id % 3 = 0, NULL, id % 3), id)",
+        lambda i: [None if i % 3 == 0 else i % 3, i],
+    ),
+    "struct-of-array-with-null-fields": (
+        "named_struct('a', IF(id % 3 = 0, NULL, id % 3), 'b', array(id))",
+        lambda i: [None if i % 3 == 0 else i % 3, [i]],
+    ),
+    "array-of-structs": ("array(named_struct('a', id % 4), named_struct('a', id))", lambda i: [[i % 4], [i]]),
+    "null-key": ("IF(id = 5, NULL, array(named_struct('a', id)))", lambda i: None if i == 5 else [[i]]),
+}
+
+
+@pytest.mark.parametrize("key", NESTED_KEYS.values(), ids=NESTED_KEYS.keys())
+@pytest.mark.parametrize("descending", [False, True], ids=["asc", "desc"])
+def test_range_repartition_orders_nested_keys_like_spark(spark, key, descending):
+    # The sample has every row, so each partition gets 4 consecutive keys in the order.
+    sql, value = key
+    order = F.col("k").desc() if descending else F.col("k").asc()
+    rows = (
+        spark.range(12)
+        .selectExpr("id", f"{sql} AS k")
+        .repartitionByRange(3, order)
+        .select("id", F.spark_partition_id().alias("pid"))
+        .collect()
+    )
+    ranked = sorted(range(12), key=lambda i: spark_order(value(i)), reverse=descending)
+    assert {row.id: row.pid for row in rows} == {i: rank // 4 for rank, i in enumerate(ranked)}
+
+
+@pytest.mark.parametrize("input_partitions", [1, 5])
+def test_range_repartition_without_a_count_uses_shuffle_partitions(spark, input_partitions):
+    # As in Spark, the DataFrame API and the hint use `spark.sql.shuffle.partitions`,
+    # not the partitions of the input. The sample covers every row, so the ranges are exact.
+    source = spark.range(0, 24, 1, input_partitions)
+    try:
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        for df in (source.repartitionByRange("id"), source.hint("REPARTITION_BY_RANGE", "id")):
+            rows = df.select("id", F.spark_partition_id().alias("pid")).collect()
+            assert sorted((row.id, row.pid) for row in rows) == [(i, i // 8) for i in range(24)]
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+        spark.conf.unset("spark.sql.adaptive.enabled")
+
+
+@pytest.mark.parametrize("input_partitions", [1, 5])
+def test_hash_repartition_without_a_count_uses_shuffle_partitions(spark, input_partitions):
+    # As in Spark, the DataFrame API and the hint use `spark.sql.shuffle.partitions`,
+    # not the partitions of the input.
+    source = spark.range(0, 24, 1, input_partitions).withColumn("a", F.lit("foo"))
+    try:
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        for df in (source.repartition("a"), source.hint("REPARTITION", "a")):
+            assert partition_count(df) == 3
+            assert sorted(row.id for row in df.collect()) == list(range(24))
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+        spark.conf.unset("spark.sql.adaptive.enabled")
+
+
+def test_repartition_to_one_partition_accepts_mixed_sort_order_and_hash_expressions(spark):
+    result = spark.range(12).repartition(1, F.col("id").asc(), F.col("id") + 1)
+    assert partition_count(result) == 1
+    assert sorted(row.id for row in result.collect()) == list(range(12))
+
+
+def test_repartition_with_one_shuffle_partition_accepts_mixed_sort_order_and_hash_expressions(spark):
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "1")
+        result = spark.range(12).repartition(F.col("id").asc(), F.col("id") + 1)
+        assert sorted(row.id for row in result.collect()) == list(range(12))
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+
+
+def test_range_repartition_treats_a_key_repeated_after_simplification_as_one_key(spark):
+    # The SQL hint accepts only columns, so this case exists only in the DataFrame API.
+    rows = (
+        spark.range(12).repartitionByRange(3, "id", F.col("id") + 0).select("id", F.spark_partition_id().alias("pid"))
+    )
+    assert sorted((row.id, row.pid) for row in rows.collect()) == [(i, i // 4) for i in range(12)]
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [lambda: [F.lit(1)], lambda: ["id", "id"]],
+    ids=["literal", "repeated"],
+)
+def test_range_repartition_preserves_rows_for_constant_and_repeated_keys(spark, keys):
+    result = spark.range(12).repartitionByRange(3, *keys())
+    assert sorted(row.id for row in result.collect()) == list(range(12))
+
+
+def test_range_repartition_to_one_partition(spark):
+    result = spark.range(0, 12, 1, 3).repartitionByRange(1, "id")
+    assert partition_count(result) == 1
+    assert sorted(row.id for row in result.collect()) == list(range(12))
+
+
+def partition_rows(df):
+    """The number of rows of each partition, including the empty ones, in ascending order."""
+
+    def counter(iterator):
+        yield pd.DataFrame({"n": [sum(len(pdf) for pdf in iterator)]})
+
+    return sorted(row.n for row in df.mapInPandas(counter, schema="n: long").collect())
+
+
+@pytest.mark.parametrize(("rows", "expected"), [(0, [0]), (24, [0, 24])], ids=["empty", "constant"])
+def test_range_repartition_has_a_partition_per_spark_bound_and_one_more(spark, rows, expected):
+    # Spark's `RangePartitioner` can have fewer partitions than asked for. An empty input
+    # has no bounds, and a constant key has one bound with an empty partition after it.
+    source = spark.range(0, rows, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k")) == expected
+
+
+def test_nested_range_repartition_has_a_partition_per_spark_bound(spark):
+    source = spark.range(0, 24, 1, 1).selectExpr("id", "1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "id").repartitionByRange(6, "k")) == [0, 24]
+
+
+def test_coalesce_does_not_add_partitions_to_a_range_repartition(spark):
+    source = spark.range(0, 24, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k").coalesce(4)) == [0, 24]
+
+
+def test_explicit_repartition_spreads_identical_rows(spark):
+    partition_ids = {
+        row["pid"]
+        for row in spark.range(0, 64, 1, 1)
+        .select(F.lit("same").alias("value"))
+        .repartition(4)
+        .selectExpr("spark_partition_id() AS pid")
+        .distinct()
+        .collect()
+    }
+
+    assert partition_ids == set(range(4))
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's round-robin row assignment")
+def test_repartition_assigns_rows_round_robin(spark):
+    df = spark.sql("SELECT id FROM range(0, 6, 1, 1)")
+    repartitioned = df.repartition(2)
+    repartitioned.createOrReplaceTempView("repartitioned_rows")
+
+    result = spark.sql(
+        """
+        WITH repartitioned AS (
+          SELECT id, spark_partition_id() AS pid
+          FROM repartitioned_rows
+        )
+        SELECT id, DENSE_RANK() OVER (ORDER BY pid) - 1 AS pid
+        FROM repartitioned
+        ORDER BY id
+    """
+    ).collect()
+
+    assert [(row["id"], row["pid"]) for row in result] == [
+        (0, 0),
+        (1, 1),
+        (2, 0),
+        (3, 1),
+        (4, 0),
+        (5, 1),
+    ]
+
+
+def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
+    round_robin_plan = normalized_plan(spark.sql("SELECT 1 AS a, 'foo' AS b").repartition(5))
+    repartition_one_plan = normalized_plan(spark.range(0, 8, 1, 2).repartition(1))
+    hash_plan = normalized_plan(
+        spark.range(0, 8, 1, 2).select("id", (F.col("id") % 2).alias("group")).repartition(1, "group")
+    )
+
+    assert "RepartitionExec: partitioning=RoundRobinBatch(5)" in round_robin_plan
+    assert "RepartitionExec: partitioning=RoundRobinBatch(1)" in repartition_one_plan
+    assert "RepartitionExec: partitioning=Hash([" in hash_plan
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_pushes_column_projection_down_plan(spark, snapshot):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = df1.join(df2, df1.id1 == df2.id2).join(df3, df1.id1 == df3.id3).repartition(3).select("id1", "id2")
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+def test_explicit_repartition_pushes_column_projection_down_result(spark):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = (
+        df1.join(df2, df1.id1 == df2.id2)
+        .join(df3, df1.id1 == df3.id3)
+        .repartition(3)
+        .select("id1", "id2")
+        .orderBy("id1", "id2")
+    )
+    result = df.collect()
+
+    assert [(row["id1"], row["id2"]) for row in result] == [
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 5),
+    ]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown_plan(spark, snapshot):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = (
+        df1.join(df2, df1.id1 == df2.id2)
+        .join(df3, df1.id1 == df3.id3)
+        .repartition(3, "id1", "id2")
+        .select("id1", "id2")
+    )
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
+    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0)
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+@pytest.mark.spark(cross_version=True)
+def test_explicit_coalesce(spark):
+    assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
+    assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2
+    assert partition_count(spark.range(0, 10, 1, 2).coalesce(3)) == 2
+    assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2
+
+
+@pytest.mark.spark(cross_version=True)
+def test_coalesce_hint(spark):
+    df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
+
+    actual = df.hint("COALESCE", 2).orderBy("id").toPandas()
+    expected = df.orderBy("id").toPandas()
+
+    assert partition_count(df.hint("COALESCE", 2)) == 2
+    assert partition_count(df.hint("COALESCE", 6)) == 4
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.spark(cross_version=True)
+def test_coalesce_hint_rejects_zero_partitions(spark):
+    with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
+        partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
+
+
+@pytest.mark.parametrize("parameters", ["2.0", "CAST(2 AS INT)"])
+def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ COALESCE({parameters}) */ id FROM range(6)").collect()  # noqa: S608
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize(
+    "hint",
+    ["COALESCE(2L)", "REPARTITION(2L)", "REPARTITION(2L, id)", "REPARTITION(+2L)", "REPARTITION(+2L, id)"],
+)
+@pytest.mark.spark(cross_version=True)
+def test_sql_hint_accepts_int64_partition_count(spark, hint):
+    result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(0, 12, 1, 4)")  # noqa: S608
+    assert partition_count(result) == 2
+    assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
+
+
+@pytest.mark.parametrize("hint", ["COALESCE({count})", "REPARTITION({count})", "REPARTITION({count}, id)"])
+@pytest.mark.parametrize("count", ["0", "-0", "-1", "-1Y", "-1S"])
+def test_sql_hint_rejects_non_positive_partition_count(spark, hint, count):
+    hint = hint.format(count=count)
+    with pytest.raises(IllegalArgumentException):
+        spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE({count})", "REPARTITION({count})", "REPARTITION({count}, id)"])
+@pytest.mark.parametrize("count", ["0L", "+0L", "-1L", "-2147483649L"])
+def test_sql_hint_rejects_non_positive_int64_partition_count(spark, hint, count):
+    hint = hint.format(count=count)
+    with pytest.raises(IllegalArgumentException):
+        spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
+def test_dataframe_hint_rejects_negative_int64_partition_count(spark, hint):
+    with pytest.raises(IllegalArgumentException):
+        spark.range(6).hint(hint, -(2**31) - 1).collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
+@pytest.mark.parametrize("count", [2**31, 2**63 - 1])
+def test_dataframe_hint_accepts_large_partition_count(spark, hint, count):
+    source = spark.range(6)
+    # Resolve the schema without executing an enormous repartition.
+    assert source.hint(hint, count).schema == source.schema
+    if hint == "REPARTITION":
+        assert source.hint(hint, count, "id").schema == source.schema
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "9223372036854775808", "2.5"])
+def test_shuffle_partitions_rejects_invalid_config(spark, value):
+    previous = spark.conf.get("spark.sql.shuffle.partitions")
+    try:
+        with pytest.raises(IllegalArgumentException):
+            spark.conf.set("spark.sql.shuffle.partitions", value)
+        assert spark.conf.get("spark.sql.shuffle.partitions") == previous
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", previous)
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
+@pytest.mark.parametrize("value", ["1", "2147483648", "9223372036854775807"])
+def test_shuffle_partitions_accepts_int64_bounds(spark, value):
+    previous = spark.conf.get("spark.sql.shuffle.partitions")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", value)
+        assert spark.conf.get("spark.sql.shuffle.partitions") == value
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", previous)
+
+
+@pytest.mark.spark(cross_version=True)
+def test_repartition_hint(spark):
+    """Apply an integer REPARTITION hint without changing the rows."""
+    df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
+
+    actual = df.hint("REPARTITION", 6).orderBy("id").toPandas()
+    expected = df.orderBy("id").toPandas()
+
+    assert partition_count(df.hint("REPARTITION", 2)) == 2
+    assert partition_count(df.hint("REPARTITION", 6)) == 6
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        ("id+1",),
+        ("id", 3),
+    ],
+)
+def test_repartition_hint_rejects_invalid_parameters(spark, parameters):
+    """Reject invalid REPARTITION hint parameter values and combinations."""
+    with pytest.raises(AnalysisException):
+        spark.range(0, 10, 1, 2).hint("REPARTITION", *parameters).collect()
+
+
+@pytest.mark.parametrize("with_count", [False, True])
+@pytest.mark.parametrize("columns", [("group",), ("group", "bucket"), ("s.key", "`a.b`")])
+@pytest.mark.spark(cross_version=True)
+def test_repartition_hint_by_columns(spark, with_count, columns):
+    old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
+    old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        source = spark.range(0, 60, 1, 4).selectExpr(
+            "id", "id % 3 AS `group`", "id % 2 AS bucket", "named_struct('key', id % 3) AS s", "id % 2 AS `a.b`"
+        )
+        count = 5 if with_count else 3
+        parameters = (count, *columns) if with_count else columns
+        result = source.hint("REPARTITION", *parameters)
+        expected = source.repartition(count, *columns)
+        assert partition_count(result.select("id")) == count
+        assert result.schema == source.schema
+        assert sorted(result.collect()) == sorted(source.collect())
+        assert sorted(partition_groups(result, "id").values()) == sorted(partition_groups(expected, "id").values())
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", old_partitions)
+        spark.conf.set("spark.sql.adaptive.enabled", old_adaptive)
+
+
+@pytest.mark.parametrize("parameters", ["3, id", "3, r.id"])
+@pytest.mark.spark(cross_version=True)
+def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
+    result = spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id + 1 AS value FROM range(12) r")  # noqa: S608
+    assert result.columns == ["value"]
+    assert partition_count(result) == 3
+    assert sorted(result.collect()) == [Row(value=i) for i in range(1, 13)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT /*+ REPARTITION(3, id), COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ REPARTITION(3, id) COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ REPARTITION(3, id) */ /*+ COALESCE(2) */ id FROM range(12)",
+        "SELECT /*+ UNKNOWN_HINT(id) REPARTITION(3, id) */ id FROM range(12)",
+    ],
+)
+@pytest.mark.spark(cross_version=True)
+def test_repartition_sql_hint_precedence(spark, query):
+    result = spark.sql(query)
+    assert partition_count(result) == 3
+    assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
+
+
+@pytest.mark.parametrize("hint", ["REPARTITION(id)", "REPARTITION"])
+@pytest.mark.spark(cross_version=True)
+def test_repartition_sql_hint_default_partition_count(spark, hint):
+    old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
+    old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(12)")  # noqa: S608
+        assert partition_count(result) == 3
+        assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
+    finally:
+        spark.conf.set("spark.sql.shuffle.partitions", old_partitions)
+        spark.conf.set("spark.sql.adaptive.enabled", old_adaptive)
+
+
+@pytest.mark.spark(cross_version=True)
+def test_sql_hint_delimiters_in_comments_and_strings(spark):
+    result = spark.sql("SELECT /* REPARTITION(99) */ '/*+ REPARTITION(99) */' AS value")
+    assert partition_count(result) == 1
+    assert result.collect() == [Row(value="/*+ REPARTITION(99) */")]
+
+
+@pytest.mark.parametrize(
+    ("parameters", "error"),
+    [
+        ((2.5, "id"), AnalysisException),
+        ((2, "id", 3), AnalysisException),
+        (("missing",), AnalysisException),
+        ((0, "id"), IllegalArgumentException),
+        ((-1, "id"), IllegalArgumentException),
+    ],
+)
+def test_repartition_column_hint_rejects_invalid_parameters(spark, parameters, error):
+    with pytest.raises(error):
+        spark.range(12).hint("REPARTITION", *parameters).collect()
+
+
+@pytest.mark.parametrize("parameters", ["id, 3", "-1.0", "-1.0, id", "-id", "-(1 + 1)", "-CAST(1 AS INT)"])
+def test_repartition_sql_hint_rejects_invalid_parameters(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id FROM range(12)").collect()  # noqa: S608
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_repartition_column_hint_plan(spark, snapshot):
+    result = spark.sql("SELECT /*+ REPARTITION(3, id) */ id + 1 AS value FROM range(12)")
+    assert normalize_plan_text(result._explain_string(extended=True)) == snapshot  # noqa: SLF001
+
+
+def test_explicit_coalesce_preserves_rows(spark):
+    row_count = 12
+    partition_count_before = 4
+
+    df = spark.range(0, row_count, 1, partition_count_before).select(
+        "id",
+        (F.col("id") % 3).alias("group"),
+        (F.col("id") % 2 == 0).alias("is_even"),
+    )
+
+    actual = df.coalesce(2).orderBy("id").toPandas()
+    expected = df.orderBy("id").toPandas()
+
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.spark(cross_version=True)
+def test_explicit_coalesce_keeps_input_partitions_intact(spark):
+    row_count = 48
+    input_partition_count = 4
+    output_partition_count = 2
+
+    groups = input_partition_groups(
+        spark.range(0, row_count, 1, input_partition_count)
+        .selectExpr("spark_partition_id() AS input_pid")
+        .coalesce(output_partition_count)
+    )
+
+    assert len(groups) == output_partition_count
+    assert all(group for group in groups)
+    assert {pid for group in groups for pid in group} == set(range(input_partition_count))
+    assert sum(len(group) for group in groups) == input_partition_count
+
+
+@pytest.mark.spark(cross_version=True)
+def test_explicit_coalesce_after_filter_and_projection(spark):
+    row_count = 12
+    partition_count_before = 4
+    start_value = 4
+
+    df = (
+        spark.range(0, row_count, 1, partition_count_before)
+        .filter(F.col("id") >= start_value)
+        .select(F.col("id").alias("value"), (F.col("id") * 2).alias("double_value"))
+    )
+
+    actual = df.coalesce(1).orderBy("value").toPandas()
+    expected = pd.DataFrame(
+        {
+            "value": list(range(start_value, row_count)),
+            "double_value": [value * 2 for value in range(start_value, row_count)],
+        }
+    )
+
+    assert partition_count(df.coalesce(1)) == 1
+    assert_frame_equal(actual, expected)
+
+
+@pytest.fixture
+def unsorted_keys(spark):
+    # `k` is a permutation of 0..19, so the rows are out of order unless they are sorted.
+    return spark.range(0, 20, 1, 4).select(((F.col("id") * 7) % 20).alias("k"), (F.col("id") % 2).alias("g"))
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (lambda df: df.orderBy("k").coalesce(1), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy("k").coalesce(3), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy("k").repartition(1), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy(F.col("k").desc()).coalesce(1), lambda df: df.orderBy(F.col("k").desc())),
+        (
+            lambda df: df.orderBy("g", F.col("k").desc()).repartition(1),
+            lambda df: df.orderBy("g", F.col("k").desc()),
+        ),
+        (
+            lambda df: df.orderBy(F.col("g").desc(), "k").coalesce(1),
+            lambda df: df.orderBy(F.col("g").desc(), "k"),
+        ),
+        (lambda df: df.orderBy("k").select("k").coalesce(1).repartition(1), lambda df: df.orderBy("k")),
+        (lambda df: df.coalesce(1).sortWithinPartitions("k"), lambda df: df.orderBy("k")),
+        (lambda df: df.repartition(1).sortWithinPartitions("k"), lambda df: df.orderBy("k")),
+    ],
+    ids=[
+        "coalesce-1",
+        "coalesce-3",
+        "repartition-1",
+        "descending",
+        "two-keys",
+        "two-keys-reversed",
+        "nested",
+        "sort-within-coalesce",
+        "sort-within-repartition",
+    ],
+)
+@pytest.mark.spark(cross_version=True)
+def test_sort_before_coalesce_or_single_partition_repartition_is_kept(unsorted_keys, operation, expected):
+    assert [row.k for row in operation(unsorted_keys).collect()] == [row.k for row in expected(unsorted_keys).collect()]
+
+
+@pytest.mark.spark(cross_version=True)
+def test_first_rows_after_sort_and_coalesce(unsorted_keys):
+    keys = list(range(20))
+    assert [row.k for row in unsorted_keys.orderBy("k").coalesce(1).limit(3).collect()] == keys[:3]
+    assert [row.k for row in unsorted_keys.orderBy("k").repartition(1).limit(3).collect()] == keys[:3]
+    assert unsorted_keys.orderBy(F.col("k").desc()).coalesce(1).first().k == keys[-1]
+    assert [row.k for row in unsorted_keys.orderBy("k").coalesce(1).toLocalIterator()] == keys
+
+
+@pytest.mark.parametrize("hint", ["COALESCE(1)", "REPARTITION(1)"])
+@pytest.mark.spark(cross_version=True)
+def test_sort_before_sql_hint_is_kept(spark, unsorted_keys, hint):
+    unsorted_keys.createOrReplaceTempView("unsorted_keys")
+    try:
+        result = spark.sql(f"SELECT /*+ {hint} */ k FROM (SELECT k FROM unsorted_keys ORDER BY k)")  # noqa: S608
+        assert [row.k for row in result.collect()] == list(range(20))
+    finally:
+        spark.catalog.dropTempView("unsorted_keys")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks Sail's physical plan")
+@pytest.mark.parametrize(
+    ("operation", "keeps_sort"),
+    [
+        (lambda df: df.orderBy("k").coalesce(1), True),
+        (lambda df: df.orderBy("k").repartition(1), True),
+        (lambda df: df.orderBy("k").repartition(3), False),
+        (lambda df: df.orderBy("k").repartition(1, "k"), False),
+    ],
+    ids=["coalesce-1", "repartition-1", "repartition-3", "hash-repartition-1"],
+)
+def test_sort_before_explicit_repartition_plan(unsorted_keys, operation, keeps_sort):
+    # Spark does not keep the order of the rows for round-robin repartitioning into several
+    # partitions or for hash repartitioning, so the sort is still removed there.
+    assert ("SortExec" in normalized_plan(operation(unsorted_keys))) == keeps_sort
+
+
+@pytest.fixture
+def repartition_source(spark):
+    return spark.createDataFrame([(1, 10, 3), (2, 20, 1), (3, 30, 2)], "a int, b int, c int")
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (lambda df: df.select("a").repartition(F.col("b")), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartition(3, "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartition("a", "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").where("c > 1").repartition("b"), [Row(a=1), Row(a=3)]),
+        (lambda df: df.select("a").repartitionByRange(2, "b"), [Row(a=1), Row(a=2), Row(a=3)]),
+        (lambda df: df.select("a").repartitionByRange(2, F.col("b").desc()), [Row(a=1), Row(a=2), Row(a=3)]),
+    ],
+    ids=["hash", "hash-with-count", "visible-and-removed", "after-filter", "range", "range-descending"],
+)
+def test_repartition_by_attribute_removed_by_projections(repartition_source, operation, expected):
+    result = operation(repartition_source)
+    assert result.columns == ["a"]
+    assert sorted(result.collect()) == expected
+
+
+def partition_groups(df, column):
+    rows = df.select(column, F.spark_partition_id().alias("pid")).collect()
+    return {row["pid"]: sorted(r[column] for r in rows if r["pid"] == row["pid"]) for row in rows}
+
+
+def test_repartition_by_removed_attribute_partitions_by_it(spark):
+    source = spark.createDataFrame([(1, 10), (2, 10), (3, 20), (4, 20)], "a int, b int")
+    groups = partition_groups(source.select("a").repartition(4, "b"), "a").values()
+    assert all(group in ([1, 2], [3, 4], [1, 2, 3, 4]) for group in groups)
+
+
+def test_repartition_resolves_each_expression_independently(spark):
+    source = spark.createDataFrame(
+        [((1,), 100, 7), ((1,), 200, 8), ((1,), 300, 9), ((1,), 400, 10)], "s struct<x:int>, m int, a int"
+    )
+    projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), (F.col("m") * 0).alias("m"), "a").select("a")
+    # Only `s.x` falls back to the older struct, while `m` still refers to the nearer output.
+    result = projected.repartition(16, F.col("s.x"), F.col("m"))
+    assert len(partition_groups(result, "a")) == 1
+
+
+def test_repartition_then_sort_within_partitions_by_removed_attribute(repartition_source):
+    result = repartition_source.coalesce(1).select("a").repartition(1, "b").sortWithinPartitions(F.col("b").desc())
+    assert result.collect() == [Row(a=3), Row(a=2), Row(a=1)]
+
+
+@pytest.mark.spark(version=">=4", reason="Uses Spark Connect column selectors")
+def test_repartition_recovered_struct_rejects_column_selector(spark):
+    source = spark.createDataFrame([((1, 2), 5)], "s struct<x:int, k:int>, a int")
+    projected = source.select("s", "a").select("a")
+    with pytest.raises(AnalysisException):
+        projected.repartition(F.coalesce(F.col("s"), F.col("s"))[F.col("x")]).collect()
+
+
+def test_repartition_rejects_attribute_removed_before_view(spark, repartition_source):
+    repartition_source.select("a", "c").createOrReplaceTempView("repartition_view")
+    try:
+        with pytest.raises(AnalysisException):
+            spark.table("repartition_view").repartition("b").collect()
+    finally:
+        spark.catalog.dropTempView("repartition_view")
+
+
+@pytest.mark.spark(version=">=4.0")
+@pytest.mark.parametrize(
+    ("key", "type_name"),
+    [
+        ("parse_json(CAST(id AS STRING))", "variant"),
+        ("array(parse_json(CAST(id AS STRING)))", "array<variant>"),
+        ("named_struct('v', parse_json(CAST(id AS STRING)))", "struct<v:variant>"),
+    ],
+)
+def test_range_repartition_rejects_variant(spark, key, type_name):
+    source = spark.range(12).selectExpr(f"{key} AS k")
+    with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.INVALID_ORDERING_TYPE") as exc:
+        source.repartitionByRange(3, "k").selectExpr("spark_partition_id()").collect()
+    assert type_name in str(exc.value).lower().replace(" not null", "").replace(": ", ":")

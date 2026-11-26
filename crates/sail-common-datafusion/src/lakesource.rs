@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,10 +27,31 @@ pub struct LakeSourceMetadata {
     pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CloneMetrics {
+    pub source_table_size: i64,
+    pub source_num_of_files: i64,
+    pub num_removed_files: i64,
+    pub num_copied_files: i64,
+    pub removed_files_size: i64,
+    pub copied_files_size: i64,
+}
+
+/// A validated zero-copy snapshot and its deferred storage publication.
+/// Preparation must not mutate storage. Publication must never delete shared data.
+pub struct LakeSourceClone {
+    pub metrics: Option<CloneMetrics>,
+    pub metadata: LakeSourceMetadata,
+    pub publish: futures::future::BoxFuture<'static, Result<()>>,
+    /// Best-effort storage maintenance to run after successful publication.
+    pub post_commit: futures::future::BoxFuture<'static, ()>,
+}
+
 /// A column definition used when catalog DDL asks a lake source to create
 /// storage metadata before registering the catalog object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeSourceCreateTableColumn {
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
@@ -141,6 +164,7 @@ pub enum LakeSourceAlterTableOperation {
     AlterColumnType {
         column_path: Vec<String>,
         data_type: DataType,
+        metadata: Vec<(String, String)>,
         case_sensitive: bool,
     },
     /// Alters the default expression of a table column.
@@ -205,6 +229,19 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceCreateTableResult::default())
     }
 
+    /// Prepares an independent log referencing the source snapshot's existing files.
+    /// Resolve the source only when the destination requires a clone.
+    async fn prepare_shallow_clone(
+        &self,
+        ctx: &TaskContext,
+        source: futures::future::BoxFuture<'_, Result<String>>,
+        destination: &str,
+        mode: sail_common::spec::CreateTableMode,
+    ) -> Result<LakeSourceClone> {
+        let _ = (ctx, source, destination, mode);
+        not_impl_err!("SHALLOW CLONE is not supported for '{}'", self.name())
+    }
+
     /// Creates a logical plan for a row-level operation.
     async fn plan_row_level_operation(
         &self,
@@ -261,9 +298,10 @@ pub trait LakeSource: DataSource {
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
+                metadata,
                 ..
             } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
+                self.alter_table_column_type(runtime_env, path, column_path, data_type, metadata)
                     .await
             }
             LakeSourceAlterTableOperation::AlterColumnDefault {
@@ -312,8 +350,9 @@ pub trait LakeSource: DataSource {
         path: &str,
         column_path: Vec<String>,
         data_type: DataType,
+        metadata: Vec<(String, String)>,
     ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, data_type);
+        let _ = (runtime_env, path, column_path, data_type, metadata);
         not_impl_err!(
             "Column type alteration not supported for lake source '{}'",
             self.name()

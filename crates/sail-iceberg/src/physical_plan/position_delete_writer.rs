@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::sync::Arc;
@@ -9,6 +11,7 @@ use datafusion_common::{DataFusionError, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use roaring::RoaringTreemap;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -355,9 +358,11 @@ async fn write_position_delete_file(
         ],
     )?;
 
-    let mut writer =
-        ArrowParquetWriter::try_new(&delete_schema, WriterProperties::default(), Vec::new())
-            .map_err(DataFusionError::Execution)?;
+    let properties = WriterProperties::builder()
+        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+        .build();
+    let mut writer = ArrowParquetWriter::try_new(&delete_schema, properties, Vec::new())
+        .map_err(DataFusionError::Execution)?;
     writer
         .write_batch(&batch)
         .await
@@ -381,24 +386,16 @@ async fn write_position_delete_file(
 fn position_delete_arrow_schema() -> Schema {
     Schema::new(vec![
         Arc::new(
-            Field::new(POSITION_DELETE_FILE_PATH_COL, DataType::Utf8, false).with_metadata(
-                [(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    POSITION_DELETE_FILE_PATH_ID.to_string(),
-                )]
-                .into_iter()
-                .collect(),
-            ),
+            Field::new(POSITION_DELETE_FILE_PATH_COL, DataType::Utf8, false).with_metadata([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                POSITION_DELETE_FILE_PATH_ID.to_string(),
+            )]),
         ),
         Arc::new(
-            Field::new(POSITION_DELETE_POS_COL, DataType::Int64, false).with_metadata(
-                [(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    POSITION_DELETE_POS_ID.to_string(),
-                )]
-                .into_iter()
-                .collect(),
-            ),
+            Field::new(POSITION_DELETE_POS_COL, DataType::Int64, false).with_metadata([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                POSITION_DELETE_POS_ID.to_string(),
+            )]),
         ),
     ])
 }

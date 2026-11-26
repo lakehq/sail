@@ -1,21 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-// [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/_serde.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/_serde.rs
+// SPDX-FileAttributionText: Notice: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/NOTICE
 
 use std::collections::HashMap;
 
@@ -25,7 +11,7 @@ use serde_bytes::ByteBuf;
 
 use super::{DataContentType, DataFileFormat};
 use crate::spec::Schema;
-use crate::spec::types::{Datum, RawLiteral, StructType, Type};
+use crate::spec::types::{Datum, PrimitiveType, RawLiteral, StructType, Type};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntLongMapEntry {
@@ -70,7 +56,9 @@ where
     })
 }
 
-fn deserialize_optional_vec<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+pub(crate) fn deserialize_optional_vec<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: DeserializeOwned,
@@ -316,6 +304,7 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
 
 fn bytes_map_into(
     values: Option<Vec<IntBytesMapEntry>>,
+    content: DataContentType,
     schema: Option<&Schema>,
 ) -> HashMap<i32, Datum> {
     // TODO: Preserve raw bound bytes like `Map<Integer, ByteBuffer>` metrics.
@@ -325,12 +314,16 @@ fn bytes_map_into(
         .unwrap_or_default()
         .into_iter()
         .filter_map(|entry| {
-            let primitive = schema
-                .and_then(|schema| schema.field_by_id(entry.key))
-                .and_then(|field| match field.field_type.as_ref() {
-                    Type::Primitive(primitive) => Some(primitive.clone()),
-                    Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
-                })?;
+            let primitive = if content == DataContentType::PositionDeletes
+                && entry.key == super::DELETE_FILE_PATH_ID
+            {
+                PrimitiveType::String
+            } else {
+                match schema?.field_by_id(entry.key)?.field_type.as_ref() {
+                    Type::Primitive(primitive) => primitive.clone(),
+                    _ => return None,
+                }
+            };
             primitive
                 .literal_from_bytes(entry.value.as_ref())
                 .ok()
@@ -472,8 +465,8 @@ impl DataFileSerde {
             value_counts: int_long_map_into("value_counts", self.value_counts)?,
             null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
             nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
-            lower_bounds: bytes_map_into(self.lower_bounds, schema),
-            upper_bounds: bytes_map_into(self.upper_bounds, schema),
+            lower_bounds: bytes_map_into(self.lower_bounds, content, schema),
+            upper_bounds: bytes_map_into(self.upper_bounds, content, schema),
             block_size_in_bytes: self.block_size_in_bytes,
             key_metadata: self.key_metadata.map(ByteBuf::into_vec),
             split_offsets: self.split_offsets.unwrap_or_default(),
@@ -509,6 +502,27 @@ mod tests {
 
     fn unpartitioned() -> StructType {
         StructType::new(vec![])
+    }
+
+    #[test]
+    fn position_delete_paths_are_decoded_without_a_table_field() {
+        let mut file = data_file();
+        file.content = 1;
+        let bound = || {
+            Some(vec![IntBytesMapEntry {
+                key: super::super::DELETE_FILE_PATH_ID,
+                value: ByteBuf::from(b"data/a.parquet".to_vec()),
+            }])
+        };
+        file.lower_bounds = bound();
+        file.upper_bounds = bound();
+        let file = file
+            .into_data_file(0, &unpartitioned(), None)
+            .expect("position delete");
+        assert_eq!(
+            crate::spec::delete_index::referenced_path(&file),
+            Some("data/a.parquet")
+        );
     }
 
     #[test]

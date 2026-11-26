@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::ScalarValue;
 use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
@@ -34,6 +36,15 @@ pub fn aggregate_statistics<'a>(
                     sum.checked_add(nulls)
                 })
                 .map(Precision::Exact)
+                .unwrap_or(Precision::Absent);
+            stats.byte_size = files
+                .iter()
+                .try_fold(Precision::Exact(0), |sum, file| {
+                    match file.column_statistics.get(index)?.byte_size {
+                        Precision::Absent => None,
+                        byte_size => Some(sum.add(&byte_size)),
+                    }
+                })
                 .unwrap_or(Precision::Absent);
             let bound = |minimum: bool| {
                 let mut result: Option<ScalarValue> = None;

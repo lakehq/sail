@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::iter::once;
 
 use sail_common::spec::{self};
@@ -322,7 +324,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             Ok(spec::Expr::Cast {
                 expr: Box::new(expr),
                 cast_to_type: from_ast_data_type(data_type)?,
-                rename: false,
+                naming: spec::CastNaming::Cast,
                 is_try: false,
             })
         }
@@ -508,7 +510,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
 }
 
 // FIXME: Move DEFAULT interpretation to plan resolution and keep it unresolved here.
-pub(crate) fn expr_with_default_column_values(expr: spec::Expr) -> spec::Expr {
+pub fn expr_with_default_column_values(expr: spec::Expr) -> spec::Expr {
     match expr {
         spec::Expr::UnresolvedAttribute {
             name,
@@ -563,12 +565,12 @@ pub(crate) fn expr_with_default_column_values(expr: spec::Expr) -> spec::Expr {
         spec::Expr::Cast {
             expr,
             cast_to_type,
-            rename,
+            naming,
             is_try,
         } => spec::Expr::Cast {
             expr: Box::new(expr_with_default_column_values(*expr)),
             cast_to_type,
-            rename,
+            naming,
             is_try,
         },
         spec::Expr::SortOrder(sort) => {
@@ -805,13 +807,13 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::Cast(_, _, expr, _, data_type, _) => Ok(spec::Expr::Cast {
             expr: Box::new(from_ast_expression(*expr)?),
             cast_to_type: from_ast_data_type(data_type)?,
-            rename: true,
+            naming: spec::CastNaming::Cast,
             is_try: false,
         }),
         AtomExpr::TryCast(_, _, expr, _, data_type, _) => Ok(spec::Expr::Cast {
             expr: Box::new(from_ast_expression(*expr)?),
             cast_to_type: from_ast_data_type(data_type)?,
-            rename: true,
+            naming: spec::CastNaming::Cast,
             is_try: true,
         }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {

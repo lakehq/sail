@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::{DFSchema, TableReference};
@@ -41,6 +42,7 @@ impl SystemCatalogProvider {
             .columns()
             .iter()
             .map(|col| TableColumnStatus {
+                metadata: Default::default(),
                 name: col.name.to_string(),
                 data_type: col.arrow_type.clone(),
                 nullable: col.nullable,
@@ -70,7 +72,8 @@ impl SystemCatalogProvider {
                     projected_schema: Arc::new(DFSchema::try_from(t.schema())?),
                     filters: vec![],
                     fetch: None,
-                    statistics_requests: BTreeSet::new(),
+                    skip: None,
+                    statistics_requests: Default::default(),
                 })),
                 columns,
                 comment: Some(t.description().to_string()),

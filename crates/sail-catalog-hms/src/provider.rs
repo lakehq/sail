@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -5,9 +7,9 @@ use futures::future::try_join_all;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
     plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_common::runtime::RuntimeHandle;
@@ -107,6 +109,18 @@ struct DropTableRequest {
 }
 
 const HMS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn partition_rpc_result<T, E: std::fmt::Debug>(
+    context: &str,
+    result: Result<MaybeException<T, E>, ClientError>,
+) -> CatalogResult<T> {
+    match result.map_err(|e| HmsCatalogProvider::hms_client_error(context, e))? {
+        MaybeException::Ok(value) => Ok(value),
+        MaybeException::Exception(error) => {
+            Err(CatalogError::External(format!("{context}: {error:?}")))
+        }
+    }
+}
 
 fn build_drop_table_request(purge: bool) -> DropTableRequest {
     let environment_context = purge.then(|| EnvironmentContext {
@@ -912,6 +926,10 @@ fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<
 
 #[async_trait::async_trait]
 impl CatalogProvider for HmsCatalogProvider {
+    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
+        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergImportRegistration]
+    }
+
     fn get_name(&self) -> &str {
         &self.name
     }
@@ -1136,6 +1154,89 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        if partition_values.is_empty() {
+            let metadata = self.fetch_hms_table(database, table).await?;
+            return Ok(Some(vec![CatalogFilePartition {
+                values: vec![],
+                location: crate::convert::table_location(&metadata)
+                    .map(sail_catalog::hive_format::file_source_location),
+                format: crate::convert::resolve_data_source_format(
+                    metadata.parameters.as_ref(),
+                    metadata.sd.as_ref(),
+                ),
+            }]));
+        }
+        let database = validate_namespace(database)?;
+        let names = self
+            .with_failover(|client| {
+                let database = database.clone();
+                async move {
+                    let context = "Failed to list HMS partition names";
+                    if partition_values.iter().all(Option::is_none) {
+                        partition_rpc_result(
+                            context,
+                            client
+                                .get_partition_names(database, table.to_string(), -1)
+                                .await,
+                        )
+                    } else {
+                        // HMS uses empty strings as wildcards for unspecified columns.
+                        let values = partition_values
+                            .iter()
+                            .cloned()
+                            .map(Option::unwrap_or_default)
+                            .collect();
+                        partition_rpc_result(
+                            context,
+                            client
+                                .get_partition_names_ps(database, table.to_string(), values, -1)
+                                .await,
+                        )
+                    }
+                }
+            })
+            .await?;
+        // HMS name listing has no cursor. Fetch full storage descriptors in bounded batches.
+        const BATCH_SIZE: usize = 100;
+        let mut partitions = Vec::with_capacity(names.len());
+        for names in names.chunks(BATCH_SIZE) {
+            let batch = self
+                .with_failover(|client| {
+                    let database = database.clone();
+                    async move {
+                        partition_rpc_result(
+                            "Failed to fetch HMS partitions by name",
+                            client
+                                .get_partitions_by_names(
+                                    database,
+                                    table.to_string(),
+                                    names.to_vec(),
+                                )
+                                .await,
+                        )
+                    }
+                })
+                .await?;
+            partitions.extend(batch.into_iter().map(|partition| {
+                CatalogFilePartition {
+                    values: partition.values.unwrap_or_default(),
+                    format: crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
+                    location: partition
+                        .sd
+                        .and_then(|sd| sd.location)
+                        .map(sail_catalog::hive_format::file_source_location),
+                }
+            }));
+        }
+        Ok(Some(partitions))
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let table_value = self.fetch_hms_table(database, table).await?;
         if is_view_table(&table_value) {
@@ -1221,25 +1322,31 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
         let target_db = validate_namespace(destination_database)?;
-        self.with_failover(|client| {
-            let db_name = db_name.clone();
-            let target_db = target_db.clone();
-            let table = table.to_string();
-            let target_table = destination_table.to_string();
-            async move {
-                let mut metadata = Self::get_table_with_client(
-                    &client,
-                    &db_name,
-                    &table,
-                    "Failed to fetch HMS table for rename",
-                )
-                .await?;
-                metadata.db_name = Some(target_db);
-                metadata.table_name = Some(target_table);
-                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+        let mut metadata = self.fetch_hms_table(database, table).await?;
+        let table_id = metadata.id;
+        metadata.db_name = Some(target_db);
+        metadata.table_name = Some(destination_table.to_string());
+        // Replaying ALTER after losing its acknowledgement can rename a different table
+        // that has since acquired the old name. Retry only the readback.
+        let (_, client) = self.current_client().await?;
+        match Self::alter_table_with_client(&client, &db_name, table, metadata).await {
+            Err(error) if Self::should_retry(&error) => {
+                let original = self.fetch_hms_table(database, table).await;
+                let renamed = self
+                    .fetch_hms_table(destination_database, destination_table)
+                    .await;
+                if matches!(original, Err(CatalogError::NotFound(_, _)))
+                    && let Ok(renamed) = renamed
+                    && table_id.is_some_and(|id| id > 0 && renamed.id == Some(id))
+                {
+                    return Ok(());
+                }
+                Err(CatalogError::CommitStateUnknown(format!(
+                    "Could not confirm HMS rename of {db_name}.{table} to {destination_table}: {error}"
+                ).into()))
             }
-        })
-        .await
+            result => result,
+        }
     }
 
     async fn alter_table(

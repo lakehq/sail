@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::datasource::listing::PartitionedFile;
@@ -5,6 +7,7 @@ use datafusion::datasource::physical_plan::FileGroup;
 use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
 use datafusion::execution::cache::cache_manager::FileMetadataCache;
 use datafusion::object_store::ObjectStore;
+use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
 
@@ -34,6 +37,27 @@ pub async fn load_parquet_scan_metadata(
     metadata_size_hint: Option<usize>,
     concurrency: usize,
 ) -> Result<Vec<FileGroup>> {
+    load_parquet_scan_metadata_with_validation(
+        file_groups,
+        store,
+        metadata_cache,
+        metadata_size_hint,
+        concurrency,
+        |_, _| Ok(()),
+    )
+    .await
+}
+
+/// Validate scan columns while the footer is available for partition planning.
+pub async fn load_parquet_scan_metadata_with_validation(
+    file_groups: Vec<FileGroup>,
+    store: &Arc<dyn ObjectStore>,
+    metadata_cache: &Arc<FileMetadataCache>,
+    metadata_size_hint: Option<usize>,
+    concurrency: usize,
+    validate: impl Fn(&mut PartitionedFile, &FileMetaData) -> Result<()> + Sync,
+) -> Result<Vec<FileGroup>> {
+    let validate = &validate;
     let (mut files, statistics): (Vec<_>, Vec<_>) = file_groups
         .into_iter()
         .map(|group| {
@@ -49,6 +73,7 @@ pub async fn load_parquet_scan_metadata(
                 .with_file_metadata_cache(Some(Arc::clone(metadata_cache)))
                 .fetch_metadata()
                 .await?;
+            validate(file, metadata.file_metadata())?;
             let row_groups = metadata
                 .row_groups()
                 .iter()

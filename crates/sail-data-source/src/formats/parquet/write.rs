@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -45,7 +47,7 @@ impl ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        let compression = options.global.compression.clone();
+        let compression = options.global.compression;
         let format = ParquetFormat::default().with_options(options);
         if let Some(file_compression_type) = format.compression_type() {
             return match format.get_ext_with_compression(&file_compression_type) {
@@ -61,8 +63,7 @@ impl ParquetWriteFormat {
             return Ok(ext);
         }
         let ext = ext.strip_prefix('.').unwrap_or(&ext);
-        let compression = compression.strip_prefix('.').unwrap_or(&compression);
-        let (compression, _level) = split_parquet_compression_string(&compression.to_lowercase())?;
+        let (compression, _level) = split_parquet_compression_string(&compression.to_string())?;
         let file_compression_type = FileCompressionType::from_str(compression.as_str());
         let compression = match file_compression_type {
             Ok(compression) => compression.get_ext(),

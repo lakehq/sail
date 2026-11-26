@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -106,7 +108,11 @@ impl ExecutionPlan for CoalesceExec {
         let (Some(child), true) = (children.pop(), children.is_empty()) else {
             return plan_err!("{} expects exactly one child", self.name());
         };
-        Ok(Arc::new(Self::new(child, self.output_partitions)))
+        // A new child can have fewer partitions, such as a range repartitioning whose
+        // partitions come from its sample. A coalesce does not add partitions, as in Spark.
+        let input_partitions = child.output_partitioning().partition_count().max(1);
+        let output_partitions = self.output_partitions.min(input_partitions);
+        Ok(Arc::new(Self::new(child, output_partitions)))
     }
 
     fn execute(
@@ -349,6 +355,18 @@ mod tests {
             exec.execute(2, Arc::new(TaskContext::default())),
             Err(error) if error.to_string().contains("out of range")
         ));
+    }
+
+    #[test]
+    fn test_coalesce_exec_keeps_no_more_partitions_than_a_new_child() -> Result<()> {
+        let exec = Arc::new(CoalesceExec::new(
+            test_plan(vec![vec![test_batch(&[0])]; 4]),
+            3,
+        ));
+        let child = test_plan(vec![vec![test_batch(&[0])], vec![test_batch(&[1])]]);
+        let exec = datafusion::physical_plan::replace_children_if_necessary(exec, vec![child])?;
+        assert_eq!(exec.properties().partitioning.partition_count(), 2);
+        Ok(())
     }
 
     #[test]

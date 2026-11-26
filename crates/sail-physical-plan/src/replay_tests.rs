@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8,15 +10,13 @@ use datafusion::common::Result;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
 
 use crate::partition_pair_join::PartitionPairJoinExec;
-use crate::range_repartition::SampledRangeRepartitionExec;
 use crate::replay::ReplayExec;
 
 #[derive(Debug)]
@@ -143,36 +143,4 @@ impl Scalar {
             _ => datafusion::common::exec_err!("expected int64"),
         }
     }
-}
-
-#[tokio::test]
-async fn concurrent_range_sample_and_route_use_the_same_source() -> Result<()> {
-    let context = Arc::new(TaskContext::default());
-    let source = CountingExec::new(7)?;
-    let range = SampledRangeRepartitionExec::try_new(
-        source.clone(),
-        vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
-            "id", 0,
-        )))],
-        4,
-    )?;
-    let streams = (0..4)
-        .map(|p| range.execute(p, context.clone()))
-        .collect::<Result<Vec<_>>>()?;
-    let batches =
-        futures::future::try_join_all(streams.into_iter().map(|s| s.try_collect::<Vec<_>>()))
-            .await?;
-    assert_eq!(
-        batches
-            .iter()
-            .flatten()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>(),
-        7
-    );
-    source.assert_once();
-    drop(range);
-    assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
-    assert_eq!(context.memory_pool().reserved(), 0);
-    Ok(())
 }

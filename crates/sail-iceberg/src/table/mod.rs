@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod files;
 pub mod metadata_loader;
@@ -124,7 +114,13 @@ impl Table {
     pub fn new_scan(&self, options: &IcebergReadOptions) -> Result<IcebergScan> {
         if self.metadata.current_snapshot().is_none()
             && options.snapshot_id.is_none()
+            && options.version_as_of.is_none()
             && options.use_ref.is_none()
+            && options.tag.is_none()
+            && options
+                .branch
+                .as_deref()
+                .is_none_or(|name| name == MAIN_BRANCH)
             && options.timestamp_as_of.is_none()
         {
             let schema = self.metadata.current_schema().cloned().ok_or_else(|| {
@@ -163,7 +159,13 @@ impl Table {
     }
 
     fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {
-        let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = options.snapshot_id {
+        let snapshot_id = options.snapshot_id.or_else(|| {
+            options
+                .version_as_of
+                .as_deref()
+                .and_then(|version| version.parse::<i64>().ok())
+        });
+        let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = snapshot_id {
             (
                 self.metadata
                     .snapshots
@@ -175,7 +177,18 @@ impl Table {
                     })?,
                 true,
             )
-        } else if let Some(ref_name) = options.use_ref.as_deref() {
+        } else if let Some(ref_name) = options
+            .branch
+            .as_deref()
+            .or(options.tag.as_deref())
+            .or(options.use_ref.as_deref())
+            .or(options.version_as_of.as_deref())
+        {
+            if options.tag.is_some() && ref_name == MAIN_BRANCH {
+                return Err(DataFusionError::Plan(format!(
+                    "Iceberg ref {ref_name} is not a tag"
+                )));
+            }
             let (sid, use_snapshot_schema) = if ref_name == MAIN_BRANCH {
                 (
                     self.metadata.current_snapshot_id.ok_or_else(|| {
@@ -189,6 +202,16 @@ impl Table {
                 let reference = self.metadata.refs.get(ref_name).ok_or_else(|| {
                     DataFusionError::Plan(format!("Unknown Iceberg ref: {}", ref_name))
                 })?;
+                if options.branch.is_some() && !reference.is_branch() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Iceberg ref {ref_name} is not a branch"
+                    )));
+                }
+                if options.tag.is_some() && reference.is_branch() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Iceberg ref {ref_name} is not a tag"
+                    )));
+                }
                 (reference.snapshot_id, !reference.is_branch())
             };
             (

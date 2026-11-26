@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 
 import pytest
@@ -83,9 +85,10 @@ def test_sql_set_time_zone_local_and_reset_restore_the_same_zone(spark):
         spark.conf.set("spark.sql.session.timeZone", zone)
 
 
+@pytest.mark.spark(
+    skip_if_jvm=True, reason="a `local` remote returns the same JVM Spark session instead of a second one"
+)
 def test_sql_set_time_zone_is_isolated_between_sessions(spark, remote):
-    if remote.startswith("local"):
-        pytest.skip("a `local` remote returns the same Spark session instead of a second one")
     key = "spark.sql.session.timeZone"
     with spark_session_factory(remote) as sessions:
         other = sessions.create()
@@ -143,10 +146,6 @@ def test_sql_set_time_zone_result_does_not_set_the_zone_again(spark):
         spark.conf.set(key, zone)
 
 
-# TODO: `SparkRuntimeConfig::set` does not validate the zone, so `spark.conf.set` accepts a zone that Spark rejects
-#   with `INVALID_CONF_VALUE.TIME_ZONE`. Only the SQL statements validate it for now (`config_manager.rs`).
-#   Move the check into `SparkRuntimeConfig::set` and remove the `xfail`.
-@pytest.mark.xfail(reason="spark.conf.set does not validate the session time zone", strict=True)
 def test_conf_set_rejects_an_invalid_time_zone_and_keeps_the_zone(spark):
     key = "spark.sql.session.timeZone"
     zone = spark.conf.get(key)

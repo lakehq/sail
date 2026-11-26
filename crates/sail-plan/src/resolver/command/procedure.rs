@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, Int64Array, StringArray};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
@@ -128,6 +131,15 @@ impl PlanResolver<'_> {
         let catalog = if is_path {
             manager.resolve_catalog_reference(None)?.to_string()
         } else {
+            // Resolve views before the procedure's table-only lookup, including
+            // temporary views shadowing catalog tables.
+            let status = manager.get_table_or_view(&parts).await?;
+            if !matches!(status.kind, TableKind::Table { .. }) {
+                return Err(PlanError::invalid(format!(
+                    "Lakehouse procedure '{procedure_name}' requires a table, but '{}' is a view",
+                    parts.join(".")
+                )));
+            }
             manager
                 .resolve_table_reference_with_default_catalog(
                     &manager.resolve_catalog_reference(None)?,
@@ -214,10 +226,16 @@ impl PlanResolver<'_> {
                 None => LakeProcedureValue::Null,
             });
         }
-        let invocation = LakeProcedureInvocation {
+        let mut invocation = LakeProcedureInvocation {
             arguments: values,
             procedure,
         };
+        if lake_source_name == "iceberg"
+            && matches!(invocation.procedure.name.as_str(), "migrate" | "snapshot")
+        {
+            self.bind_migration_tables(&manager, &mut invocation)
+                .await?;
+        }
         let (target, mut planning_target) = match &invocation.procedure.target {
             LakeProcedureTarget::Catalog => (
                 None,
@@ -423,6 +441,82 @@ impl PlanResolver<'_> {
         }))
     }
 
+    async fn bind_migration_tables(
+        &self,
+        manager: &CatalogManager,
+        invocation: &mut LakeProcedureInvocation,
+    ) -> PlanResult<()> {
+        // Spark resolves both names in the caller's current namespace. Bind them before execution.
+        let mut destination = None;
+        for (parameter, value) in invocation
+            .procedure
+            .parameters
+            .iter()
+            .zip(&mut invocation.arguments)
+        {
+            if matches!(parameter.name.as_str(), "source_table" | "table")
+                && let LakeProcedureValue::Utf8(name) = value
+            {
+                if name.is_empty() {
+                    return Err(PlanError::invalid(format!(
+                        "Cannot handle an empty identifier for argument {}",
+                        parameter.name
+                    )));
+                }
+                let parsed = sail_sql_analyzer::expression::from_ast_object_name(
+                    sail_sql_analyzer::parser::parse_object_name(name)?,
+                )?;
+                let parts =
+                    manager.resolve_fully_qualified_object_name(&Vec::<String>::from(parsed))?;
+                *name = parts
+                    .iter()
+                    .map(|part| format!("`{}`", part.replace('`', "``")))
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if parameter.name == "table" {
+                    destination = Some(parts);
+                }
+            }
+        }
+        if !matches!(
+            invocation.argument("location"),
+            Some(LakeProcedureValue::Null)
+        ) {
+            return Ok(());
+        }
+        let Some(parts) = destination else {
+            return Ok(());
+        };
+        let Some(catalog) = parts.first() else {
+            return Err(PlanError::invalid("Missing destination catalog"));
+        };
+        let location = match invocation.argument("properties") {
+            Some(LakeProcedureValue::StringMap(properties)) => properties.get("location").cloned(),
+            _ => None,
+        };
+        let location = if let Some(location) = location {
+            location
+        } else if manager
+            .catalog_capabilities(catalog)?
+            .contains(&sail_catalog::lakehouse::LakehouseCapability::IcebergRestCommit)
+        {
+            return Ok(());
+        } else {
+            self.resolve_default_table_location(&spec::ObjectName::from(parts))
+                .await?
+        };
+        if let Some((_, value)) = invocation
+            .procedure
+            .parameters
+            .iter()
+            .zip(&mut invocation.arguments)
+            .find(|(param, _)| param.name == "location")
+        {
+            *value = LakeProcedureValue::Utf8(location);
+        }
+        Ok(())
+    }
+
     async fn evaluate_procedure_argument(
         &self,
         argument: spec::Expr,
@@ -430,6 +524,38 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LakeProcedureValue> {
         let schema = Arc::new(DFSchema::empty());
+        if matches!(
+            data_type,
+            LakeProcedureDataType::Boolean | LakeProcedureDataType::Utf8
+        ) {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            let source = expression.get_type(&schema)?;
+            if data_type == LakeProcedureDataType::Boolean {
+                validate_procedure_boolean_argument_type(&source)?;
+            } else if source.is_nested() {
+                return Err(PlanError::invalid(format!(
+                    "Procedure argument cannot be implicitly cast from {source} to String"
+                )));
+            }
+        }
+        if data_type == LakeProcedureDataType::Int64Array {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            if !matches!(
+                expression.get_type(&schema)?,
+                DataType::Null
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+            ) {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be an array",
+                ));
+            }
+        }
         let target = match data_type {
             LakeProcedureDataType::Boolean => spec::DataType::Boolean,
             LakeProcedureDataType::Int32 => spec::DataType::Int32,
@@ -440,6 +566,10 @@ impl PlanResolver<'_> {
             LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
+            },
+            LakeProcedureDataType::Int64Array => spec::DataType::List {
+                data_type: Box::new(spec::DataType::Int64),
+                nullable: true,
             },
             LakeProcedureDataType::StringMap => spec::DataType::Map {
                 key_type: Box::new(spec::DataType::Utf8),
@@ -453,7 +583,7 @@ impl PlanResolver<'_> {
                 spec::Expr::Cast {
                     expr: Box::new(argument),
                     cast_to_type: target,
-                    rename: false,
+                    naming: spec::CastNaming::Cast,
                     is_try: false,
                 },
                 &schema,
@@ -469,6 +599,18 @@ impl PlanResolver<'_> {
             })?;
         scalar_to_procedure_value(value)
     }
+}
+
+fn validate_procedure_boolean_argument_type(source: &DataType) -> PlanResult<()> {
+    // Spark's ProcedureArgumentCoercion permits implicit casts, not every explicit CAST.
+    // Check the expression type before folding: even CAST(NULL AS INT) is not BOOLEAN.
+    // Explicit Boolean casts and Boolean-valued expressions remain valid arguments.
+    if source.is_numeric() {
+        return Err(PlanError::invalid(format!(
+            "Procedure argument cannot be implicitly cast from {source} to Boolean"
+        )));
+    }
+    Ok(())
 }
 
 struct ProcedureTablePlanning {
@@ -578,6 +720,19 @@ fn scalar_to_procedure_value(value: ScalarValue) -> PlanResult<LakeProcedureValu
     }
     match value {
         value @ ScalarValue::Map(_) => scalar_to_string_map(&value),
+        ScalarValue::List(array) => {
+            if array.len() != 1 {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be scalar",
+                ));
+            }
+            let values = array.value(0);
+            let values = values
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| PlanError::invalid("Procedure array elements must be longs"))?;
+            Ok(LakeProcedureValue::Int64Array(values.iter().collect()))
+        }
         ScalarValue::Boolean(Some(value)) => Ok(LakeProcedureValue::Boolean(value)),
         ScalarValue::Int32(Some(value)) => Ok(LakeProcedureValue::Int32(value)),
         ScalarValue::Int64(Some(value)) => Ok(LakeProcedureValue::Int64(value)),
@@ -668,5 +823,60 @@ fn procedure_path_source(path: String) -> SourceInfo {
         sort_order: vec![],
         options: vec![],
         read_case_sensitive: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procedure_long_arrays_preserve_null_elements_and_empty_arrays() {
+        use datafusion::arrow::array::ListArray;
+        use datafusion::arrow::datatypes::Int64Type;
+        for values in [vec![], vec![Some(1), None, Some(i64::MAX), Some(1)]] {
+            let array = ListArray::from_iter_primitive::<Int64Type, _, _>([Some(values.clone())]);
+            let result = scalar_to_procedure_value(ScalarValue::List(Arc::new(array)));
+            assert!(
+                matches!(result, Ok(LakeProcedureValue::Int64Array(actual)) if actual == values)
+            );
+        }
+    }
+
+    #[test]
+    fn procedure_booleans_reject_numeric_implicit_casts() {
+        for source in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal256(40, 2),
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_err(),
+                "{source}"
+            );
+        }
+        // Preserve the existing valid inputs and string-conversion behavior.
+        for source in [
+            DataType::Boolean,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_ok(),
+                "{source}"
+            );
+        }
     }
 }

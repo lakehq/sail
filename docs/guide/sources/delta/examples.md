@@ -73,6 +73,17 @@ SELECT * FROM metrics WHERE year > 2024;
 
 :::
 
+## Dynamic Partition Overwrite
+
+For the `metrics` table from the SQL example, replace only the partitions present in the input:
+
+```python
+replacement = spark.createDataFrame([(2025, 3.0)], "year INT, value FLOAT")
+replacement.writeTo("metrics").overwritePartitions()
+```
+
+The 2024 partition remains unchanged. For path-based writes, use `.mode("overwrite").option("partitionOverwriteMode", "dynamic")`. Do not combine dynamic partition overwrite with `replaceWhere` or `overwriteSchema`.
+
 ## Schema Evolution
 
 Delta Lake checks incoming data against the table schema. To add fields during an append or overwrite, set `mergeSchema` to `true`. For the `users` table from the basic Python example, the following append adds an `age` column:
@@ -161,6 +172,40 @@ SELECT * FROM users TIMESTAMP AS OF '2025-01-02T03:04:05.678';
 ```
 
 Choose a version or timestamp from the retained table history.
+
+## Change Data Feed
+
+Enable CDF when creating a table to include its initial writes in the change feed:
+
+```python
+cdf_path = "file:///tmp/sail/cdf_example"
+spark.range(3).write.format("delta").option(
+    "delta.enableChangeDataFeed", "true"
+).save(cdf_path)
+
+changes = (
+    spark.read.format("delta")
+    .option("readChangeFeed", "true")
+    .option("startingVersion", 0)
+    .load(cdf_path)
+)
+changes.show()
+```
+
+The output includes the table columns plus `_change_type`, `_commit_version`, and `_commit_timestamp`. This is a batch read, not a streaming source. Enabling CDF on an existing table records only subsequent changes; select a range with CDF enabled and retained log/data files.
+
+## Inspection and Maintenance
+
+Inspect the SQL `users` table and compact its current files:
+
+```sql
+DESCRIBE DETAIL users;
+DESCRIBE HISTORY users LIMIT 10;
+OPTIMIZE users;
+VACUUM users DRY RUN;
+```
+
+`VACUUM ... DRY RUN` lists eligible files without deleting them. Review the results and retention requirements before running `VACUUM users`; deleted historical files can no longer serve time travel or CDF reads. `OPTIMIZE` supports compaction, not `ZORDER` or `FULL`.
 
 ## Column Mapping
 

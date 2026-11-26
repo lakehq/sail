@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::Expr;
 
 use crate::datasource::predicate::Predicate;
-use crate::spec::{DataFile, PartitionSpec, Schema};
+use crate::datasource::scan::ManifestDataFile;
+use crate::spec::{PartitionSpec, Schema};
 
 pub(crate) struct CopyOnWriteFileSelection {
-    pub candidates: Vec<(DataFile, i64)>,
+    pub candidates: Vec<ManifestDataFile>,
     pub all_rows_match: bool,
 }
 
@@ -14,13 +17,14 @@ pub(crate) fn select_copy_on_write_files(
     predicate: &Expr,
     schema: &Schema,
     specs: &[PartitionSpec],
-    files: Vec<(DataFile, i64)>,
+    files: Vec<ManifestDataFile>,
 ) -> CopyOnWriteFileSelection {
     let predicate = Predicate::new(schema, predicate);
     let mut all_rows_match = true;
     let candidates = files
         .into_iter()
-        .filter(|(file, _)| {
+        .filter(|file| {
+            let file = &file.data_file;
             let spec = specs
                 .iter()
                 .find(|spec| spec.spec_id() == file.partition_spec_id);
@@ -53,7 +57,7 @@ mod tests {
     use super::*;
     use crate::datasource::type_converter::iceberg_schema_to_arrow;
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, NestedField, PrimitiveLiteral,
+        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PrimitiveLiteral,
         PrimitiveType, Transform, Type,
     };
 
@@ -100,7 +104,14 @@ mod tests {
             &predicate,
             schema,
             specs,
-            files.into_iter().map(|file| (file, 7)).collect(),
+            files
+                .into_iter()
+                .map(|data_file| ManifestDataFile {
+                    data_file,
+                    data_sequence_number: 7,
+                    added_snapshot_id: 1,
+                })
+                .collect(),
         ))
     }
 
@@ -140,10 +151,11 @@ mod tests {
                 selected
                     .candidates
                     .iter()
-                    .map(|(file, sequence)| {
-                        assert_eq!(*sequence, 7);
-                        assert_eq!(file.record_count, 2);
-                        file.file_path.as_str()
+                    .map(|file| {
+                        assert_eq!(file.data_sequence_number, 7);
+                        assert_eq!(file.added_snapshot_id, 1);
+                        assert_eq!(file.data_file.record_count, 2);
+                        file.data_file.file_path.as_str()
                     })
                     .collect::<Vec<_>>(),
                 expected_paths
@@ -231,7 +243,11 @@ mod tests {
                         predicate,
                         &schema,
                         &[],
-                        vec![(file.clone(), 7)],
+                        vec![ManifestDataFile {
+                            data_file: file.clone(),
+                            data_sequence_number: 7,
+                            added_snapshot_id: 1,
+                        }],
                     );
                     if selected.candidates.is_empty() {
                         assert!(
@@ -334,7 +350,14 @@ mod tests {
             vec![file.clone()],
         )?;
         assert!(selected.all_rows_match);
-        assert_eq!(selected.candidates, vec![(file.clone(), 7)]);
+        assert_eq!(
+            selected.candidates,
+            vec![ManifestDataFile {
+                data_file: file.clone(),
+                data_sequence_number: 7,
+                added_snapshot_id: 1,
+            }]
+        );
         assert!(
             select(
                 col("id").eq(lit(20i32)),

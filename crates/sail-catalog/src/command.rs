@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
-    LakeSourceCreateTableColumn, LakeSourceCreateTableInfo, LakeSourceCreateTableResult,
+    CloneMetrics, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
+    LakeSourceCreateTableResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -23,6 +26,26 @@ use crate::provider::{
     DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
+
+fn clone_result_schema() -> CatalogResult<SchemaRef> {
+    // Declare every metric nullable even when all six values are populated.
+    let metrics = ArrowSerializer::default().schema::<CloneMetrics>()?;
+    let fields = metrics
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone().with_nullable(true))
+        .collect::<Vec<_>>();
+    Ok(Schema::new(fields).into())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum CloneTarget {
+    Path(String),
+    Table {
+        name: Vec<String>,
+        default_location: String,
+    },
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -58,6 +81,13 @@ pub enum CatalogCommand {
     CreateTable {
         table: Vec<String>,
         options: CreateTableOptions,
+    },
+    CloneTable {
+        target: CloneTarget,
+        source: Vec<String>,
+        location: Option<String>,
+        mode: sail_common::spec::CreateTableMode,
+        is_external: bool,
     },
     TableExists {
         table: Vec<String>,
@@ -187,6 +217,7 @@ impl CatalogCommand {
             CatalogCommand::ListDatabases { .. } => "ListDatabases",
             CatalogCommand::DropDatabase { .. } => "DropDatabase",
             CatalogCommand::CreateTable { .. } => "CreateTable",
+            CatalogCommand::CloneTable { .. } => "CloneTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
@@ -255,6 +286,7 @@ impl CatalogCommand {
             CatalogCommand::DescribeDatabase { .. } => {
                 ArrowSerializer::default().schema::<DescribeDatabaseRow>()?
             }
+            CatalogCommand::CloneTable { .. } => clone_result_schema()?,
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
@@ -368,6 +400,28 @@ impl CatalogCommand {
                 }
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::CloneTable {
+                target,
+                source,
+                location,
+                mode,
+                is_external,
+            } => {
+                let metrics = super::clone::clone_table(
+                    ctx,
+                    manager,
+                    target,
+                    source,
+                    location,
+                    mode,
+                    is_external,
+                )
+                .await?;
+                ArrowSerializer::build_record_batch_with_schema(
+                    metrics.as_slice(),
+                    clone_result_schema()?,
+                )?
+            }
             CatalogCommand::TableExists { table } => {
                 let value = match manager.get_table_or_view(&table).await {
                     Ok(_) => true,
@@ -468,6 +522,19 @@ impl CatalogCommand {
                 if_exists,
                 options,
             } => {
+                if matches!(
+                    options,
+                    AlterTableOptions::SetTableProperties { .. }
+                        | AlterTableOptions::UnsetTableProperties { .. }
+                ) && let Some(path) = manager.delta_table_path(&table).await?
+                {
+                    ctx.extension::<DataSourceRegistry>()?
+                        .get_lake_source("delta")?
+                        .alter_table(ctx, path, (&options).into(), None)
+                        .await?;
+                    return Ok(display.bools().to_record_batch(vec![true])?);
+                }
+
                 // Fetch the table status before altering so we can propagate
                 // property changes to the underlying storage (e.g. Delta log).
                 let table_status = match manager.get_table_or_view(&table).await {
@@ -477,6 +544,18 @@ impl CatalogCommand {
                     }
                     Err(e) => return Err(e),
                 };
+
+                if matches!(
+                    options,
+                    AlterTableOptions::SetTableProperties { .. }
+                        | AlterTableOptions::UnsetTableProperties { .. }
+                ) && !matches!(table_status.kind, TableKind::Table { .. })
+                {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "ALTER TABLE SET/UNSET TBLPROPERTIES requires a table, but '{}' is a view",
+                        table.join(".")
+                    )));
+                }
 
                 manager.validate_alter_table(&table, &options)?;
                 let (location, format) = match &table_status.kind {
@@ -1037,6 +1116,11 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                     let features =
                         sail_common_datafusion::column_features::ColumnFeatures::from_field(field);
                     crate::provider::CreateTableColumnOptions {
+                        metadata: field
+                            .metadata()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         name: field.name().clone(),
                         data_type: field.data_type().clone(),
                         nullable: field.is_nullable(),
@@ -1153,6 +1237,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
                 columns: columns
                     .iter()
                     .map(|column| LakeSourceCreateTableColumn {
+                        metadata: column.metadata().clone(),
                         name: column.name().to_string(),
                         data_type: column.data_type().clone(),
                         nullable: column.nullable(),
@@ -1174,6 +1259,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
 }
 
 trait CreateTableColumnView {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String>;
     fn name(&self) -> &str;
     fn data_type(&self) -> &datafusion::arrow::datatypes::DataType;
     fn nullable(&self) -> bool;
@@ -1184,6 +1270,9 @@ trait CreateTableColumnView {
 }
 
 impl CreateTableColumnView for crate::provider::CreateTableColumnOptions {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.metadata
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -1214,6 +1303,9 @@ impl CreateTableColumnView for crate::provider::CreateTableColumnOptions {
 }
 
 impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatus {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.metadata
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -1711,6 +1803,7 @@ mod tests {
             name: "items".to_string(),
             kind: TableKind::Table {
                 columns: vec![TableColumnStatus {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: datafusion::arrow::datatypes::DataType::Int32,
                     nullable: false,

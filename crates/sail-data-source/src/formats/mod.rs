@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod arrow;
 pub mod avro;
 pub mod binary;

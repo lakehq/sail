@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::optimizer::{AnalyzerRule, ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -32,10 +34,6 @@ impl OptimizerRule for ResolveLambdaVariables {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(

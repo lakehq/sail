@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_schema::{DataType, TimeUnit};
@@ -349,6 +351,7 @@ fn table_columns(columns: Vec<PyColumnDefinition>) -> PyResult<Vec<CreateTableCo
         .into_iter()
         .map(|(name, data_type, nullable, comment)| {
             Ok(CreateTableColumnOptions {
+                metadata: Default::default(),
                 name,
                 data_type: parse_data_type(&data_type)?,
                 nullable,

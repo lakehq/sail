@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -28,7 +30,9 @@ pub(super) fn project_with_keys(input: Arc<LogicalPlan>, keys: Vec<Expr>) -> Res
 /// When no two fields share a name and a table, or a display name, each column resolves to
 /// its own field, so only the keys need deriving.
 // The key schema follows DataFusion's `projection_schema` and `calc_func_dependencies_for_project`.
-// [CREDIT]: https://github.com/apache/datafusion/blob/55.2.0/datafusion/expr/src/logical_plan/plan.rs
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/expr/src/logical_plan/plan.rs
 fn key_schema(input: &LogicalPlan, expressions: &[Expr]) -> Result<Option<DFSchema>> {
     let schema = input.schema();
     let names = schema.field_names();
@@ -74,6 +78,7 @@ fn key_schema(input: &LogicalPlan, expressions: &[Expr]) -> Result<Option<DFSche
     );
     Ok(Some(projected))
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {
@@ -82,11 +87,15 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::provider_as_source;
-    use datafusion::functions_aggregate::expr_fn::max;
     use datafusion_common::TableReference;
-    use datafusion_expr::{JoinType, LogicalPlanBuilder, cast, col, lit};
+    use datafusion_expr::{AggregateUDF, JoinType, LogicalPlanBuilder, cast, col, lit};
+    use sail_common_datafusion::min_max::min_max_agg::Max;
 
     use super::*;
+
+    fn max(expr: Expr) -> Expr {
+        AggregateUDF::from(Max::new()).call(vec![expr])
+    }
 
     fn scan(name: impl Into<TableReference>, fields: Vec<Field>) -> Result<LogicalPlanBuilder> {
         let table = EmptyTable::new(Arc::new(Schema::new(fields)));

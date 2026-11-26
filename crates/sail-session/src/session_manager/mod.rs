@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod actor;
 mod session;
 
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,8 +12,11 @@ use datafusion::prelude::SessionContext;
 use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common::server::ServerBuilder;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
@@ -26,6 +32,7 @@ pub type ServerSessionFactoryFn =
 #[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
+    shutdown: Arc<QueryCancellation>,
 }
 
 impl fmt::Debug for SessionManager {
@@ -40,18 +47,19 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
+        let shutdown = Arc::clone(&components.shutdown);
         let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self { handle })
+        Ok(Self { handle, shutdown })
     }
 
     pub async fn get_or_create_session_context(
         &self,
-        session_id: String,
+        client_session_id: String,
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
         let message = SessionManagerMessage::GetOrCreateSession {
-            session_id,
+            client_session_id,
             user_id,
             result: tx,
         };
@@ -60,10 +68,15 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?
     }
 
-    pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
+    pub async fn delete_session(
+        &self,
+        client_session_id: String,
+        user_id: String,
+    ) -> SessionResult<String> {
         let (tx, rx) = oneshot::channel();
         let message = SessionManagerMessage::DeleteSession {
-            session_id,
+            client_session_id,
+            user_id,
             result: tx,
         };
         self.handle.send(message).await?;
@@ -71,8 +84,41 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
 
+    pub fn query_cancellation(&self) -> &Arc<QueryCancellation> {
+        &self.shutdown
+    }
+
+    /// Shut down sessions as the server starts draining active requests.
+    pub async fn serve(
+        self,
+        builder: ServerBuilder<'_>,
+        listener: TcpListener,
+        signal: impl Future<Output = ()>,
+    ) -> SessionResult<()> {
+        let (tx, rx) = oneshot::channel();
+        let serve = async move {
+            let signal = async move {
+                signal.await;
+                let _ = tx.send(());
+            };
+            builder
+                .serve(listener, signal)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        };
+        let shutdown = async {
+            // The sender also drops if the server exits before receiving the signal.
+            let _ = rx.await;
+            self.shutdown().await
+        };
+        let (result, shutdown) = tokio::join!(serve, shutdown);
+        shutdown?;
+        Ok(result?)
+    }
+
     /// Shut down the session manager and all resources it owns.
     pub async fn shutdown(&self) -> SessionResult<()> {
+        self.shutdown.cancel();
         let (tx, rx) = oneshot::channel();
         self.handle
             .send(SessionManagerMessage::Shutdown { result: tx })
@@ -118,6 +164,7 @@ pub async fn create_session_manager(
         session_factory,
         job_runner_factory,
         driver_gateway,
+        shutdown: Arc::new(QueryCancellation::default()),
         event_reporter: global_system_event_reporter().ok_or_else(|| {
             SessionError::internal("telemetry is not initialized for system store")
         })?,

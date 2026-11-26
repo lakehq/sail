@@ -2247,6 +2247,13 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Uuid)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Binary)"
                       }
                     ]
@@ -4778,6 +4785,14 @@
               }
             },
             {
+              "name": "Keyword(Clone)",
+              "node": {
+                "terminal": {
+                  "keyword": "CLONE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Cluster)",
               "node": {
                 "terminal": {
@@ -6354,6 +6369,14 @@
               }
             },
             {
+              "name": "Keyword(Shallow)",
+              "node": {
+                "terminal": {
+                  "keyword": "SHALLOW"
+                }
+              }
+            },
+            {
               "name": "Keyword(Short)",
               "node": {
                 "terminal": {
@@ -6822,6 +6845,14 @@
               "node": {
                 "terminal": {
                   "keyword": "USING"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Uuid)",
+              "node": {
+                "terminal": {
+                  "keyword": "UUID"
                 }
               }
             },
@@ -8519,6 +8550,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Retain), ReferenceDuration)"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(Shallow), Keyword(Clone), ObjectName))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Shallow), Keyword(Clone), ObjectName)"
                 }
               }
             },
@@ -10531,6 +10570,9 @@
                         "nonTerminal": "Option(Tuple(Keyword(Like), ObjectName))"
                       },
                       {
+                        "nonTerminal": "Option(Tuple(Keyword(Shallow), Keyword(Clone), ObjectName))"
+                      },
+                      {
                         "nonTerminal": "Option(Tuple(Keyword(Using), Identifier))"
                       },
                       {
@@ -10554,6 +10596,9 @@
                       },
                       {
                         "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Shallow), Keyword(Clone), ObjectName))"
                       },
                       {
                         "nonTerminal": "Option(ColumnDefinitionList)"
@@ -12529,6 +12574,22 @@
                   },
                   {
                     "nonTerminal": "Keyword(Zone)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Shallow), Keyword(Clone), ObjectName)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Shallow)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Clone)"
+                  },
+                  {
+                    "nonTerminal": "ObjectName"
                   }
                 ]
               }

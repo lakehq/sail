@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use prost::Message;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -17,6 +19,7 @@ use crate::driver::server::DriverServer;
 use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
+use crate::rpc::server_options;
 use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
@@ -69,7 +72,7 @@ impl TaskStreamKeyDecoder for DriverTaskStreamKey {
             stream.ok_or_else(|| Status::invalid_argument("task stream ticket is required"))?;
         Ok(Self {
             driver_id: driver_id.into(),
-            stream: stream.into(),
+            stream: stream.try_into()?,
         })
     }
 }
@@ -144,7 +147,8 @@ impl DriverGateway {
             .send_compressed(CompressionEncoding::Zstd);
 
         let handle = tokio::spawn(async move {
-            ServerBuilder::new("sail_driver", Default::default())
+            ServerBuilder::new("sail_driver", server_options())
+                .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
                 .await
                 .add_service(celeborn_service, None)

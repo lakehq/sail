@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/scalars.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/scalars.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::borrow::Cow;
 use std::fmt::Write;
@@ -187,11 +174,13 @@ impl ScalarConverter {
                         scalar.to_array_of_size(1)
                     })
                     .collect::<DataFusionResult<Vec<_>>>()?;
-                Ok(Some(ScalarValue::Struct(Arc::new(StructArray::new(
+                // Missing statistics may violate a physical child's non-null constraint.
+                // Return an error so scan planning can discard this unusable bound.
+                Ok(Some(ScalarValue::Struct(Arc::new(StructArray::try_new(
                     fields.clone(),
                     arrays,
                     None,
-                )))))
+                )?))))
             }
             _ => Ok(None),
         }
@@ -586,6 +575,23 @@ mod tests {
     use super::{
         NULL_PARTITION_VALUE_DATA_PATH, parse_optional_partition_value, parse_partition_value,
     };
+
+    #[test]
+    fn incomplete_required_struct_statistics_return_error() {
+        let data_type = ArrowDataType::Struct(
+            vec![datafusion::arrow::datatypes::Field::new(
+                "metadata",
+                ArrowDataType::Binary,
+                false,
+            )]
+            .into(),
+        );
+        let stats = crate::spec::ColumnValueStat::Column(Default::default());
+        assert!(
+            super::ScalarConverter::column_value_stat_to_arrow_scalar_value(&stats, &data_type)
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_parse_partition_value_preserves_hive_default_partition_string() {

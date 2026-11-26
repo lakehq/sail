@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion::physical_optimizer::eliminate_constant_join::EliminateConstantJoin;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
@@ -12,11 +15,9 @@ use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWin
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
-use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
-use datafusion::physical_optimizer::window_topn::WindowTopN;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
@@ -27,10 +28,12 @@ use crate::input_file_name::{
     RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::JoinReorderOptions;
+pub use crate::join_reorder::{JoinReorderOptions, SharedCteRestrictions};
 use crate::offset::OffsetSafeRequirements;
+use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
+use crate::window_topn::WindowTopN;
 
 mod barrier;
 mod collect_left;
@@ -42,9 +45,11 @@ mod join_hint;
 mod join_reorder;
 mod mixed_numeric;
 mod offset;
+mod partition_sensitive;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
+mod window_topn;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -61,6 +66,7 @@ pub fn get_physical_optimizers(
     // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
     // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
+    rules.push(Arc::new(EliminateConstantJoin::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
@@ -70,9 +76,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));
-    // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
-    // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
-    // Revisit the opt-in default when that trade-off is addressed.
+    // WindowTopN checks DataFusion's `enable_window_topn` option.
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
@@ -93,10 +97,12 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PostFilterPushdown));
     rules.push(Arc::new(PushDownStreamedJoinInputFileMetadata));
     rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
+    // Explicit repartitions are rewritten to round-robin repartitions afterwards, and they
+    // define the partitions that partition-sensitive operators keep.
+    rules.push(Arc::new(KeepPartitionSensitiveInputs));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules
 }

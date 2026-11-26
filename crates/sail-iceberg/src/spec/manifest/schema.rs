@@ -1,16 +1,7 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 
 use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
@@ -83,8 +74,8 @@ fn avro_primitive(
     prim: &PrimitiveType,
     layout: PartitionAvroLayout,
     defined_names: &mut BTreeSet<String>,
-) -> AvroSchema {
-    match prim {
+) -> Result<AvroSchema, String> {
+    Ok(match prim {
         PrimitiveType::Unknown => AvroSchema::Null,
         PrimitiveType::Boolean => AvroSchema::Boolean,
         PrimitiveType::Int => AvroSchema::Int,
@@ -154,38 +145,24 @@ fn avro_primitive(
             })
         }
         PrimitiveType::Decimal { precision, scale } => {
-            let name = format!("decimal_{precision}_{scale}");
+            let avro_precision = NonZeroUsize::new(*precision as usize)
+                .ok_or("Avro decimal precision must be positive")?;
+            let size = Type::decimal_required_bytes(*precision)? as usize;
+            let mut name = format!("decimal_{precision}_{scale}");
+            if let PartitionAvroLayout::Encoded = layout {
+                name = unique_avro_name(&name, defined_names);
+            }
+            let schema = AvroSchema::Decimal(DecimalSchema {
+                precision: avro_precision,
+                scale: *scale as usize,
+                inner: InnerDecimalSchema::Fixed(avro_fixed_schema(&name, size, None)),
+            });
             match layout {
-                PartitionAvroLayout::Declared => avro_named(
-                    &name,
-                    AvroSchema::Decimal(DecimalSchema {
-                        precision: *precision as usize,
-                        scale: *scale as usize,
-                        inner: InnerDecimalSchema::Fixed(avro_fixed_schema(
-                            &name,
-                            crate::spec::Type::decimal_required_bytes(*precision).unwrap_or(16)
-                                as usize,
-                            None,
-                        )),
-                    }),
-                    defined_names,
-                ),
-                PartitionAvroLayout::Encoded => {
-                    let name = unique_avro_name(&name, defined_names);
-                    AvroSchema::Decimal(DecimalSchema {
-                        precision: *precision as usize,
-                        scale: *scale as usize,
-                        inner: InnerDecimalSchema::Fixed(avro_fixed_schema(
-                            &name,
-                            crate::spec::Type::decimal_required_bytes(*precision).unwrap_or(16)
-                                as usize,
-                            None,
-                        )),
-                    })
-                }
+                PartitionAvroLayout::Declared => avro_named(&name, schema, defined_names),
+                PartitionAvroLayout::Encoded => schema,
             }
         }
-    }
+    })
 }
 
 fn struct_to_avro_record(
@@ -193,23 +170,14 @@ fn struct_to_avro_record(
     s: &StructType,
     layout: PartitionAvroLayout,
     defined_names: &mut BTreeSet<String>,
-) -> AvroSchema {
-    let fields = s
-        .fields()
-        .iter()
-        .map(|f| match &*f.field_type {
-            Type::Primitive(p) => record_field(
-                &f.name,
-                avro_primitive(p, layout, defined_names),
-                f.id,
-                f.required,
-            ),
-            Type::Struct(inner) => record_field(
-                &f.name,
-                struct_to_avro_record(&format!("r{}", f.id), inner, layout, defined_names),
-                f.id,
-                f.required,
-            ),
+) -> Result<AvroSchema, String> {
+    let mut fields = Vec::with_capacity(s.fields().len());
+    for f in s.fields() {
+        let schema = match &*f.field_type {
+            Type::Primitive(p) => avro_primitive(p, layout, defined_names)?,
+            Type::Struct(inner) => {
+                struct_to_avro_record(&format!("r{}", f.id), inner, layout, defined_names)?
+            }
             Type::List(list) => {
                 let mut attrs = BTreeMap::new();
                 attrs.insert(
@@ -217,24 +185,23 @@ fn struct_to_avro_record(
                     JsonValue::Number(Number::from(list.element_field.id)),
                 );
                 let elem_schema = match &*list.element_field.field_type {
-                    Type::Primitive(p) => avro_primitive(p, layout, defined_names),
+                    Type::Primitive(p) => avro_primitive(p, layout, defined_names)?,
                     Type::Struct(inner) => struct_to_avro_record(
                         &format!("r{}", list.element_field.id),
                         inner,
                         layout,
                         defined_names,
-                    ),
+                    )?,
                     _ => AvroSchema::String,
                 };
-                let array = AvroSchema::Array(ArraySchema {
+                AvroSchema::Array(ArraySchema {
                     items: Box::new(if list.element_field.required {
                         elem_schema
                     } else {
                         optional(elem_schema)
                     }),
                     attributes: attrs,
-                });
-                record_field(&f.name, array, f.id, f.required)
+                })
             }
             Type::Map(map) => {
                 // Represent non-string-key maps as array of records with logicalType: map
@@ -244,7 +211,7 @@ fn struct_to_avro_record(
                     default: None,
                     aliases: Vec::new(),
                     schema: match &*map.key_field.field_type {
-                        Type::Primitive(p) => avro_primitive(p, layout, defined_names),
+                        Type::Primitive(p) => avro_primitive(p, layout, defined_names)?,
                         _ => AvroSchema::String,
                     },
                     custom_attributes: BTreeMap::from([(
@@ -253,7 +220,7 @@ fn struct_to_avro_record(
                     )]),
                 };
                 let value_schema = match &*map.value_field.field_type {
-                    Type::Primitive(p) => avro_primitive(p, layout, defined_names),
+                    Type::Primitive(p) => avro_primitive(p, layout, defined_names)?,
                     _ => AvroSchema::String,
                 };
                 let value_field = AvroRecordField {
@@ -297,21 +264,21 @@ fn struct_to_avro_record(
                     LOGICAL_TYPE.to_string(),
                     JsonValue::String(MAP_LOGICAL_TYPE.to_string()),
                 );
-                let array = AvroSchema::Array(ArraySchema {
+                AvroSchema::Array(ArraySchema {
                     items: Box::new(item_record),
                     attributes: attrs,
-                });
-                record_field(&f.name, array, f.id, f.required)
+                })
             }
-        })
-        .collect::<Vec<_>>();
+        };
+        fields.push(record_field(&f.name, schema, f.id, f.required));
+    }
 
     // Populate lookup map so apache_avro can resolve fields by name
     let mut lookup = BTreeMap::new();
     for (idx, f) in fields.iter().enumerate() {
         lookup.insert(f.name.clone(), idx);
     }
-    AvroSchema::Record(RecordSchema {
+    Ok(AvroSchema::Record(RecordSchema {
         #[expect(clippy::unwrap_used)]
         name: Name::new(name).unwrap_or_else(|_| Name::new("record").unwrap()),
         aliases: None,
@@ -319,10 +286,13 @@ fn struct_to_avro_record(
         fields,
         lookup,
         attributes: Default::default(),
-    })
+    }))
 }
 
-fn partition_record_schema(partition_type: &StructType, layout: PartitionAvroLayout) -> AvroSchema {
+fn partition_record_schema(
+    partition_type: &StructType,
+    layout: PartitionAvroLayout,
+) -> Result<AvroSchema, String> {
     struct_to_avro_record("r102", partition_type, layout, &mut BTreeSet::new())
 }
 
@@ -405,20 +375,12 @@ fn int_key_map(
     })
 }
 
-fn data_file_schema_v3_with_layout(
-    partition_type: &StructType,
-    layout: PartitionAvroLayout,
-) -> AvroSchema {
+fn data_file_schema_v3(partition_schema: AvroSchema) -> AvroSchema {
     let fields = vec![
         record_field("content", AvroSchema::Int, 134, true),
         record_field("file_path", AvroSchema::String, 100, true),
         record_field("file_format", AvroSchema::String, 101, true),
-        record_field(
-            "partition",
-            partition_record_schema(partition_type, layout),
-            102,
-            true,
-        ),
+        record_field("partition", partition_schema, 102, true),
         record_field("record_count", AvroSchema::Long, 103, true),
         record_field("file_size_in_bytes", AvroSchema::Long, 104, true),
         record_field(
@@ -504,12 +466,8 @@ fn data_file_schema_v3_with_layout(
     })
 }
 
-fn data_file_schema_v1_with_layout(
-    partition_type: &StructType,
-    layout: PartitionAvroLayout,
-) -> AvroSchema {
-    let AvroSchema::Record(mut record) = data_file_schema_v3_with_layout(partition_type, layout)
-    else {
+fn data_file_schema_v1(partition_schema: AvroSchema) -> AvroSchema {
+    let AvroSchema::Record(mut record) = data_file_schema_v3(partition_schema) else {
         unreachable!("data file schema must be an Avro record")
     };
     record.fields.retain(|field| {
@@ -541,16 +499,11 @@ fn data_file_schema_v1_with_layout(
     AvroSchema::Record(record)
 }
 
-fn data_file_schema_with_layout(
-    partition_type: &StructType,
-    version: FormatVersion,
-    layout: PartitionAvroLayout,
-) -> AvroSchema {
+fn data_file_schema(partition_schema: AvroSchema, version: FormatVersion) -> AvroSchema {
     if version == FormatVersion::V1 {
-        return data_file_schema_v1_with_layout(partition_type, layout);
+        return data_file_schema_v1(partition_schema);
     }
-    let AvroSchema::Record(mut record) = data_file_schema_v3_with_layout(partition_type, layout)
-    else {
+    let AvroSchema::Record(mut record) = data_file_schema_v3(partition_schema) else {
         unreachable!("data file schema must be a record")
     };
     if version == FormatVersion::V2 {
@@ -573,17 +526,16 @@ fn data_file_schema_with_layout(
 pub(super) fn data_file_schemas(
     partition_type: &StructType,
     version: FormatVersion,
-) -> (AvroSchema, AvroSchema) {
-    (
-        data_file_schema_with_layout(partition_type, version, PartitionAvroLayout::Declared),
-        data_file_schema_with_layout(partition_type, version, PartitionAvroLayout::Encoded),
-    )
+) -> Result<(AvroSchema, AvroSchema), String> {
+    let declared = partition_record_schema(partition_type, PartitionAvroLayout::Declared)?;
+    let encoded = partition_record_schema(partition_type, PartitionAvroLayout::Encoded)?;
+    Ok((
+        data_file_schema(declared, version),
+        data_file_schema(encoded, version),
+    ))
 }
 
-fn manifest_entry_schema_v1_with_layout(
-    partition_type: &StructType,
-    layout: PartitionAvroLayout,
-) -> AvroSchema {
+fn manifest_entry_schema_v1(data_file_schema: AvroSchema) -> AvroSchema {
     let fields = vec![
         record_field("status", AvroSchema::Int, 0, true),
         record_field("snapshot_id", AvroSchema::Long, 1, false),
@@ -592,7 +544,7 @@ fn manifest_entry_schema_v1_with_layout(
             doc: None,
             default: None,
             aliases: Vec::new(),
-            schema: data_file_schema_v1_with_layout(partition_type, layout),
+            schema: data_file_schema,
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),
                 JsonValue::Number(Number::from(2)),
@@ -616,12 +568,7 @@ fn manifest_entry_schema_v1_with_layout(
     })
 }
 
-fn manifest_entry_schema_v2_with_layout(
-    partition_type: &StructType,
-    version: FormatVersion,
-    layout: PartitionAvroLayout,
-) -> AvroSchema {
-    let df_schema = data_file_schema_with_layout(partition_type, version, layout);
+fn manifest_entry_schema_v2(data_file_schema: AvroSchema) -> AvroSchema {
     let fields = vec![
         record_field("status", AvroSchema::Int, 0, true),
         record_field("snapshot_id", AvroSchema::Long, 1, false),
@@ -632,7 +579,7 @@ fn manifest_entry_schema_v2_with_layout(
             doc: None,
             default: None,
             aliases: Vec::new(),
-            schema: df_schema,
+            schema: data_file_schema,
             custom_attributes: BTreeMap::from([(
                 FIELD_ID_ATTR.to_string(),
                 JsonValue::Number(Number::from(2)),
@@ -659,17 +606,13 @@ fn manifest_entry_schema_v2_with_layout(
 pub(super) fn manifest_entry_schemas(
     partition_type: &StructType,
     version: FormatVersion,
-) -> (AvroSchema, AvroSchema) {
-    let schema = |partition_type, layout| match version {
-        FormatVersion::V1 => manifest_entry_schema_v1_with_layout(partition_type, layout),
-        FormatVersion::V2 | FormatVersion::V3 => {
-            manifest_entry_schema_v2_with_layout(partition_type, version, layout)
-        }
+) -> Result<(AvroSchema, AvroSchema), String> {
+    let schema = match version {
+        FormatVersion::V1 => manifest_entry_schema_v1,
+        FormatVersion::V2 | FormatVersion::V3 => manifest_entry_schema_v2,
     };
-    (
-        schema(partition_type, PartitionAvroLayout::Declared),
-        schema(partition_type, PartitionAvroLayout::Encoded),
-    )
+    let (declared, encoded) = data_file_schemas(partition_type, version)?;
+    Ok((schema(declared), schema(encoded)))
 }
 
 #[cfg(test)]
@@ -684,9 +627,9 @@ mod tests {
 
     #[test]
     #[expect(clippy::panic)]
-    fn version_projection_and_required_partition_match_in_both_layouts() {
+    fn version_projection_and_required_partition_match_in_both_layouts() -> Result<(), String> {
         for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
-            let (declared, encoded) = super::data_file_schemas(&StructType::new(vec![]), version);
+            let (declared, encoded) = super::data_file_schemas(&StructType::new(vec![]), version)?;
             for schema in [declared, encoded] {
                 let AvroSchema::Record(record) = schema else {
                     panic!("data file record")
@@ -720,6 +663,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
@@ -736,7 +680,7 @@ mod tests {
                 Type::Primitive(PrimitiveType::Fixed(3)),
             )),
         ]);
-        let (schema, _) = manifest_entry_schemas(&partition_type, FormatVersion::V2);
+        let (schema, _) = manifest_entry_schemas(&partition_type, FormatVersion::V2)?;
         let schema = serde_json::to_string(&schema)
             .map_err(|error| format!("Avro schema serialization error: {error}"))?;
 

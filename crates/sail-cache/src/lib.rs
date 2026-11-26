@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use log::error;
 
 pub mod error;
@@ -5,6 +7,7 @@ pub mod file_listing_cache;
 pub mod file_metadata_cache;
 pub mod file_statistics_cache;
 pub mod remote_checkpoint;
+pub mod scope;
 
 #[expect(dead_code)]
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {

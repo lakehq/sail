@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use either::Either;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, OrderByExpr};
@@ -282,7 +284,10 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(from_ast_named_expression)
+        .map(|x| {
+            from_ast_named_expression(x)
+                .map(|x| x.with_projection_item_cast_naming(spec::CastNaming::SqlProjectionItem))
+        })
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by

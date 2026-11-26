@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod config;
 mod core;
 mod operation;

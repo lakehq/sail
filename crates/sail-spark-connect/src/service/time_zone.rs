@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 use datafusion::arrow::array::timezone::Tz;
@@ -18,7 +20,8 @@ const MAX_OFFSET_SECONDS: u32 = 18 * 3_600;
 /// is not trimmed.
 ///
 /// This is only used to reject a value before it is stored. It does not say which zone `id` is.
-// TODO: Replace this with the resolution of the session time zone once it lives in `sail-plan`.
+// TODO: Align legacy region IDs in validation and execution with the JVM zone registry.
+// For example, Arrow accepts ROC and omits SystemV/EST5EDT, while Java does the reverse.
 pub(super) fn is_valid_time_zone(id: &str) -> bool {
     if id == "Z" || SHORT_IDS.contains(&id) {
         return true;

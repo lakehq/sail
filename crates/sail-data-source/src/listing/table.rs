@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/catalog-listing/src/table.rs
+
 // The listing table source is adapted from the DataFusion `ListingTable` implementation.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
 use std::sync::Arc;
 
@@ -10,19 +12,25 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, Result};
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 
+use crate::listing::partition::BasePathPartitions;
 use crate::listing::source::ReadFormat;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 use crate::url::PathGlobFilter;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
+    /// File scan indices in public column order when physical columns overlap partitions.
+    pub output_projection: Option<Vec<usize>>,
+    pub base_path: Option<Arc<BasePathPartitions>>,
     pub table_paths: Vec<ListingTableUrl>,
+    pub recursive_file_lookup: bool,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
     pub collect_stat: bool,
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
+    pub partition_directories_only: bool,
     pub path_glob_filter: Option<PathGlobFilter>,
     pub compression: CompressionTypeVariant,
 }
@@ -34,11 +42,30 @@ pub struct ListingTableSourceConfig {
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
+    output_schema: SchemaRef,
 }
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        Ok(Self { config })
+        let schema = config.schema.table_schema();
+        let output_schema = match &config.output_projection {
+            Some(indices) => Arc::new(schema.project(indices)?),
+            None => Arc::clone(schema),
+        };
+        Ok(Self {
+            config,
+            output_schema,
+        })
+    }
+
+    pub(super) fn scan_projection(&self, projection: Option<&[usize]>) -> Option<Vec<usize>> {
+        match (&self.config.output_projection, projection) {
+            (Some(indices), Some(projection)) => {
+                Some(projection.iter().map(|&i| indices[i]).collect())
+            }
+            (Some(indices), None) => Some(indices.clone()),
+            (None, projection) => projection.map(<[_]>::to_vec),
+        }
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
@@ -48,7 +75,7 @@ impl ListingTableSource {
 
 impl TableSource for ListingTableSource {
     fn schema(&self) -> SchemaRef {
-        Arc::clone(self.config.schema.table_schema())
+        Arc::clone(&self.output_schema)
     }
 
     fn constraints(&self) -> Option<&Constraints> {

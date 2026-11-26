@@ -1,16 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::convert::Infallible;
 use std::future::Future;
+use std::time::Duration;
 
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::Request;
+use tonic::codegen::tokio_stream::StreamExt;
 use tonic::server::NamedService;
 use tonic::transport::server::{Router, TcpIncoming};
 use tonic_health::server::HealthReporter;
 use tower::ServiceBuilder;
 use tower::layer::util::{Identity, Stack};
 
+use crate::server::connection::ServerConnection;
 use crate::telemetry::TracingServerLayer;
 
 pub struct ServerBuilderOptions {
@@ -19,6 +26,9 @@ pub struct ServerBuilderOptions {
     pub http2_keepalive_interval: Option<std::time::Duration>,
     pub http2_keepalive_timeout: Option<std::time::Duration>,
     pub http2_adaptive_window: Option<bool>,
+    /// The initial HTTP/2 connection window size, or the default of Hyper if not set.
+    /// The adaptive window must be off for this to take effect.
+    pub http2_initial_connection_window_size: Option<u32>,
 }
 
 impl Default for ServerBuilderOptions {
@@ -30,6 +40,7 @@ impl Default for ServerBuilderOptions {
             http2_keepalive_interval: Some(std::time::Duration::from_mins(1)),
             http2_keepalive_timeout: Some(std::time::Duration::from_secs(10)),
             http2_adaptive_window: Some(true),
+            http2_initial_connection_window_size: None,
         }
     }
 }
@@ -38,6 +49,7 @@ pub struct ServerBuilder<'b> {
     #[expect(dead_code)]
     name: &'static str,
     options: ServerBuilderOptions,
+    shutdown_grace_period: Option<Duration>,
     health_reporter: HealthReporter,
     reflection_server_builder: tonic_reflection::server::Builder<'b>,
     // The router type has to change accordingly when layers are added.
@@ -67,16 +79,24 @@ impl<'b> ServerBuilder<'b> {
             .http2_keepalive_interval(options.http2_keepalive_interval)
             .http2_keepalive_timeout(options.http2_keepalive_timeout)
             .http2_adaptive_window(options.http2_adaptive_window)
+            .initial_connection_window_size(options.http2_initial_connection_window_size)
             .layer(layer)
             .add_service(health_server);
 
         Self {
             name,
             options,
+            shutdown_grace_period: None,
             health_reporter,
             reflection_server_builder,
             router,
         }
+    }
+
+    /// Close connections that remain open after graceful shutdown begins.
+    pub fn with_shutdown_grace_period(mut self, grace_period: Duration) -> Self {
+        self.shutdown_grace_period = Some(grace_period);
+        self
     }
 
     pub async fn add_service<S>(mut self, service: S, file_descriptor_set: Option<&'b [u8]>) -> Self
@@ -118,9 +138,28 @@ impl<'b> ServerBuilder<'b> {
             .with_nodelay(Some(self.options.nodelay))
             .with_keepalive(self.options.keepalive);
 
-        router
-            .serve_with_incoming_shutdown(incoming, signal)
-            .await?;
+        if let Some(grace_period) = self.shutdown_grace_period {
+            let close = CancellationToken::new();
+            let incoming = incoming
+                .map(|stream| stream.map(|stream| ServerConnection::new(stream, close.clone())));
+            // Dropping the timer when the server finishes lets responsive clients exit immediately.
+            let mut timer = JoinSet::new();
+            let signal = async {
+                signal.await;
+                let close = close.clone();
+                timer.spawn(async move {
+                    tokio::time::sleep(grace_period).await;
+                    close.cancel();
+                });
+            };
+            router
+                .serve_with_incoming_shutdown(incoming, signal)
+                .await?;
+        } else {
+            router
+                .serve_with_incoming_shutdown(incoming, signal)
+                .await?;
+        }
 
         Ok(())
     }

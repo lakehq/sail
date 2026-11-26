@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::DriverGateway;
 use sail_telemetry::events::SystemEventReporter;
 
@@ -19,6 +23,7 @@ pub struct SessionManagerComponents {
     pub session_factory: Box<dyn SessionFactory<ServerSessionInfo>>,
     pub job_runner_factory: Box<dyn SessionJobRunnerFactory>,
     pub driver_gateway: Option<DriverGateway>,
+    pub shutdown: Arc<QueryCancellation>,
     pub event_reporter: SystemEventReporter,
 }
 

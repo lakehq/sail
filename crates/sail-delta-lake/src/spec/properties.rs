@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -26,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use crate::spec::schema::{ColumnMappingMode, ColumnName};
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204>
 pub enum DataSkippingNumIndexedCols {
     AllColumns,
     NumColumns(u64),
@@ -49,9 +39,12 @@ impl TryFrom<&str> for DataSkippingNumIndexedCols {
         }
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L206-L229
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L206-L229>
 pub enum IsolationLevel {
     #[default]
     Serializable,
@@ -83,6 +76,7 @@ impl FromStr for IsolationLevel {
         }
     }
 }
+// SPDX-SnippetEnd
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum CheckpointPolicy {
@@ -105,8 +99,10 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180>
 pub struct TableProperties {
     pub append_only: Option<bool>,
     pub checkpoint_interval: Option<NonZeroU64>,
@@ -123,12 +119,14 @@ pub struct TableProperties {
     pub data_skipping_num_indexed_cols: Option<DataSkippingNumIndexedCols>,
     pub data_skipping_stats_columns: Option<Vec<ColumnName>>,
     pub deleted_file_retention_duration: Option<Duration>,
+    pub set_transaction_retention_duration: Option<Duration>,
     pub isolation_level: Option<IsolationLevel>,
     pub log_retention_duration: Option<Duration>,
     pub enable_expired_log_cleanup: Option<bool>,
     pub log_compaction_interval: Option<NonZeroU64>,
     pub unknown_properties: HashMap<String, String>,
 }
+// SPDX-SnippetEnd
 
 impl<K, V, I> From<I> for TableProperties
 where
@@ -136,7 +134,9 @@ where
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
 {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L20-L35>
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L20-L35
     fn from(unparsed: I) -> Self {
         let mut props = TableProperties::default();
         let unparsed = unparsed.into_iter().filter(|(k, v)| {
@@ -145,6 +145,7 @@ where
         props.unknown_properties = unparsed.map(|(k, v)| (k.into(), v.into())).collect();
         props
     }
+    // SPDX-SnippetEnd
 }
 
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
@@ -236,6 +237,52 @@ where
     Ok(canonicalized)
 }
 
+pub(crate) fn canonicalize_and_validate_alter_table_properties(
+    properties: &[(&str, &str)],
+    allow_arbitrary_properties: bool,
+) -> DeltaResult<HashMap<String, String>> {
+    let mut canonicalized = HashMap::new();
+    for &(key, value) in properties {
+        let lower = key.to_ascii_lowercase();
+        if lower.starts_with("delta.")
+            && canonicalize_table_property_key(key).is_none()
+            && !lower.starts_with("delta.feature.")
+            && !allow_arbitrary_properties
+        {
+            return Err(DeltaTableError::generic(format!(
+                "[DELTA_UNKNOWN_CONFIGURATION] Unknown configuration was specified: {key}"
+            )));
+        }
+        let key = canonicalize_alter_table_property_key(key);
+        if lower.starts_with("delta.") {
+            validate_table_property(&key, value)?;
+        }
+        canonicalized.insert(key, value.to_string());
+    }
+    if canonicalized
+        .get("delta.randomizeFilePrefixes")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
+        return Err(DeltaTableError::generic(
+            "delta.randomizeFilePrefixes=true is not supported by the Delta writer",
+        ));
+    }
+    Ok(canonicalized)
+}
+
+pub(crate) fn canonicalize_alter_table_property_key(key: &str) -> String {
+    let lower = key.to_ascii_lowercase();
+    if lower.starts_with("delta.feature.") {
+        lower
+    } else if lower.starts_with("delta.") {
+        canonicalize_table_property_key(key)
+            .unwrap_or(key)
+            .to_string()
+    } else {
+        key.to_string()
+    }
+}
+
 /// Map supported property aliases to their canonical Delta table property key.
 ///
 /// Returns `Some(canonical_key)` for recognized modeled properties and aliases, and `None`
@@ -243,6 +290,12 @@ where
 fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "delta.appendonly" | "append_only" | "appendonly" => Some("delta.appendOnly"),
+        "delta.minreaderversion" => Some("delta.minReaderVersion"),
+        "delta.minwriterversion" => Some("delta.minWriterVersion"),
+        "delta.randomprefixlength" => Some("delta.randomPrefixLength"),
+        "delta.randomizefileprefixes" => Some("delta.randomizeFilePrefixes"),
+        "delta.enabledeletionvectors" => Some("delta.enableDeletionVectors"),
+        "delta.enablechangedatafeed" => Some("delta.enableChangeDataFeed"),
         "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
             Some("delta.checkpointInterval")
         }
@@ -285,6 +338,7 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.dataskippingstatscolumns"
         | "data_skipping_stats_columns"
         | "dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
+        "delta.settransactionretentionduration" => Some("delta.setTransactionRetentionDuration"),
         "delta.deletedfileretentionduration"
         | "deleted_file_retention_duration"
         | "deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
@@ -338,7 +392,10 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         | "delta.enableInCommitTimestamps"
         | "delta.enableTypeWidening"
         | "delta.enableVariantShredding"
-        | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
+        | "delta.enableExpiredLogCleanup"
+        | "delta.enableDeletionVectors"
+        | "delta.enableChangeDataFeed"
+        | "delta.randomizeFilePrefixes" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
         "delta.checkpointInterval" | "delta.logCompactionInterval" => {
@@ -348,6 +405,31 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
                 ))
             })
         }
+        "delta.minReaderVersion" | "delta.minWriterVersion" => {
+            let maximum = if key == "delta.minReaderVersion" {
+                3
+            } else {
+                7
+            };
+            value
+                .parse::<i32>()
+                .ok()
+                .filter(|version| (1..=maximum).contains(version))
+                .map(|_| ())
+                .ok_or_else(|| {
+                    DeltaTableError::generic(format!(
+                        "invalid value for {key}: expected integer from 1 to {maximum}"
+                    ))
+                })
+        }
+        "delta.randomPrefixLength" => value
+            .parse::<i32>()
+            .ok()
+            .filter(|length| *length > 0)
+            .map(|_| ())
+            .ok_or_else(|| {
+                DeltaTableError::generic("delta.randomPrefixLength needs to be greater than 0")
+            }),
         "delta.checkpointPolicy" => CheckpointPolicy::from_str(value).map(|_| ()),
         "delta.inCommitTimestampEnablementVersion" => {
             parse_non_negative_i64(value).map(|_| ()).ok_or_else(|| {
@@ -366,7 +448,9 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
             DataSkippingNumIndexedCols::try_from(value).map(|_| ())
         }
         "delta.dataSkippingStatsColumns" => ColumnName::parse_column_name_list(value).map(|_| ()),
-        "delta.deletedFileRetentionDuration" | "delta.logRetentionDuration" => {
+        "delta.deletedFileRetentionDuration"
+        | "delta.logRetentionDuration"
+        | "delta.setTransactionRetentionDuration" => {
             parse_interval(value).map(|_| ()).ok_or_else(|| {
                 DeltaTableError::generic(format!(
                     "invalid value for {key}: expected Delta interval literal"
@@ -378,8 +462,10 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L37-L104
 fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str) -> Option<()> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L37-L104>
     match key {
         "delta.appendOnly" => props.append_only = Some(parse_bool(value)?),
         "delta.checkpointInterval" => props.checkpoint_interval = Some(parse_positive_int(value)?),
@@ -421,6 +507,9 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
         "delta.isolationLevel" => {
             props.isolation_level = IsolationLevel::from_str(value).ok();
         }
+        "delta.setTransactionRetentionDuration" => {
+            props.set_transaction_retention_duration = parse_interval(value)
+        }
         "delta.logRetentionDuration" => props.log_retention_duration = parse_interval(value),
         "delta.enableExpiredLogCleanup" => {
             props.enable_expired_log_cleanup = Some(parse_bool(value)?)
@@ -432,24 +521,31 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
     }
     Some(())
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L106-L122
 fn parse_positive_int(s: &str) -> Option<NonZeroU64> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L106-L122>
     let n: i64 = s.parse().ok()?;
     if n <= 0 {
         return None;
     }
     NonZeroU64::new(n as u64)
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132
 fn parse_bool(s: &str) -> Option<bool> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132>
-    match s {
+    match s.to_ascii_lowercase().as_str() {
         "true" => Some(true),
         "false" => Some(false),
         _ => None,
     }
 }
+// SPDX-SnippetEnd
 
 fn parse_i64(s: &str) -> Option<i64> {
     s.parse().ok()
@@ -460,37 +556,54 @@ fn parse_non_negative_i64(s: &str) -> Option<i64> {
     (value >= 0).then_some(value)
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146
 fn parse_interval(s: &str) -> Option<Duration> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146>
-    const SECONDS_PER_HOUR: u64 = 60 * 60;
-    const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
-    const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
-
-    let mut it = s.split_whitespace();
-    if it.next() != Some("interval") {
-        return None;
+    let lower = s.trim().to_ascii_lowercase();
+    let mut parts = lower.split_whitespace().peekable();
+    if parts.peek() == Some(&"interval") {
+        parts.next();
     }
-    let number = it.next()?.parse::<i64>().ok()?;
-    if number < 0 {
-        return None;
+    parts.peek()?;
+    let mut micros = 0i128;
+    while let Some(number) = parts.next() {
+        let unit = parts.next()?;
+        let scale = match unit {
+            "microsecond" | "microseconds" => 1,
+            "millisecond" | "milliseconds" => 1_000,
+            "second" | "seconds" => 1_000_000,
+            "minute" | "minutes" => 60_000_000,
+            "hour" | "hours" => 3_600_000_000,
+            "day" | "days" => 86_400_000_000,
+            "week" | "weeks" => 604_800_000_000,
+            _ => return None,
+        };
+        let value = if matches!(unit, "second" | "seconds") && number.contains('.') {
+            let (whole, fraction) = number.split_once('.')?;
+            if !number.bytes().any(|c| c.is_ascii_digit())
+                || fraction.len() > 9
+                || !fraction.bytes().all(|c| c.is_ascii_digit())
+            {
+                return None;
+            }
+            let negative = number.starts_with('-');
+            let whole = match whole {
+                "" | "+" | "-" => 0,
+                _ => whole.parse::<i64>().ok()?,
+            };
+            let fraction = format!("{fraction:0<6}");
+            let fraction = fraction.get(..6)?.parse::<i128>().ok()?;
+            i128::from(whole) * scale + if negative { -fraction } else { fraction }
+        } else {
+            i128::from(number.parse::<i64>().ok()?) * scale
+        };
+        micros = micros.checked_add(value)?;
     }
-    let number = number as u64;
-    match it.next()? {
-        "nanosecond" | "nanoseconds" => Some(Duration::from_nanos(number)),
-        "microsecond" | "microseconds" => Some(Duration::from_micros(number)),
-        "millisecond" | "milliseconds" => Some(Duration::from_millis(number)),
-        "second" | "seconds" => Some(Duration::from_secs(number)),
-        "minute" | "minutes" => (number <= u64::MAX / 60).then(|| Duration::from_mins(number)),
-        "hour" | "hours" => {
-            (number <= u64::MAX / SECONDS_PER_HOUR).then(|| Duration::from_hours(number))
-        }
-        "day" | "days" => number.checked_mul(SECONDS_PER_DAY).map(Duration::from_secs),
-        "week" | "weeks" => number
-            .checked_mul(SECONDS_PER_WEEK)
-            .map(Duration::from_secs),
-        _ => None,
-    }
+    let micros = i64::try_from(micros).ok()?;
+    u64::try_from(micros).ok().map(Duration::from_micros)
 }
+// SPDX-SnippetEnd
 
 /// Resolve the effective `DataSkippingNumIndexedCols` for a given table configuration.
 pub fn resolve_data_skipping_num_indexed_cols(

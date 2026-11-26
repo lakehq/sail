@@ -1,4 +1,6 @@
-use std::fmt::Write as _;
+// SPDX-License-Identifier: Apache-2.0
+
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -10,23 +12,29 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use quick_xml::Writer;
+use quick_xml::events::attributes::Attribute;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::name::QName;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::display::{
     spark_f32_to_string as format_single, spark_f64_to_string as format_double,
 };
 
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkToXml {
+pub struct ToXml {
     session_timezone: Arc<str>,
     signature: Signature,
 }
 
 #[derive(Debug)]
-struct SparkToXmlOptions {
+struct ToXmlOptions {
     row_tag: String,
+    indent: String,
+    validate_name: bool,
     array_element_name: String,
     attribute_prefix: String,
     value_tag: String,
@@ -38,7 +46,7 @@ struct SparkToXmlOptions {
     session_timezone: String,
 }
 
-impl SparkToXmlOptions {
+impl ToXmlOptions {
     pub const ROW_TAG_OPTION: &'static str = "rowTag";
     pub const ROW_TAG_DEFAULT: &'static str = "ROW";
     pub const ARRAY_ELEMENT_NAME_OPTION: &'static str = "arrayElementName";
@@ -111,6 +119,16 @@ impl SparkToXmlOptions {
 
         Ok(Self {
             row_tag,
+            indent: find_key_value(map, "indent").unwrap_or_else(|| "    ".to_string()),
+            validate_name: match find_key_value(map, "validateName")
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return plan_err!("`validateName` must be true or false"),
+            },
             array_element_name: find_key_value(map, Self::ARRAY_ELEMENT_NAME_OPTION)
                 .unwrap_or_else(|| Self::ARRAY_ELEMENT_NAME_DEFAULT.to_string()),
             attribute_prefix,
@@ -135,11 +153,13 @@ impl SparkToXmlOptions {
     }
 }
 
-impl Default for SparkToXmlOptions {
+impl Default for ToXmlOptions {
     #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             row_tag: Self::ROW_TAG_DEFAULT.to_string(),
+            indent: "    ".to_string(),
+            validate_name: true,
             array_element_name: Self::ARRAY_ELEMENT_NAME_DEFAULT.to_string(),
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
@@ -156,7 +176,7 @@ impl Default for SparkToXmlOptions {
     }
 }
 
-impl SparkToXml {
+impl ToXml {
     pub const TO_XML_NAME: &'static str = "to_xml";
 
     pub fn new(session_timezone: Arc<str>) -> Self {
@@ -178,13 +198,13 @@ impl SparkToXml {
     }
 }
 
-impl Default for SparkToXml {
+impl Default for ToXml {
     fn default() -> Self {
         Self::new(Arc::from("UTC"))
     }
 }
 
-impl ScalarUDFImpl for SparkToXml {
+impl ScalarUDFImpl for ToXml {
     fn name(&self) -> &str {
         Self::TO_XML_NAME
     }
@@ -242,25 +262,25 @@ impl ScalarUDFImpl for SparkToXml {
 
         let options = if args.len() == 2 {
             match &args[1] {
-                ColumnarValue::Scalar(s) if s.is_null() => SparkToXmlOptions {
+                ColumnarValue::Scalar(s) if s.is_null() => ToXmlOptions {
                     session_timezone: session_timezone.to_string(),
-                    ..SparkToXmlOptions::default()
+                    ..ToXmlOptions::default()
                 },
                 ColumnarValue::Array(arr) if matches!(arr.data_type(), DataType::Null) => {
-                    SparkToXmlOptions {
+                    ToXmlOptions {
                         session_timezone: session_timezone.to_string(),
-                        ..SparkToXmlOptions::default()
+                        ..ToXmlOptions::default()
                     }
                 }
                 _ => {
                     let map_array = to_map_array(&args[1])?;
-                    SparkToXmlOptions::from_map(&map_array, session_timezone)?
+                    ToXmlOptions::from_map(&map_array, session_timezone)?
                 }
             }
         } else {
-            SparkToXmlOptions {
+            ToXmlOptions {
                 session_timezone: session_timezone.to_string(),
-                ..SparkToXmlOptions::default()
+                ..ToXmlOptions::default()
             }
         };
 
@@ -270,18 +290,18 @@ impl ScalarUDFImpl for SparkToXml {
     }
 }
 
-fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Result<ArrayRef> {
+fn spark_to_xml_inner(array: &StructArray, options: &ToXmlOptions) -> Result<ArrayRef> {
     let mut builder = StringBuilder::with_capacity(array.len(), 0);
     // One reused buffer across rows: `clear()` keeps its capacity, so the row
     // strings are not re-allocated per row and are copied into the Arrow buffer
     // exactly once.
-    let mut buf = String::with_capacity(256);
+    let mut buf = Writer::new(Vec::with_capacity(256));
 
     for row in 0..array.len() {
         if array.is_null(row) {
             builder.append_null();
         } else {
-            buf.clear();
+            buf.get_mut().clear();
             write_struct(
                 &mut buf,
                 array,
@@ -291,43 +311,56 @@ fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Resul
                 0,
                 options,
             )?;
-            // Every writer prefixes its own leading newline; the root element has none.
-            builder.append_value(buf.strip_prefix('\n').unwrap_or(&buf));
+            if options.indent.is_empty() {
+                buf.get_mut().push(b'\n');
+            }
+            // Strip the initial indentation newline from the root element.
+            let xml = std::str::from_utf8(buf.get_ref())
+                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+            builder.append_value(xml.strip_prefix('\n').unwrap_or(xml));
         }
     }
 
     Ok(Arc::new(builder.finish()))
 }
 
-const INDENT: &str = "    ";
-
-/// Appends `depth` levels of indentation without allocating (unlike
-/// `INDENT.repeat(depth)`, which builds a fresh `String` each call).
-#[inline]
-fn push_indent(buf: &mut String, depth: usize) {
-    for _ in 0..depth {
-        buf.push_str(INDENT);
+fn push_indent(buf: &mut Writer<Vec<u8>>, depth: usize, options: &ToXmlOptions) {
+    if !options.indent.is_empty() {
+        buf.get_mut().push(b'\n');
+        for _ in 0..depth {
+            buf.get_mut().extend_from_slice(options.indent.as_bytes());
+        }
     }
 }
 
-/// Serializes a struct as `<tag …attrs…>…children…</tag>`, matching Spark's
+fn check_name(name: &str, options: &ToXmlOptions) -> Result<()> {
+    if options.validate_name {
+        if name.contains(':') {
+            return exec_err!("Illegal name character ':' in XML name '{name}'");
+        }
+        super::reader::validate_name(name)
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Serializes a struct as `<tag …attrs…>…children…</tag>`, matching Spark
 /// `StaxXmlGenerator`. Uses a leading-newline convention: every element/array/map
 /// child prefixes its own `\n` plus indentation, so no trailing newline is ever
-/// appended. Attributes go on the open tag; the `valueTag` field becomes inline
-/// text right after `>`; remaining fields become child elements.
+/// appended. Attributes go on the open tag. The `valueTag` field becomes inline
+/// text right after `>`. Remaining fields become child elements.
 fn write_struct(
-    buf: &mut String,
+    buf: &mut Writer<Vec<u8>>,
     array: &StructArray,
     row: usize,
     fields: &Fields,
     tag: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
-    buf.push('\n');
-    push_indent(buf, depth);
-    buf.push('<');
-    buf.push_str(tag);
+    push_indent(buf, depth, options);
+    check_name(tag, options)?;
+    let mut start = BytesStart::new(tag);
 
     // First pass: attributes go on the open tag.
     for (col_idx, field) in fields.iter().enumerate() {
@@ -338,18 +371,26 @@ fn write_struct(
         if col.is_null(row) {
             if let Some(ref nv) = options.null_value {
                 let attr_name = options.strip_prefix(field.name());
-                write!(buf, r#" {}="{}""#, attr_name, escape_attr(nv))?;
+                check_name(attr_name, options)?;
+                start.push_attribute(Attribute {
+                    key: QName(attr_name),
+                    value: Cow::Owned(escape_attr(nv)),
+                });
             }
         } else {
             let attr_name = options.strip_prefix(field.name());
+            check_name(attr_name, options)?;
             let value = format_field_to_xml(col, row, field.data_type(), options)?;
-            write!(buf, r#" {}="{}""#, attr_name, escape_attr(&value))?;
+            start.push_attribute(Attribute {
+                key: QName(attr_name),
+                value: Cow::Owned(escape_attr(&value)),
+            });
         }
     }
 
     // Second pass: the valueTag field becomes inline text, the rest child elements.
     let mut value_text: Option<String> = None;
-    let mut children = String::new();
+    let mut children = Writer::new(Vec::new());
     for (col_idx, field) in fields.iter().enumerate() {
         if options.is_attribute(field.name()) {
             continue;
@@ -374,42 +415,38 @@ fn write_struct(
     }
 
     let has_text = value_text.is_some();
-    let has_children = !children.is_empty();
+    let has_children = !children.get_ref().is_empty();
     if !has_text && !has_children {
-        buf.push_str("/>");
+        buf.write_event(Event::Empty(start))?;
     } else {
-        buf.push('>');
+        buf.write_event(Event::Start(start))?;
         if let Some(text) = value_text {
-            buf.push_str(&text);
+            buf.write_event(Event::Text(BytesText::from_escaped(text)))?;
         }
-        buf.push_str(&children);
+        buf.get_mut().extend_from_slice(children.get_ref());
         if has_children {
-            buf.push('\n');
-            push_indent(buf, depth);
+            push_indent(buf, depth, options);
         }
-        buf.push_str("</");
-        buf.push_str(tag);
-        buf.push('>');
+        buf.write_event(Event::End(BytesEnd::new(tag)))?;
     }
 
     Ok(())
 }
 
 fn write_field(
-    buf: &mut String,
+    buf: &mut Writer<Vec<u8>>,
     col: &ArrayRef,
     row: usize,
     field: &Field,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let name = field.name().as_str();
 
     if col.is_null(row) {
         if let Some(ref nv) = options.null_value {
-            buf.push('\n');
-            push_indent(buf, depth);
-            push_element(buf, name, &escape_text(nv));
+            push_indent(buf, depth, options);
+            push_element(buf, name, &escape_text(nv), options)?;
         }
         return Ok(());
     }
@@ -431,9 +468,8 @@ fn write_field(
         }
         _ => {
             let text = format_field_to_xml(col, row, field.data_type(), options)?;
-            buf.push('\n');
-            push_indent(buf, depth);
-            push_element(buf, name, &escape_text(&text));
+            push_indent(buf, depth, options);
+            push_element(buf, name, &escape_text(&text), options)?;
         }
     }
 
@@ -444,13 +480,13 @@ fn write_field(
 /// primitives (`<f>1</f><f>2</f>`) and structs, with no `item` wrapper. Only a
 /// nested array wraps its inner elements, which then use `arrayElementName`.
 fn write_array(
-    buf: &mut String,
+    buf: &mut Writer<Vec<u8>>,
     col: &ArrayRef,
     row: usize,
     field_name: &str,
     item_field: &Field,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let (offsets_start, offsets_end, values): (usize, usize, ArrayRef) =
         if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
@@ -491,11 +527,9 @@ fn write_array(
                 )?;
             }
             DataType::List(inner_field) | DataType::LargeList(inner_field) => {
-                buf.push('\n');
-                push_indent(buf, depth);
-                buf.push('<');
-                buf.push_str(field_name);
-                buf.push('>');
+                push_indent(buf, depth, options);
+                check_name(field_name, options)?;
+                buf.write_event(Event::Start(BytesStart::new(field_name)))?;
                 write_array(
                     buf,
                     &values,
@@ -505,25 +539,20 @@ fn write_array(
                     depth + 1,
                     options,
                 )?;
-                buf.push('\n');
-                push_indent(buf, depth);
-                buf.push_str("</");
-                buf.push_str(field_name);
-                buf.push('>');
+                push_indent(buf, depth, options);
+                buf.write_event(Event::End(BytesEnd::new(field_name)))?;
             }
             _ => {
                 if values.is_null(item_idx) {
                     if let Some(ref nv) = options.null_value {
-                        buf.push('\n');
-                        push_indent(buf, depth);
-                        push_element(buf, field_name, &escape_text(nv));
+                        push_indent(buf, depth, options);
+                        push_element(buf, field_name, &escape_text(nv), options)?;
                     }
                 } else {
                     let text =
                         format_field_to_xml(&values, item_idx, item_field.data_type(), options)?;
-                    buf.push('\n');
-                    push_indent(buf, depth);
-                    push_element(buf, field_name, &escape_text(&text));
+                    push_indent(buf, depth, options);
+                    push_element(buf, field_name, &escape_text(&text), options)?;
                 }
             }
         }
@@ -533,12 +562,12 @@ fn write_array(
 }
 
 fn write_map(
-    buf: &mut String,
+    buf: &mut Writer<Vec<u8>>,
     col: &ArrayRef,
     row: usize,
     field_name: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let map_array = col.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
         DataFusionError::Internal(format!(
@@ -563,7 +592,7 @@ fn write_map(
             ))
         })?;
 
-    let mut inner = String::new();
+    let mut inner = Writer::new(Vec::new());
     for i in 0..num_entries {
         if keys.is_null(i) {
             return exec_err!(
@@ -582,36 +611,19 @@ fn write_map(
                 );
             }
         };
-        if key.is_empty() {
-            return exec_err!(
-                "to_xml: map field '{field_name}' has an empty key, \
-                 which is not a valid XML tag name"
-            );
-        }
-        let first = key.chars().next().unwrap_or('\0');
-        if first.is_ascii_digit() || first == '-' || first == '.' {
-            return exec_err!(
-                "to_xml: map key '{key}' starts with '{first}', \
-                 which is not a valid XML name start character"
-            );
-        }
         write_map_entry(&mut inner, values, i, &key, depth + 1, options)?;
     }
 
-    buf.push('\n');
-    push_indent(buf, depth);
-    buf.push('<');
-    buf.push_str(field_name);
-    if inner.is_empty() {
-        buf.push_str("/>");
+    push_indent(buf, depth, options);
+    check_name(field_name, options)?;
+    let start = BytesStart::new(field_name);
+    if inner.get_ref().is_empty() {
+        buf.write_event(Event::Empty(start))?;
     } else {
-        buf.push('>');
-        buf.push_str(&inner);
-        buf.push('\n');
-        push_indent(buf, depth);
-        buf.push_str("</");
-        buf.push_str(field_name);
-        buf.push('>');
+        buf.write_event(Event::Start(start))?;
+        buf.get_mut().extend_from_slice(inner.get_ref());
+        push_indent(buf, depth, options);
+        buf.write_event(Event::End(BytesEnd::new(field_name)))?;
     }
 
     Ok(())
@@ -621,18 +633,17 @@ fn write_map(
 /// indentation. A list value repeats `key` once per element (like a top-level
 /// primitive array).
 fn write_map_entry(
-    buf: &mut String,
+    buf: &mut Writer<Vec<u8>>,
     values: &ArrayRef,
     i: usize,
     key: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     if values.is_null(i) {
         if let Some(ref nv) = options.null_value {
-            buf.push('\n');
-            push_indent(buf, depth);
-            push_element(buf, key, &escape_text(nv));
+            push_indent(buf, depth, options);
+            push_element(buf, key, &escape_text(nv), options)?;
         }
         return Ok(());
     }
@@ -669,9 +680,8 @@ fn write_map_entry(
             for elem_idx in offsets_start..offsets_end {
                 if array_values.is_null(elem_idx) {
                     if let Some(ref nv) = options.null_value {
-                        buf.push('\n');
-                        push_indent(buf, depth);
-                        push_element(buf, key, &escape_text(nv));
+                        push_indent(buf, depth, options);
+                        push_element(buf, key, &escape_text(nv), options)?;
                     }
                 } else if let DataType::Struct(child_fields) = item_field.data_type() {
                     let child = array_values
@@ -690,17 +700,15 @@ fn write_map_entry(
                         item_field.data_type(),
                         options,
                     )?;
-                    buf.push('\n');
-                    push_indent(buf, depth);
-                    push_element(buf, key, &escape_text(&text));
+                    push_indent(buf, depth, options);
+                    push_element(buf, key, &escape_text(&text), options)?;
                 }
             }
         }
         val_dt => {
             let text = format_field_to_xml(values, i, val_dt, options)?;
-            buf.push('\n');
-            push_indent(buf, depth);
-            push_element(buf, key, &escape_text(&text));
+            push_indent(buf, depth, options);
+            push_element(buf, key, &escape_text(&text), options)?;
         }
     }
 
@@ -711,7 +719,7 @@ fn format_field_to_xml(
     array: &ArrayRef,
     row_idx: usize,
     data_type: &DataType,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<String> {
     match data_type {
         DataType::Timestamp(time_unit, tz_opt) => {
@@ -747,7 +755,9 @@ fn format_field_to_xml(
 }
 
 fn format_date_xml(date: chrono::NaiveDate, format: &DateTimeFormat) -> Result<String> {
-    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+    use crate::scalar::datetime::utils::format::{
+        DateTimeFormatInput, TimePrecision, TimestampKind,
+    };
 
     let datetime = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
         DataFusionError::Execution("Failed to create datetime from date".to_string())
@@ -829,7 +839,7 @@ fn format_timestamp_field(
     row_idx: usize,
     time_unit: &TimeUnit,
     tz_opt: &Option<Arc<str>>,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<String> {
     let micros = match time_unit {
         TimeUnit::Second => array.as_primitive::<TimestampSecondType>().value(row_idx) * 1_000_000,
@@ -866,7 +876,7 @@ fn format_timestamp_field(
 
         use chrono::Offset;
 
-        use crate::scalar::datetime::format::{
+        use crate::scalar::datetime::utils::format::{
             DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
         };
 
@@ -890,7 +900,7 @@ fn format_timestamp_field(
             // Use default format
             #[expect(clippy::expect_used)]
             let default_fmt =
-                DateTimeFormat::for_formatting(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(ToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
                     .expect("default timestamp LTZ format should be valid");
             Ok(default_fmt.format(input).map_err(|e| {
                 DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
@@ -903,7 +913,9 @@ fn format_timestamp_field(
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
 
-        use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+        use crate::scalar::datetime::utils::format::{
+            DateTimeFormatInput, TimePrecision, TimestampKind,
+        };
 
         let input = DateTimeFormatInput {
             datetime: naive,
@@ -920,43 +932,34 @@ fn format_timestamp_field(
     }
 }
 
-/// Spark's `StaxXmlGenerator` escapes only `&` and `<` in element text; `>` is
-/// left literal.
+/// Match the StAX escaping rules, including XML line-ending preservation and
+/// the forbidden CDATA terminator in ordinary text.
+/// StAX uses hexadecimal whitespace references.
 fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            _ => out.push(c),
-        }
-    }
-    out
+    quick_xml::escape::minimal_escape(s)
+        .replace("]]>", "]]&gt;")
+        .replace("&#13;", "&#xd;")
 }
 
-/// In attribute values Spark escapes `&`, `<` and `"`; `>` and `'` are left
-/// literal.
 fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(c),
-        }
-    }
-    out
+    quick_xml::escape::minimal_escape(s)
+        .replace('"', "&quot;")
+        .replace("&#13;", "&#xd;")
+        .replace('\n', "&#xa;")
+        .replace('\t', "&#x9;")
 }
 
-fn push_element(buf: &mut String, name: &str, content: &str) {
-    buf.push('<');
-    buf.push_str(name);
-    buf.push('>');
-    buf.push_str(content);
-    buf.push_str("</");
-    buf.push_str(name);
-    buf.push('>');
+fn push_element(
+    buf: &mut Writer<Vec<u8>>,
+    name: &str,
+    content: &str,
+    options: &ToXmlOptions,
+) -> Result<()> {
+    check_name(name, options)?;
+    buf.write_event(Event::Start(BytesStart::new(name)))?;
+    buf.write_event(Event::Text(BytesText::from_escaped(content)))?;
+    buf.write_event(Event::End(BytesEnd::new(name)))?;
+    Ok(())
 }
 
 fn to_struct_array(col: &ColumnarValue) -> Result<StructArray> {
@@ -1019,14 +1022,14 @@ mod tests {
 
     #[test]
     fn test_escape_text() {
-        // Spark escapes only `&` and `<`; `>` stays literal.
+        // Spark escapes only `&` and `<`. `>` stays literal.
         assert_eq!(escape_text("a & b < c > d"), "a &amp; b &lt; c > d");
         assert_eq!(escape_text("clean"), "clean");
     }
 
     #[test]
     fn test_escape_attr() {
-        // Spark escapes `&`, `<` and `"` in attributes; `>` and `'` stay literal.
+        // Spark escapes `&`, `<` and `"` in attributes. `>` and `'` stay literal.
         assert_eq!(escape_attr(r#"say "hi""#), "say &quot;hi&quot;");
         assert_eq!(escape_attr("it's > that"), "it's > that");
     }

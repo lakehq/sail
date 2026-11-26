@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;

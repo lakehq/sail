@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Execution adapters for system store backends.
 
 use std::future::Future;

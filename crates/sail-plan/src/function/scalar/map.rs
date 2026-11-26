@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
@@ -6,9 +8,9 @@ use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_array::SparkArray;
-use sail_function::scalar::map::map_entries::SparkMapEntries;
-use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
+use sail_function::scalar::map::map_entries::MapEntries;
+use sail_function::scalar::map::map_from::{MapFromArrays, MapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::config::MapKeyDedupPolicy;
@@ -43,20 +45,20 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         (keys, values)
     };
-    let timezone = &input.function_context.plan_config.session_timezone_label();
+    let timezone = &input.function_context.plan_config.session_timezone;
     let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
     let values = coerce_timestamp_ntz_values(values, schema, timezone)?;
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let array = ScalarUDF::from(SparkArray::new());
+    let array = ScalarUDF::from(ArrayFromValues::new());
     let keys = array.call(keys);
     let values = array.call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -137,7 +139,7 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -153,7 +155,7 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let entries = cast_map_entries_value_nullability(entries, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromEntries::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromEntries::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![entries],
         function_context: input.function_context,
     })?;
@@ -162,7 +164,7 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn map_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let map = input.arguments.one()?;
-    Ok(ScalarUDF::from(SparkMapEntries::new()).call(vec![map]))
+    Ok(ScalarUDF::from(MapEntries::new()).call(vec![map]))
 }
 
 fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -312,7 +314,7 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments = coerce_timestamp_ntz_values(
         input.arguments,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone_label(),
+        &input.function_context.plan_config.session_timezone,
     )?;
 
     // Build the result expression
@@ -331,7 +333,7 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let values = expr_fn::array_concat(values);
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let result = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let result = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -363,7 +365,7 @@ fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         expr_fn::map_keys(map),
         key,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone_label(),
+        &input.function_context.plan_config.session_timezone,
     )?;
     Ok(expr_fn::array_has(keys, key))
 }

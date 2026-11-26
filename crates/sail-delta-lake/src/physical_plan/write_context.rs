@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -73,12 +75,21 @@ impl DeltaSnapshotContext {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeltaCommitContext {
     pub base_snapshot: Option<DeltaSnapshotContext>,
+    #[serde(default)]
+    pub transaction: Option<Transaction>,
+    #[serde(default)]
+    pub identity_columns_to_track: Vec<String>,
+    #[serde(default)]
+    pub identity_writer_partitions: Option<usize>,
 }
 
 impl DeltaCommitContext {
     pub fn from_snapshot(snapshot: &DeltaSnapshot) -> Self {
         Self {
             base_snapshot: Some(DeltaSnapshotContext::from_snapshot(snapshot)),
+            identity_columns_to_track: Vec::new(),
+            identity_writer_partitions: None,
+            transaction: None,
         }
     }
 
@@ -146,7 +157,10 @@ pub fn prepare_delta_write_context(
 ) -> Result<DeltaWriteContext> {
     let input_schema =
         strip_column_mapping_metadata(&normalize_delta_schema(&apply_target_nullability(
-            &schema_without_writer_metric_columns(input_schema),
+            &schema_without_writer_metric_columns(
+                input_schema,
+                options.merge_change_data_preimage.as_deref(),
+            ),
             &options.target_nullability,
         )));
     let mut initial_actions: Vec<Action> = Vec::new();
@@ -164,8 +178,20 @@ pub fn prepare_delta_write_context(
             Some(DeltaOperation::Create { mode, .. }) => *mode,
             _ => SaveMode::Append,
         };
-        let schema_mode = get_schema_mode(options, save_mode)?;
-        handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?
+        let schema_mode = get_schema_mode(options, save_mode, sink_mode)?;
+        let (schema, mut metadata) =
+            handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?;
+        if matches!(sink_mode, PhysicalSinkMode::Overwrite)
+            && let Some(comment) = metadata_configuration.get("comment")
+            && snapshot.metadata().description() != Some(comment.as_str())
+        {
+            metadata = Some(
+                metadata
+                    .unwrap_or_else(|| snapshot.metadata().clone())
+                    .with_description(Some(comment.clone())),
+            );
+        }
+        (schema, metadata.into_iter().map(Action::Metadata).collect())
     } else {
         (input_schema.clone(), Vec::new())
     };
@@ -300,12 +326,10 @@ fn is_writer_metric_column(name: &str) -> bool {
     name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
 }
 
-fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
-    if !schema
-        .fields()
-        .iter()
-        .any(|field| is_writer_metric_column(field.name()))
-    {
+fn schema_without_writer_metric_columns(schema: &SchemaRef, preimage: Option<&str>) -> SchemaRef {
+    if !schema.fields().iter().any(|field| {
+        is_writer_metric_column(field.name()) || preimage == Some(field.name().as_str())
+    }) {
         return Arc::clone(schema);
     }
 
@@ -313,7 +337,9 @@ fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
         schema
             .fields()
             .iter()
-            .filter(|field| !is_writer_metric_column(field.name()))
+            .filter(|field| {
+                !is_writer_metric_column(field.name()) && preimage != Some(field.name().as_str())
+            })
             .map(|field| field.as_ref().clone())
             .collect::<Vec<_>>(),
     ))
@@ -384,8 +410,12 @@ fn operation_for_sink_mode(
 fn get_schema_mode(
     options: &DeltaWriterExecOptions,
     save_mode: SaveMode,
+    sink_mode: &PhysicalSinkMode,
 ) -> Result<Option<SchemaMode>> {
-    match (options.merge_schema, options.overwrite_schema) {
+    // Conditional overwrites retain the table schema unless schema merging is enabled.
+    let overwrite_schema =
+        options.overwrite_schema && !matches!(sink_mode, PhysicalSinkMode::OverwriteIf { .. });
+    match (options.merge_schema, overwrite_schema) {
         (true, true) => Err(DataFusionError::Plan(
             "Cannot specify both mergeSchema and overwriteSchema options".to_string(),
         )),
@@ -408,7 +438,7 @@ fn handle_schema_evolution(
     input_schema: &SchemaRef,
     schema_mode: Option<SchemaMode>,
     partition_columns: &[String],
-) -> Result<(SchemaRef, Vec<Action>)> {
+) -> Result<(SchemaRef, Option<Metadata>)> {
     let table_arrow_schema = Arc::new(
         snapshot
             .metadata()
@@ -469,9 +499,9 @@ fn handle_schema_evolution(
                 let (_final_kernel, updated_metadata) =
                     evolve_schema(&current_kernel, &candidate_kernel, current_metadata, mode)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                Ok((merged_schema, vec![Action::Metadata(updated_metadata)]))
+                Ok((merged_schema, Some(updated_metadata)))
             } else {
-                Ok((table_arrow_schema, Vec::new()))
+                Ok((table_arrow_schema, None))
             }
         }
         Some(SchemaMode::Overwrite) => {
@@ -486,14 +516,11 @@ fn handle_schema_evolution(
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let updated_metadata =
                 updated_metadata.with_partition_columns(partition_columns.to_vec());
-            Ok((
-                input_schema.clone(),
-                vec![Action::Metadata(updated_metadata)],
-            ))
+            Ok((input_schema.clone(), Some(updated_metadata)))
         }
         None => {
             validate_schema_compatibility(&table_arrow_schema, input_schema)?;
-            Ok((table_arrow_schema, Vec::new()))
+            Ok((table_arrow_schema, None))
         }
     }
 }

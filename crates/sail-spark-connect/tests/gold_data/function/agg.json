@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Interval(YearMonth) (DataType: Interval(YearMonth))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Interval(YearMonth), Decimal128(1, 1), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -353,7 +353,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(non-null Decimal(1, 1)) (DataType: List(non-null Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -379,7 +379,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -952,6 +952,32 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collect_union(col) FROM VALUES (array(1, 2)), (array(2, 3)), (array(1)) AS tab(col);",
+        "result": [
+          "[1,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_union(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: collect_union"
       }
     },
     {
@@ -2473,7 +2499,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Interval(YearMonth) (DataType: Interval(YearMonth))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Interval(YearMonth), Decimal128(1, 1), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -2499,7 +2525,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(non-null Decimal(1, 1)) (DataType: List(non-null Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -2525,7 +2551,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "success": "ok"
       }
     },
     {
@@ -2569,7 +2595,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Function 'percentile_cont' requires Float, but received Interval(YearMonth) (DataType: Interval(YearMonth)).. No function matches the given name and argument types 'percentile_cont(Interval(YearMonth), Decimal128(2, 2))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercentile_cont(expr: Float, percentile: Float64)"
+        "failure": "error in DataFusion: Error during planning: Function 'percentile_cont' failed to match any signature, errors: Error during planning: Function 'percentile_cont' requires Decimal, but received Interval(YearMonth) (DataType: Interval(YearMonth)).,Error during planning: Function 'percentile_cont' requires Float, but received Interval(YearMonth) (DataType: Interval(YearMonth)).. No function matches the given name and argument types 'percentile_cont(Interval(YearMonth), Decimal128(2, 2))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercentile_cont(expr: Decimal, percentile: Float64)\n\tpercentile_cont(expr: Float, percentile: Float64)"
       }
     },
     {
@@ -4180,6 +4206,28 @@
     },
     {
       "input": {
+        "query": "SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "theta_sketch_estimate(theta_intersection_agg(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Execution error: theta_intersection_agg cannot produce a result without any non-null input sketches"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
         "result": [
           "3"
@@ -4400,6 +4448,28 @@
     },
     {
       "input": {
+        "query": "SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: tuple_intersection_agg_double"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary, 12, 'sum')) FROM VALUES (1, 5.0D), (1, 1.0D), (2, 2.0D), (2, 3.0D), (3, 2.2D) tab(key, summary);",
         "result": [
           "3.0"
@@ -4462,6 +4532,28 @@
       },
       "output": {
         "failure": "not implemented: function: tuple_sketch_agg_integer"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: tuple_intersection_agg_integer"
       }
     },
     {

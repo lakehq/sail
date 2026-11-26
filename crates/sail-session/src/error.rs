@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
@@ -15,6 +17,10 @@ pub enum SessionError {
     IoError(#[from] std::io::Error),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("invalid argument: session not found: {0}")]
+    NotFound(String),
+    #[error("invalid argument: session {0} is not running")]
+    NotRunning(String),
     #[error("internal error: {0}")]
     InternalError(String),
 }

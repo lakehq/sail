@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! System store mutations.
 
 use chrono::{DateTime, Utc};
@@ -52,10 +54,18 @@ where
         SystemEvent::OptionUpdated { key, value } => write_option_updated_event(writer, key, value),
         SystemEvent::SessionCreated {
             session_id,
+            client_session_id,
             user_id,
             status,
             created_at,
-        } => write_session_created_event(writer, session_id, user_id, status, created_at),
+        } => write_session_created_event(
+            writer,
+            session_id,
+            client_session_id,
+            user_id,
+            status,
+            created_at,
+        ),
         SystemEvent::SessionUpdated {
             session_id,
             status,
@@ -99,6 +109,28 @@ where
             status,
             created_at,
         ),
+        SystemEvent::StageResized {
+            session_id,
+            job_id,
+            stage,
+            partitions,
+            inputs,
+            distribution,
+        } => writer
+            .table_mut::<StageTable>()
+            .update_if_present(
+                &StagePrimaryKey {
+                    session_id,
+                    job_id,
+                    stage,
+                },
+                |row| {
+                    row.partitions = partitions;
+                    row.inputs = inputs;
+                    row.distribution = distribution;
+                },
+            )
+            .map(|_| ()),
         SystemEvent::StageUpdated {
             session_id,
             job_id,
@@ -173,6 +205,7 @@ fn write_option_updated_event<W: StoreWriter>(
 fn write_session_created_event<W: StoreWriter>(
     writer: &mut W,
     session_id: String,
+    client_session_id: String,
     user_id: String,
     status: String,
     created_at: DateTime<Utc>,
@@ -185,6 +218,7 @@ fn write_session_created_event<W: StoreWriter>(
             },
             SessionRow {
                 session_id,
+                client_session_id,
                 user_id,
                 status,
                 created_at,

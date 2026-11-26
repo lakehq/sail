@@ -15,10 +15,11 @@ from typing import Any
 
 import pytest
 
-from pysail.testing.spark.utils.parity import (
+from pysail.testing._dev.spark.utils.parity import (
     assert_math_function_frames_equal,
     normalize_datetime_dtypes,
     normalize_pandas_data_frame,
+    normalize_pandas_nulls,
 )
 
 
@@ -183,6 +184,8 @@ def patch_pandas_test_utils():
         right = normalize_pandas_data_frame(right)
         left = normalize_datetime_dtypes(left)
         right = normalize_datetime_dtypes(right)
+        left = normalize_pandas_nulls(left)
+        right = normalize_pandas_nulls(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -260,6 +263,14 @@ def _spark_major_version() -> int:
 
 
 SKIPPED_SPARK_TESTS = [
+    # These tests manage the Apache Spark local JVM server, outside the Sail parity scope.
+    # Their cleanup closes clients without clearing the active/default session references,
+    # causing later tests on the same worker (especially UDTFs) to fail with
+    # NO_ACTIVE_OR_DEFAULT_SESSION even after creating a new session.
+    TestMarker(
+        keywords=["LocalConnectServerReuseTests"],
+        reason="Tests the Apache Spark local JVM server lifecycle, which Sail does not implement",
+    ),
     TestMarker(
         keywords=["test_can_create_multiple_sessions_to_different_remotes"],
         reason="Client keeps retrying setting session config for invalid remote endpoints",
@@ -318,6 +329,14 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_arrow_cogrouped_map.py", "test_with_local_data"],
         reason="Flaky test",
+    ),
+    TestMarker(
+        keywords=[
+            "test_parity_arrow_cogrouped_map_misc.py",
+            "CogroupedMapInArrowMiscParityTests",
+            "test_with_local_data",
+        ],
+        reason="The assertion compares co-group output in a fixed row order without ordering the DataFrame",
     ),
     TestMarker(
         keywords=["test_python_udf_segfault"],

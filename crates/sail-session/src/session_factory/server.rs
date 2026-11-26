@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::config::ConfigNonZeroUsize;
@@ -16,6 +18,8 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
+use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
@@ -30,6 +34,7 @@ use crate::session_manager::SessionManagerActor;
 
 pub struct ServerSessionInfo {
     pub session_id: String,
+    pub client_session_id: String,
     pub user_id: String,
     pub session_manager: ActorHandle<SessionManagerActor>,
     pub job_runner: Option<Box<dyn JobRunner>>,
@@ -123,13 +128,23 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
             )))
+            .with_extension(Arc::new(
+                SharedCteConfig::new(self.config.optimizer.share_cte_definitions)
+                    .with_spills_kept_rows(!matches!(
+                        self.config.mode,
+                        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+                    )),
+            ))
+            .with_extension(Arc::new(ShuffleWriteConfig::new(
+                self.config.cluster.shuffle_write_buffer_size,
+            )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,
             &self.config.parquet,
-        );
+        )?;
         self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
@@ -183,6 +198,13 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        // Coordinated fallback shares state across partitions in one process.
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            execution.enable_nlj_coordinated_fallback = false;
+        }
         Ok(())
     }
 

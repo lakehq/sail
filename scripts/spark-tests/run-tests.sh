@@ -12,6 +12,8 @@ echo "Python environment: ${VIRTUAL_ENV}"
 
 project_path="$(git rev-parse --show-toplevel)"
 
+export PYSAIL_SOURCE_PATH="${project_path}/python/pysail"
+
 case "$(basename "${VIRTUAL_ENV}")" in
   test-spark.*)
     plugin_args=("-p" "plugins.spark")

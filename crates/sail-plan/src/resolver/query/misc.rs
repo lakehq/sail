@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -93,6 +95,8 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
+        // Binding the parameters rewrites the plan, including the first references.
+        let input = Self::scan_shared_cte_references(input, state)?;
         let input = if !positional_params.is_empty() {
             input.with_param_values(ParamValues::from(positional_params))?
         } else {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub use sail_common_datafusion::variant::{
     DEFAULT_VARIANT_INFERENCE_NODE_BUDGET, VariantShreddingPlan, apply_variant_shredding_plan,
     build_variant_shredding_plan, unshred_shredded_variants_for_write,

@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -53,12 +43,7 @@ impl DeltaTypeConverter {
         let input_type = input_field.data_type();
 
         if table_type == input_type {
-            let is_nullable = table_field.is_nullable() || input_field.is_nullable();
-            return Ok(Field::new(
-                table_field.name(),
-                table_type.clone(),
-                is_nullable,
-            ));
+            return Ok(table_field.clone());
         }
 
         let merged_type = match (table_type, input_type) {
@@ -133,7 +118,7 @@ impl DeltaTypeConverter {
                 let merged_key = Self::promote_field_types(t_key, i_key)?;
                 let merged_val = Self::promote_field_types(t_val, i_val)?;
                 let kv_struct = DataType::Struct(vec![merged_key, merged_val].into());
-                let kv_field = Field::new(table_kv.name(), kv_struct, false);
+                let kv_field = table_kv.as_ref().clone().with_data_type(kv_struct);
                 let _ = i_sorted;
                 Some(DataType::Map(Arc::new(kv_field), *t_sorted))
             }
@@ -185,8 +170,8 @@ impl DeltaTypeConverter {
         };
 
         if let Some(new_type) = merged_type {
-            let is_nullable = table_field.is_nullable() || input_field.is_nullable();
-            Ok(Field::new(table_field.name(), new_type, is_nullable))
+            // Schema merging changes types, not existing constraints or field metadata.
+            Ok(table_field.clone().with_data_type(new_type))
         } else {
             Err(DataFusionError::Plan(format!(
                 "Schema evolution failed: incompatible types for field '{}'. Cannot merge from {:?} to {:?}. Consider using overwriteSchema=true if you want to replace the schema entirely.",
@@ -305,15 +290,14 @@ mod tests {
 
     #[test]
     fn test_promote_field_types() {
-        let table_field = Field::new("test", DataType::Int32, false);
+        let table_field = Field::new("test", DataType::Int32, false)
+            .with_metadata([("comment".to_string(), "keep".to_string())]);
         let input_field = Field::new("test", DataType::Int32, true);
 
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        assert!(result.is_nullable());
-        assert_eq!(result.data_type(), &DataType::Int32);
-        assert_eq!(result.name(), "test");
+        assert_eq!(result, table_field);
     }
 
     #[test]
@@ -324,7 +308,7 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        assert!(result.is_nullable());
+        assert!(!result.is_nullable());
         assert_eq!(result.data_type(), &DataType::LargeUtf8);
     }
 
@@ -336,8 +320,44 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        assert!(result.is_nullable());
+        assert!(!result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Decimal128(12, 2));
+    }
+
+    #[test]
+    fn test_nested_promotion_preserves_field_properties() -> Result<()> {
+        let table_leaf = Field::new("value", DataType::Int32, false)
+            .with_metadata([("comment".to_string(), "keep".to_string())]);
+        let input_leaf = Field::new("value", DataType::Int64, true)
+            .with_metadata([("comment".to_string(), "replace".to_string())]);
+        let promoted_leaf = table_leaf.clone().with_data_type(DataType::Int64);
+        let wrap = |leaf: Field| {
+            let key = Field::new("key", DataType::Utf8, false);
+            [
+                DataType::Struct(vec![leaf.clone()].into()),
+                DataType::List(Arc::new(leaf.clone())),
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(vec![key, leaf].into()),
+                        false,
+                    )),
+                    false,
+                ),
+            ]
+        };
+        for ((table_type, input_type), expected_type) in wrap(table_leaf)
+            .into_iter()
+            .zip(wrap(input_leaf))
+            .zip(wrap(promoted_leaf))
+        {
+            let table_field = Field::new("nested", table_type, false)
+                .with_metadata([("comment".to_string(), "outer".to_string())]);
+            let input_field = Field::new("nested", input_type, true);
+            let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
+            assert_eq!(result, table_field.with_data_type(expected_type));
+        }
+        Ok(())
     }
 
     #[test]

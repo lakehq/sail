@@ -1,21 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-// [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
+// SPDX-FileAttributionText: Notice: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/NOTICE
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -340,6 +326,12 @@ impl ManifestWriter {
     }
 
     pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+        self.to_avro_bytes_with_limit(usize::MAX)
+    }
+
+    pub(crate) fn to_avro_bytes_with_limit(&self, limit: usize) -> Result<Vec<u8>, String> {
+        use crate::spec::avro_utils::{LimitedWriter, check_avro_record_size};
+
         if self.metadata.format_version == FormatVersion::V1
             && self.metadata.content != ManifestContentType::Data
         {
@@ -352,21 +344,26 @@ impl ManifestWriter {
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
-            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
-        let mut writer = create_avro_writer(&encoding_schema, Vec::new())
-            .map_err(|error| format!("Avro writer creation error: {error}"))?;
+            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version)?;
+        let mut writer =
+            create_avro_writer(&encoding_schema, LimitedWriter::new(Vec::new(), limit))
+                .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         // Add user metadata per Iceberg spec
-        let schema_json = serde_json::to_vec(&self.metadata.schema)
+        let mut schema_json = LimitedWriter::new(Vec::new(), limit);
+        serde_json::to_writer(&mut schema_json, &self.metadata.schema)
             .map_err(|e| format!("Fail to serialize table schema: {e}"))?;
+        let schema_json = schema_json.into_inner();
         writer
             .add_user_metadata("schema".to_string(), schema_json)
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
         writer
             .add_user_metadata("schema-id".to_string(), self.metadata.schema_id.to_string())
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
-        let part_fields = serde_json::to_vec(&self.metadata.partition_spec.fields())
+        let mut part_fields = LimitedWriter::new(Vec::new(), limit);
+        serde_json::to_writer(&mut part_fields, &self.metadata.partition_spec.fields())
             .map_err(|e| format!("Fail to serialize partition spec: {e}"))?;
+        let part_fields = part_fields.into_inner();
         writer
             .add_user_metadata("partition-spec".to_string(), part_fields)
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
@@ -407,6 +404,8 @@ impl ManifestWriter {
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
+            check_avro_record_size(&encoding_schema, &value, limit)
+                .map_err(|e| format!("Avro record size error: {e}"))?;
             writer
                 .append_value(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
@@ -414,8 +413,14 @@ impl ManifestWriter {
 
         let encoded = writer
             .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))?;
-        super::replace_avro_schema_header(&encoded, &declared_schema, &partition_type)
+            .map_err(|e| format!("Avro writer finalize error: {e}"))?
+            .into_inner();
+        super::replace_avro_schema_header_with_limit(
+            &encoded,
+            &declared_schema,
+            &partition_type,
+            limit,
+        )
     }
 }
 

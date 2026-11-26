@@ -1,0 +1,328 @@
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Test Delta Lake write options (write_batch_size, target_file_size) in Sail.
+"""
+
+import json
+from urllib.parse import unquote
+
+import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
+import pytest
+from pyspark.sql.types import Row
+
+
+def test_delta_write_option_write_batch_size(spark, tmp_path):
+    """Test Delta Lake write with write_batch_size option"""
+    delta_path = tmp_path / "delta_write_batch_size"
+
+    # Create test data with enough rows to test batching
+    test_data = [
+        Row(id=i, name=f"user_{i}", score=float(i * 0.1))
+        for i in range(1, 101)  # 100 rows
+    ]
+    df = spark.createDataFrame(test_data)
+
+    # Test with different write_batch_size values
+    for batch_size in [10, 25, 50]:
+        batch_path = delta_path / f"batch_{batch_size}"
+
+        # Write with specific batch size
+        df.write.format("delta").mode("overwrite").option("write_batch_size", str(batch_size)).save(str(batch_path))
+
+        # Read back and verify data integrity
+        result_df = spark.read.format("delta").load(f"{batch_path}").sort("id")
+        result_data = result_df.collect()
+
+        # Verify all data is present and correct
+        assert len(result_data) == 100
+        assert result_data[0].id == 1
+        assert result_data[-1].id == 100
+        assert result_data[0].name == "user_1"
+        assert result_data[-1].name == "user_100"
+
+
+def test_delta_write_option_target_file_size(spark, tmp_path):
+    """Test Delta Lake write with target_file_size option"""
+    delta_path = tmp_path / "delta_target_file_size"
+
+    test_data = [
+        Row(
+            id=i,
+            name=f"user_with_very_long_name_{i}" * 15,
+            description=f"detailed_description_content_{i}" * 10,
+            metadata=f"additional_metadata_field_{i}" * 8,
+        )
+        for i in range(1, 1001)
+    ]
+    df = spark.createDataFrame(test_data)
+
+    for file_size in [50000, 100000, 150000]:
+        size_path = delta_path / f"size_{file_size}"
+
+        df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).option(
+            "write_batch_size", "100"
+        ).save(str(size_path))
+
+        result_df = spark.read.format("delta").load(f"{size_path}").sort("id")
+        result_data = result_df.collect()
+
+        assert len(result_data) == 1000
+        assert result_data[0].id == 1
+        assert result_data[-1].id == 1000
+        assert "user_with_very_long_name_1" in result_data[0].name
+        assert "user_with_very_long_name_1000" in result_data[-1].name
+
+
+def test_delta_write_options_combined(spark, tmp_path):
+    """Test Delta Lake write with both write_batch_size and target_file_size options"""
+    delta_path = tmp_path / "delta_combined_options"
+
+    # Create test data
+    test_data = [
+        Row(id=i, name=f"user_{i}", data=f"data_content_{i}" * 5, score=float(i * 0.01))
+        for i in range(1, 151)  # 150 rows
+    ]
+    df = spark.createDataFrame(test_data)
+
+    # Write with both options
+    df.write.format("delta").mode("overwrite").option("write_batch_size", "20").option("target_file_size", "2048").save(
+        str(delta_path)
+    )
+
+    # Read back and verify data integrity
+    result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
+    result_data = result_df.collect()
+
+    # Verify all data is present and correct
+    assert len(result_data) == 150
+    assert result_data[0].id == 1
+    assert result_data[-1].id == 150
+    assert result_data[0].name == "user_1"
+    assert result_data[-1].name == "user_150"
+
+    # Verify data types are preserved
+    assert isinstance(result_data[0].score, float)
+    assert result_data[0].score == 0.01
+    assert result_data[-1].score == 1.5
+
+
+def test_delta_write_options_with_partitioning(spark, tmp_path):
+    """Test Delta Lake write options combined with partitioning"""
+    delta_path = tmp_path / "delta_options_partitioned"
+
+    # Create partitioned test data
+    test_data = [
+        Row(id=i, category=f"cat_{i % 3}", name=f"user_{i}", value=i * 10)
+        for i in range(1, 61)  # 60 rows across 3 partitions
+    ]
+    df = spark.createDataFrame(test_data)
+
+    # Write with options and partitioning
+    df.write.format("delta").mode("overwrite").option("write_batch_size", "15").option(
+        "target_file_size", "1024"
+    ).partitionBy("category").save(str(delta_path))
+
+    # Read back and verify data integrity
+    result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
+    result_data = result_df.collect()
+
+    # Verify all data is present and correct
+    assert len(result_data) == 60
+    assert result_data[0].id == 1
+    assert result_data[-1].id == 60
+
+    # Verify partitioning worked
+    categories = {row.category for row in result_data}
+    assert categories == {"cat_0", "cat_1", "cat_2"}
+
+    # Test partition filtering
+    filtered_df = spark.read.format("delta").load(f"{delta_path}").filter("category = 'cat_0'")
+    filtered_data = filtered_df.collect()
+    assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category
+
+
+def test_delta_rotated_files_match_log_sizes_and_statistics(spark, tmp_path):
+    path = tmp_path / "rotated"
+    rows = 4096
+    (
+        spark.range(rows)
+        .coalesce(1)
+        .write.format("delta")
+        .option("target_file_size", "2048")
+        .option("write_batch_size", "128")
+        .save(str(path))
+    )
+    adds = [
+        action["add"]
+        for log in (path / "_delta_log").glob("*.json")
+        for line in log.read_text().splitlines()
+        if "add" in (action := json.loads(line))
+    ]
+    assert len(adds) > 1
+    assert {path / unquote(add["path"]) for add in adds} == set(path.rglob("*.parquet"))
+    total = 0
+    for add in adds:
+        file = path / unquote(add["path"])
+        metadata = pq.read_metadata(file)
+        assert add["size"] == file.stat().st_size
+        assert metadata.num_rows > 0
+        assert metadata.num_rows == json.loads(add["stats"])["numRecords"]
+        total += metadata.num_rows
+    assert total == rows
+    assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == list(range(rows))
+
+
+@pytest.mark.parametrize("global_sort", [False, True], ids=["local-sort", "global-sort"])
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_delta_write_preserves_input_sort(spark, tmp_path, global_sort, partitioned):
+    size = 20000
+    df = spark.range(size, numPartitions=4).select(
+        ((F.col("id") * 7919) % size).alias("k"),
+        (F.col("id") % 3).alias("p"),
+    )
+    # Include the table partition keys in the requested ordering when writing a partitioned table.
+    ordering = [F.col("p").asc_nulls_last(), F.col("k").desc()] if partitioned else [F.col("k").desc()]
+    ordered = df.orderBy(*ordering) if global_sort else df.repartition(4, "p").sortWithinPartitions(*ordering)
+    writer = ordered.write.format("delta")
+    if partitioned:
+        writer = writer.partitionBy("p")
+    path = tmp_path / "sorted_delta"
+    writer.save(str(path))
+
+    files = list(path.rglob("*.parquet"))
+    assert files
+    count = 0
+    for file in files:
+        values = pq.ParquetFile(file).read(columns=["k"]).column(0).to_pylist()
+        assert values == sorted(values, reverse=True)
+        count += len(values)
+    assert count == size
+    assert spark.read.format("delta").load(str(path)).count() == size
+
+
+def _write_transaction(session, path, app, version, value, mode="append"):
+    data = session.createDataFrame([(value,)], "id LONG").repartition(2)
+    data.write.format("delta").mode(mode).options(txnAppId=app, txnVersion=version).save(str(path))
+
+
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+def test_idempotent_write(spark, tmp_path, mode):
+    path = tmp_path / "transactions"
+    # Use different values on retries so a duplicate overwrite is also observable.
+    for value, (app, version) in enumerate([("a", 1), ("a", 1), ("a", 0), ("b", 0), ("a", 2)]):
+        _write_transaction(spark, path, app, version, value, mode)
+    expected = [0, 3, 4] if mode == "append" else [4]
+    assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == expected
+    commits = sorted((path / "_delta_log").glob("*.json"))
+    assert len(commits) == 3
+    for commit, (app, version) in zip(commits, [("a", 1), ("b", 0), ("a", 2)], strict=True):
+        actions = [json.loads(line) for line in commit.read_text().splitlines()]
+        assert any("add" in action for action in actions)
+        (txn,) = [action["txn"] for action in actions if "txn" in action]
+        assert (txn["appId"], txn["version"]) == (app, version)
+        assert txn["lastUpdated"] > 0
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"txnAppId": "a"}, "txnVersion"),
+        ({"txnVersion": "0"}, "txnAppId"),
+        *[({"txnAppId": "a", "txnVersion": v}, "non-negative integer") for v in ["", "-1", "1.5", str(2**63)]],
+    ],
+)
+def test_invalid_transaction_options(spark, tmp_path, options, error):
+    path = tmp_path / "invalid"
+    with pytest.raises(Exception, match=error):
+        spark.range(1).write.format("delta").mode("append").options(**options).save(str(path))
+    assert not path.exists()
+
+
+@pytest.mark.integration
+def test_idempotent_write_delta_spark_interop(delta_jvm_spark, spark, tmp_path):
+    path = tmp_path / "shared"
+    delta_jvm_spark = delta_jvm_spark.newSession()
+    delta_jvm_spark.conf.set("spark.databricks.delta.snapshotPartitions", "1")
+    _write_transaction(delta_jvm_spark, path, "app", 0, 10)
+    _write_transaction(spark, path, "app", 0, 11)
+    _write_transaction(spark, path, "app", 1, 12)
+    _write_transaction(delta_jvm_spark, path, "app", 1, 13)
+    for session in [spark, delta_jvm_spark]:
+        assert sorted(row.id for row in session.read.format("delta").load(str(path)).collect()) == [10, 12]
+    assert len(list((path / "_delta_log").glob("*.json"))) == 2
+
+
+def test_empty_idempotent_write_advances_version(spark, tmp_path):
+    path = str(tmp_path / "empty")
+    for size in [0, 3]:
+        spark.range(size).write.format("delta").mode("append").options(txnAppId="app", txnVersion=1).save(path)
+    assert spark.read.format("delta").load(path).count() == 0
+
+
+def test_expired_transaction_can_be_reused(spark, tmp_path):
+    path = tmp_path / "expired"
+    spark.range(1).write.format("delta").options(
+        **{"delta.setTransactionRetentionDuration": "interval 0 seconds", "txnAppId": "app", "txnVersion": "1"}
+    ).save(str(path))
+    _write_transaction(spark, path, "app", 1, 1)
+    assert spark.read.format("delta").load(str(path)).count() == 2
+
+
+def test_idempotent_write_after_checkpoint(spark, tmp_path):
+    path = tmp_path / "checkpoint"
+    spark.range(1).write.format("delta").options(
+        **{"delta.checkpointInterval": "1", "txnAppId": "first", "txnVersion": "7"}
+    ).save(str(path))
+    _write_transaction(spark, path, "second", 0, 1)
+    assert list((path / "_delta_log").glob("*.checkpoint.parquet"))
+    _write_transaction(spark, path, "first", 6, 2)
+    assert spark.read.format("delta").load(str(path)).count() == 2
+    assert len(list((path / "_delta_log").glob("*.json"))) == 2
+
+
+def test_idempotent_save_as_table_overwrite_preserves_catalog_properties(spark, tmp_path):
+    path = tmp_path / "table"
+    table = "idempotent_overwrite"
+
+    def overwrite(version, value, size=1):
+        spark.range(value, value + size).write.format("delta").mode("overwrite").options(
+            path=str(path), txnAppId="job", txnVersion=version, label=str(value)
+        ).saveAsTable(table)
+
+    def catalog_label():
+        return spark.sql("SHOW TBLPROPERTIES idempotent_overwrite ('option.label')").first().value
+
+    def commits():
+        return sorted((path / "_delta_log").glob("*.json"))
+
+    try:
+        overwrite(1, 10)
+        original = commits()
+        assert len(original) == 1
+        for version in [1, 0]:
+            overwrite(version, 11)
+            assert commits() == original
+            assert [row.id for row in spark.table(table).collect()] == [10]
+            assert catalog_label() == "10"
+
+        # An empty input is still a real overwrite when the version advances.
+        overwrite(2, 12, size=0)
+        assert len(commits()) == 2
+        assert spark.table(table).count() == 0
+        assert catalog_label() == "12"
+    finally:
+        spark.sql("DROP TABLE IF EXISTS idempotent_overwrite")
+
+
+def test_save_as_table_registers_existing_path_on_idempotent_retry(spark, tmp_path):
+    path = tmp_path / "existing"
+    writer = spark.range(1).write.format("delta").mode("overwrite").options(txnAppId="job", txnVersion=1)
+    writer.save(str(path))
+    try:
+        writer.option("path", str(path)).saveAsTable("register_existing_delta")
+        assert [row.id for row in spark.table("register_existing_delta").collect()] == [0]
+        assert len(list((path / "_delta_log").glob("*.json"))) == 1
+    finally:
+        spark.sql("DROP TABLE IF EXISTS register_existing_delta")

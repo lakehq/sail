@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/snapshot/log_data.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/snapshot/log_data.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -28,10 +15,11 @@ use datafusion::arrow::array::{
 };
 use datafusion::common::Column;
 use datafusion::common::scalar::ScalarValue;
-use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::Accumulator;
 use log::warn;
+use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
+use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 
 use super::DeltaSnapshot;
 use crate::datasource::pruning::{
@@ -472,6 +460,10 @@ impl<'a> SnapshotPruningStats<'a> {
             // useful for pruning, but are not safe inputs for metadata-only extrema.
             min_value = min_value.to_inexact();
             max_value = max_value.to_inexact();
+        }
+        // TODO: Pruning still uses the float maximum, which leaves out NaN.
+        if !is_partition && data_type.is_floating() {
+            (min_value, max_value) = float_file_statistics_bounds(min_value, max_value, None);
         }
         let contains_timestamp = arrow_type_contains_timestamp(&data_type);
         if !is_partition && contains_timestamp {

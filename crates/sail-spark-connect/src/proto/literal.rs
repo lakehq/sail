@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_common::spec::data_type_to_null_literal;
 use sail_sql_analyzer::literal::numeric::parse_decimal_string;
@@ -217,6 +219,9 @@ impl TryFrom<Literal> for spec::Literal {
             }
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"));
+            }
+            LiteralType::TimestampNtzNanos(_) | LiteralType::TimestampLtzNanos(_) => {
+                return Err(SparkError::unsupported("nanosecond timestamp literal"));
             }
             LiteralType::Time(Time { nano, precision }) => {
                 // Spark TIME literals carry nanoseconds since midnight.

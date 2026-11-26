@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -13,7 +15,7 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -31,6 +33,35 @@ impl ResolvedCatalogTableReference {
 }
 
 impl CatalogManager {
+    /// In the delta namespace, an unqualified file name can also be a table name.
+    pub async fn delta_table_path<'a, T: AsRef<str>>(
+        &self,
+        name: &'a [T],
+    ) -> CatalogResult<Option<&'a str>> {
+        let [format, path] = name else {
+            return Ok(None);
+        };
+        if !format.as_ref().eq_ignore_ascii_case("delta") {
+            return Ok(None);
+        }
+        let path = path.as_ref();
+        if std::path::Path::new(path).is_absolute()
+            || path.contains(":/")
+            || path.starts_with("./")
+            || path.starts_with("../")
+        {
+            return Ok(Some(path));
+        }
+        match self
+            .get_database_by_qualifier(std::slice::from_ref(format))
+            .await
+        {
+            Ok(_) => Ok(None),
+            Err(CatalogError::NotFound(_, _)) => Ok(Some(path)),
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn rename_table(
         &self,
         table: &[String],
@@ -72,6 +103,28 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    pub async fn stage_table_replacement<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: impl Into<StageTableOptions>,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .stage_table_replacement(&database, &table, options.into())
+            .await
+    }
+
+    pub async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: crate::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        let (provider, _, _) = self.resolve_object(&replacement.catalog_table)?;
+        provider
+            .publish_table_replacement(replacement, publication)
+            .await
+    }
+
     pub fn create_table_metadata_requirement<T: AsRef<str>>(
         &self,
         table: &[T],
@@ -79,6 +132,17 @@ impl CatalogManager {
     ) -> CatalogResult<CreateTableMetadataRequirement> {
         let (provider, _, _) = self.resolve_object(table)?;
         provider.create_table_metadata_requirement(options)
+    }
+
+    pub async fn list_file_partitions<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<crate::provider::CatalogFilePartition>>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .list_file_partitions(&database, &table, partition_values)
+            .await
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
@@ -119,9 +183,10 @@ impl CatalogManager {
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<LakehouseResolvedTable> {
         let (provider, database, name) = self.resolve_object(table)?;
-        provider
-            .resolve_lakehouse_table(&database, &name, request)
-            .await
+        let (_, resolved) = provider
+            .get_lakehouse_table(&database, &name, request)
+            .await?;
+        Ok(resolved)
     }
 
     pub async fn resolve_lakehouse_table_status<T: AsRef<str>>(
@@ -302,9 +367,49 @@ impl CatalogManager {
         &self,
         reference: &[T],
     ) -> CatalogResult<TableStatus> {
+        self.get_table_or_view_with(reference, self.get_table(reference), |status| status)
+            .await
+    }
+
+    /// Returns a catalog table together with its lakehouse resolution, loaded from one
+    /// catalog response.
+    pub async fn get_lakehouse_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .get_lakehouse_table(&database, &name, request)
+            .await
+    }
+
+    /// Like [`Self::get_table_or_view`], but a catalog table also comes with its lakehouse
+    /// resolution, as returned by [`Self::get_lakehouse_table`].
+    pub async fn get_lakehouse_table_or_view<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, Option<LakehouseResolvedTable>)> {
+        let table = async {
+            let (status, resolved) = self.get_lakehouse_table(reference, request).await?;
+            Ok((status, Some(resolved)))
+        };
+        self.get_table_or_view_with(reference, table, |status| (status, None))
+            .await
+    }
+
+    /// Looks up temporary views, then the catalog table with `table`, then catalog views.
+    /// Views are converted with `view`.
+    async fn get_table_or_view_with<T: AsRef<str>, R>(
+        &self,
+        reference: &[T],
+        table: impl Future<Output = CatalogResult<R>>,
+        view: impl Fn(TableStatus) -> R,
+    ) -> CatalogResult<R> {
         if let [name] = reference {
             match self.get_temporary_view(name.as_ref()).await {
-                Ok(x) => return Ok(x),
+                Ok(x) => return Ok(view(x)),
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
@@ -312,15 +417,18 @@ impl CatalogManager {
         if let [x @ .., name] = reference
             && self.state()?.is_global_temporary_view_database(x)
         {
-            return self.get_global_temporary_view(name.as_ref()).await;
+            return self
+                .get_global_temporary_view(name.as_ref())
+                .await
+                .map(view);
         }
-        match self.get_table(reference).await {
+        match table.await {
             Ok(x) => return Ok(x),
             Err(CatalogError::NotFound(_, _)) => {}
             Err(e) => return Err(e),
         }
         match self.get_view(reference).await {
-            Ok(x) => Ok(x),
+            Ok(x) => Ok(view(x)),
             Err(CatalogError::NotFound(_, name)) => Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),

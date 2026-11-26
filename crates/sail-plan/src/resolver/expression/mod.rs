@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use async_recursion::async_recursion;
@@ -138,10 +140,10 @@ impl PlanResolver<'_> {
             Expr::Cast {
                 expr,
                 cast_to_type,
-                rename,
+                naming,
                 is_try,
             } => {
-                self.resolve_expression_cast(*expr, cast_to_type, rename, is_try, schema, state)
+                self.resolve_expression_cast(*expr, cast_to_type, naming, is_try, schema, state)
                     .await
             }
             Expr::UnresolvedRegex { col_name, plan_id } => {

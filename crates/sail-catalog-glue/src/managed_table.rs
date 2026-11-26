@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::TableInput;
@@ -229,9 +231,7 @@ fn alter_columns(
                 true,
             );
             if let Some(comment) = &column.comment {
-                field
-                    .metadata_mut()
-                    .insert("comment".into(), comment.clone());
+                field.metadata_mut().insert("comment", comment.clone());
             }
             field
                 .metadata_mut()

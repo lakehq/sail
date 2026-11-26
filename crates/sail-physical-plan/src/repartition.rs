@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -9,9 +11,7 @@ use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{
-    LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
-};
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
@@ -444,6 +444,22 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         vec![false]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // A sort below `coalesce(n)` or `repartition(1)` stays in effect in Spark, so
+        // `orderBy(...).coalesce(1)` returns sorted rows. Both keep the rows of a single input
+        // partition in order, so the sort below must not be removed. Spark does not keep the
+        // order for hash repartitioning or round-robin repartitioning into several partitions,
+        // so the sort can still be removed there.
+        let single_input = self.input.output_partitioning().partition_count() <= 1;
+        vec![
+            single_input
+                && matches!(
+                    self.properties.partitioning,
+                    Partitioning::UnknownPartitioning(_) | Partitioning::RoundRobinBatch(1)
+                ),
+        ]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -555,22 +571,6 @@ impl ExecutionPlan for ExplicitRepartitionExec {
                     new_partitions.push(new_partition);
                 }
                 Partitioning::Hash(new_partitions, *size)
-            }
-            Partitioning::Range(range) => {
-                let mut ordering = Vec::with_capacity(range.ordering().len());
-                for sort in range.ordering() {
-                    let Some(expr) = update_expr(&sort.expr, projection.expr(), false)? else {
-                        return Ok(None);
-                    };
-                    ordering.push(PhysicalSortExpr::new(expr, sort.options));
-                }
-                let ordering = LexOrdering::new(ordering).ok_or_else(|| {
-                    datafusion_common::internal_datafusion_err!("range ordering cannot be empty")
-                })?;
-                Partitioning::Range(RangePartitioning::try_new(
-                    ordering,
-                    range.split_points().to_vec(),
-                )?)
             }
             other => other.clone(),
         };

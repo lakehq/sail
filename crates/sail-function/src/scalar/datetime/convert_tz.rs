@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -29,7 +31,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::{MICROS_PER_SECOND, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::utils::datetime::SparkZone;
 
-use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+use crate::scalar::utils::lambda::{evaluate_lambdas_until_null, scatter_active_rows};
 
 /// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
 /// TIMESTAMP.
@@ -309,8 +311,8 @@ impl ScalarUDFImpl for ConvertTz {
     // check. DataFusion main fixes the default in afe4a63d0.
     fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
         let data_type = match input {
-            // The value has the default bounds of a function without bounds of its own, such as
-            // `date_trunc`. Arrow's cast, which this conversion replaces, has bounds of its type,
+            // The value has the default bounds of a function without bounds of its own.
+            // Arrow's cast, which this conversion replaces, has bounds of its type,
             // and the result of a cast is in microseconds.
             [_, _, value] if value.data_type().is_null() => {
                 DataType::Timestamp(TimeUnit::Microsecond, self.output_timezone.clone())

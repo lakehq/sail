@@ -1,19 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 
 use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
 use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
 
 // Some of the code in the `read` and `write` modules is adapted from the DataFusion `ParquetFormat` implementation.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-parquet/src/file_format.rs
 
 mod options;
 mod read;
+mod reader;
 mod write;
 
+pub use options::parse_parquet_compression;
 pub use read::ParquetReadFormat;
+pub use reader::ListingParquetReaderFactory;
 pub use write::ParquetWriteFormat;
 
 pub type ParquetDataSource = ListingDataSource<ParquetFormatFactory>;
@@ -31,7 +36,11 @@ impl FormatFactory for ParquetFormatFactory {
 
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
         let options = ParquetReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
-        Ok(ParquetReadFormat { options })
+        Ok(ParquetReadFormat {
+            options,
+            matching: StructFieldMatching::Name,
+            duration_hints: read::DurationHints::All,
+        })
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {

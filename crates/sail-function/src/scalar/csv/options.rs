@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::ops::Range;
 
 use datafusion::arrow::array::{Array, MapArray, StringArray};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -11,7 +13,8 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
+use sail_function::scalar::variant::cast_to_variant::CastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
@@ -364,6 +367,32 @@ impl WinFunctionBuilder {
     }
 }
 
+/// Normalizes `-0.0` to `0.0` in the floating-point values of an argument that is deduplicated,
+/// as in `collect_set` and DISTINCT `collect_list`/`array_agg`, so that `-0.0` and `0.0` are one
+/// value and the result holds `0.0`. Spark normalizes the elements of `collect_set` and the
+/// arguments of DISTINCT aggregates before comparing them.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L236-L255>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L632-L645>
+pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![argument])
+    } else {
+        argument
+    }
+}
+
+/// Normalizes NaN and `-0.0` in a range repartitioning key. Spark's ordering compares
+/// every NaN as equal and greater than any other value, and `-0.0` as equal to `0.0`,
+/// so all NaNs share the last partition and both zeros share a partition.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/SQLOrderingUtil.scala>
+pub(crate) fn normalize_range_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::nan_and_zero()).call(vec![argument])
+    } else {
+        argument
+    }
+}
+
 pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),
@@ -488,7 +517,7 @@ pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool
         Ok(matches!(
             expression,
             expr::Expr::ScalarFunction(function)
-                if function.func.inner().is::<SparkCastToVariant>()
+                if function.func.inner().is::<CastToVariant>()
         ))
     })?)
 }

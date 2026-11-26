@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Immutable, spill-backed partitions with independent, unbuffered readers.
 
 use std::sync::Arc;

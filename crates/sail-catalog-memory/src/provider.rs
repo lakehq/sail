@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use dashmap::{DashMap, Entry};
@@ -7,28 +11,64 @@ use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableMetadataRequirement, CreateTableMode, CreateTableOptions, CreateViewColumnOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    plain_lakehouse_create_table_metadata_requirement,
+    StageTableOptions, plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
-    alter_column_default, alter_column_type,
+    CatalogPartitionField, DatabaseStatus, TableColumnStatus, TableKind, TableReplacement,
+    TableStatus, alter_column_default, alter_column_type,
 };
 use sail_common_datafusion::column_features::ColumnFeatures;
+use tokio::sync::RwLock;
 
 use crate::managed_table;
 
+mod replacement;
+
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+const GATE_CLEANUP_INTERVAL: u64 = 64;
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
 struct MemoryDatabase {
+    generation: u64,
+    table_generations: HashMap<String, u64>,
+    uncertain_tables: HashSet<String>,
     status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
     views: HashMap<String, TableStatus>,
+}
+
+impl MemoryDatabase {
+    fn check_known(&self, table: &str) -> CatalogResult<()> {
+        if self.uncertain_tables.contains(table) {
+            return Err(CatalogError::CommitStateUnknown(
+                format!(
+                    "replacement of {table} requires storage reconciliation before catalog access"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn changed(&mut self, table: &str) {
+        self.table_generations
+            .insert(table.to_string(), next_generation());
+    }
 }
 
 /// An in-memory catalog provider.
 pub struct MemoryCatalogProvider {
     name: String,
     default_namespace: Namespace,
-    databases: DashMap<Namespace, MemoryDatabase>,
+    databases: Arc<DashMap<Namespace, MemoryDatabase>>,
+    generation: u64,
+    gate_acquisitions: AtomicU64,
+    namespace_gates: DashMap<Namespace, Arc<RwLock<()>>>,
+    table_gates: DashMap<(Namespace, String), Arc<RwLock<()>>>,
 }
 
 impl MemoryCatalogProvider {
@@ -41,6 +81,9 @@ impl MemoryCatalogProvider {
         databases.insert(
             initial_database.clone(),
             MemoryDatabase {
+                generation: next_generation(),
+                table_generations: HashMap::new(),
+                uncertain_tables: HashSet::new(),
                 status: DatabaseStatus {
                     catalog: name.clone(),
                     database: initial_database.clone().into(),
@@ -54,9 +97,75 @@ impl MemoryCatalogProvider {
         );
         Self {
             name,
-            databases,
+            databases: Arc::new(databases),
+            generation: next_generation(),
+            gate_acquisitions: AtomicU64::new(0),
+            namespace_gates: DashMap::new(),
+            table_gates: DashMap::new(),
             default_namespace: initial_database,
         }
+    }
+
+    fn cleanup_idle_gates(&self) {
+        // Cloning and eviction share the shard lock. With no Weak handles, a sole
+        // registry owner means no holder, waiter, or unpolled acquisition can use it.
+        self.namespace_gates
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
+        self.table_gates
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
+    }
+
+    fn maybe_cleanup_idle_gates(&self) {
+        // Lazy cleanup bounds idle history between sweeps, not immediate quiescence.
+        if self
+            .gate_acquisitions
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(GATE_CLEANUP_INTERVAL)
+        {
+            self.cleanup_idle_gates();
+        }
+    }
+
+    fn namespace_gate(&self, database: &Namespace) -> Arc<RwLock<()>> {
+        self.maybe_cleanup_idle_gates();
+        self.namespace_gates
+            .entry(database.clone())
+            .or_default()
+            .clone()
+    }
+
+    fn table_gate(&self, database: &Namespace, table: &str) -> Arc<RwLock<()>> {
+        self.maybe_cleanup_idle_gates();
+        self.table_gates
+            .entry((database.clone(), table.to_string()))
+            .or_default()
+            .clone()
+    }
+
+    async fn table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> (
+        tokio::sync::OwnedRwLockReadGuard<()>,
+        tokio::sync::OwnedRwLockReadGuard<()>,
+    ) {
+        let namespace = self.namespace_gate(database).read_owned().await;
+        let table = self.table_gate(database, table).read_owned().await;
+        (namespace, table)
+    }
+
+    async fn ordered_table_access(
+        mut gates: Vec<(String, Arc<RwLock<()>>)>,
+    ) -> Vec<tokio::sync::OwnedRwLockReadGuard<()>> {
+        // Queued publication writers make read lock ordering matter as well.
+        gates.sort_by(|left, right| left.0.cmp(&right.0));
+        gates.dedup_by(|left, right| left.0 == right.0);
+        let mut access = Vec::with_capacity(gates.len());
+        for (_, gate) in gates {
+            access.push(gate.read_owned().await);
+        }
+        access
     }
 
     fn apply_table_alterations(
@@ -69,6 +178,7 @@ impl MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
         let status = db
             .tables
             .get_mut(table)
@@ -88,6 +198,11 @@ impl MemoryCatalogProvider {
                     let inherited = previous.filter(|_| !replace_schema);
                     let features = ColumnFeatures::from_field(field);
                     TableColumnStatus {
+                        metadata: field
+                            .metadata()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         name: field.name().clone(),
                         data_type: field.data_type().clone(),
                         nullable: field.is_nullable(),
@@ -226,8 +341,11 @@ impl MemoryCatalogProvider {
                         Ok(())
                     }
                     AlterTableOptions::AlterColumnType {
-                        name, data_type, ..
-                    } => alter_column_type(columns, &name, data_type).map_err(|e| {
+                        name,
+                        data_type,
+                        metadata,
+                        ..
+                    } => alter_column_type(columns, &name, data_type, metadata).map_err(|e| {
                         CatalogError::InvalidArgument(format!(
                             "failed to alter column type for '{}': {e}",
                             name.join(".")
@@ -254,6 +372,7 @@ impl MemoryCatalogProvider {
             }?;
         }
         *status = updated;
+        db.changed(table);
         Ok(())
     }
 }
@@ -286,6 +405,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
+        let _access = self.namespace_gate(database).write_owned().await;
         let CreateDatabaseOptions {
             if_not_exists,
             comment,
@@ -313,6 +433,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                     properties,
                 };
                 let db = MemoryDatabase {
+                    generation: next_generation(),
+                    table_generations: HashMap::new(),
+                    uncertain_tables: HashSet::new(),
                     status: status.clone(),
                     tables: HashMap::new(),
                     views: HashMap::new(),
@@ -356,9 +479,13 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
+        let _access = self.namespace_gate(database).write_owned().await;
         let DropDatabaseOptions { if_exists, cascade } = options;
         match self.databases.entry(database.clone()) {
             Entry::Occupied(entry) => {
+                for table in &entry.get().uncertain_tables {
+                    entry.get().check_known(table)?;
+                }
                 if !cascade && (!entry.get().tables.is_empty() || !entry.get().views.is_empty()) {
                     return Err(CatalogError::InvalidArgument(format!(
                         "Cannot drop non-empty database '{}', use CASCADE",
@@ -387,6 +514,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        let _access = self.table_access(database, table).await;
         let CreateTableOptions {
             columns,
             comment,
@@ -405,6 +533,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
         if let Some(status) = db.tables.get(table) {
             match mode {
                 CreateTableMode::CreateIfNotExists => return Ok(status.clone()),
@@ -428,6 +557,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             .into_iter()
             .map(|x| {
                 let CreateTableColumnOptions {
+                    metadata,
                     name,
                     data_type,
                     nullable,
@@ -443,6 +573,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     .as_ref()
                     .is_some_and(|b| b.columns.iter().any(|x| x.eq_ignore_ascii_case(&name)));
                 TableColumnStatus {
+                    metadata,
                     name,
                     data_type,
                     nullable,
@@ -474,7 +605,25 @@ impl CatalogProvider for MemoryCatalogProvider {
             },
         };
         db.tables.insert(table.to_string(), status.clone());
+        db.changed(table);
         Ok(status)
+    }
+
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: StageTableOptions,
+    ) -> CatalogResult<TableReplacement> {
+        self.stage_replacement(database, table, options).await
+    }
+
+    async fn publish_table_replacement(
+        &self,
+        replacement: TableReplacement,
+        publication: sail_catalog::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        self.publish_replacement(replacement, publication).await
     }
 
     fn create_table_metadata_requirement(
@@ -486,10 +635,12 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        if let Some(db) = self.databases.get(database)
-            && let Some(status) = db.tables.get(table)
-        {
-            return Ok(status.clone());
+        let _access = self.table_access(database, table).await;
+        if let Some(db) = self.databases.get(database) {
+            db.check_known(table)?;
+            if let Some(status) = db.tables.get(table) {
+                return Ok(status.clone());
+            }
         }
         Err(CatalogError::NotFound(
             CatalogObject::Table,
@@ -498,8 +649,15 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        // Publications hold shared namespace access until they install their catalog status.
+        let _namespace = self.namespace_gate(database).write_owned().await;
         match self.databases.get(database) {
-            Some(db) => Ok(db.tables.values().cloned().collect()),
+            Some(db) => {
+                for table in &db.uncertain_tables {
+                    db.check_known(table)?;
+                }
+                Ok(db.tables.values().cloned().collect())
+            }
             _ => Err(CatalogError::NotFound(
                 CatalogObject::Database,
                 quote_namespace_if_needed(database),
@@ -513,6 +671,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
+        let _access = self.table_access(database, table).await;
         // In Spark, the `DROP TABLE ... PURGE` SQL statement deletes data if the table
         // is managed by the Hive metastore. `PURGE` is ignored if the table is external.
         // In Sail, all tables are external, so we ignore the `purge` option.
@@ -522,6 +681,8 @@ impl CatalogProvider for MemoryCatalogProvider {
         } = options;
         match self.databases.get_mut(database) {
             Some(mut db) => {
+                db.check_known(table)?;
+                db.changed(table);
                 if db.tables.remove(table).is_some() || if_exists {
                     Ok(())
                 } else {
@@ -551,6 +712,15 @@ impl CatalogProvider for MemoryCatalogProvider {
         destination_database: &Namespace,
         destination_table: &str,
     ) -> CatalogResult<()> {
+        let _namespace = self.namespace_gate(database).read_owned().await;
+        let _access = Self::ordered_table_access(vec![
+            (table.to_string(), self.table_gate(database, table)),
+            (
+                destination_table.to_string(),
+                self.table_gate(database, destination_table),
+            ),
+        ])
+        .await;
         if database != destination_database {
             return Err(CatalogError::NotSupported(
                 "Memory catalog cannot rename across databases".into(),
@@ -559,6 +729,8 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
+        db.check_known(destination_table)?;
         if !db.tables.contains_key(table) {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
@@ -574,6 +746,8 @@ impl CatalogProvider for MemoryCatalogProvider {
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
         status.name = destination_table.into();
         db.tables.insert(destination_table.into(), status);
+        db.changed(table);
+        db.changed(destination_table);
         Ok(())
     }
 
@@ -594,6 +768,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: AlterTableOptions,
         schema: SchemaRef,
     ) -> CatalogResult<()> {
+        let _access = self.table_access(database, table).await;
         self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
     }
 
@@ -603,6 +778,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: Vec<AlterTableOptions>,
     ) -> CatalogResult<()> {
+        let _access = self.table_access(database, table).await;
         self.apply_table_alterations(database, table, options, None)
     }
 
@@ -612,6 +788,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
+        let _access = self.table_access(database, view).await;
         let CreateViewOptions {
             columns,
             definition,
@@ -623,6 +800,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(view)?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
                 return Ok(status.clone());
@@ -645,6 +823,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                 } = x;
                 TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable,
@@ -670,6 +849,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             },
         };
         db.views.insert(view.to_string(), status.clone());
+        db.changed(view);
         Ok(status)
     }
 
@@ -701,9 +881,12 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()> {
+        let _access = self.table_access(database, view).await;
         let DropViewOptions { if_exists } = options;
         match self.databases.get_mut(database) {
             Some(mut db) => {
+                db.check_known(view)?;
+                db.changed(view);
                 if db.views.remove(view).is_some() || if_exists {
                     Ok(())
                 } else {

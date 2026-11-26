@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,6 +25,72 @@ use parquet::arrow::RowNumber;
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
 };
+
+/// A metadata delete may discard its row scan. Report the unsupported format
+/// only if the selected files are actually needed for row-level processing.
+#[derive(Debug)]
+pub struct UnsupportedIcebergRowScanExec {
+    properties: Arc<PlanProperties>,
+}
+
+impl UnsupportedIcebergRowScanExec {
+    pub fn new(schema: SchemaRef) -> Self {
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+
+        Self {
+            properties: Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )),
+        }
+    }
+}
+
+impl DisplayAs for UnsupportedIcebergRowScanExec {
+    fn fmt_as(&self, _: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl ExecutionPlan for UnsupportedIcebergRowScanExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return datafusion_common::internal_err!("UnsupportedIcebergRowScanExec is a leaf");
+        }
+        Ok(self)
+    }
+
+    fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {
+        datafusion_common::exec_err!(
+            "Row-level operations on imported Avro/ORC files are not supported"
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct IcebergMergeMetadataExec {
@@ -127,7 +195,7 @@ impl IcebergMergeMetadataExec {
             .flatten();
         let metadata_columns =
             RowLevelMetadataColumns::new(appended_file_column, row_index_column_name.as_deref());
-        let metadata_columns = if data_file_path.is_some() {
+        let metadata_columns = if appended_file_column.is_some() {
             metadata_columns.with_delete_file_metadata()
         } else {
             metadata_columns
@@ -401,6 +469,86 @@ mod tests {
 
     use super::*;
     use crate::row_lineage::{LINEAGE_COLUMNS, RowLineage, lineage_fields};
+
+    #[tokio::test]
+    async fn unnamed_metadata_preserves_user_columns_and_materializes_physical_lineage()
+    -> Result<()> {
+        let names = [
+            MERGE_FILE_COLUMN,
+            MERGE_ROW_INDEX_COLUMN,
+            MERGE_PARTITION_SPEC_ID_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
+            "__sail_iceberg_row_position",
+        ];
+        let mut fields = names
+            .iter()
+            .map(|name| Arc::new(Field::new(*name, DataType::Utf8, false)))
+            .collect::<Vec<_>>();
+        fields.extend(lineage_fields());
+        let data_schema = Arc::new(Schema::new(fields.clone()));
+        fields.push(crate::row_level_metadata::parquet_row_position_field(
+            &data_schema,
+        ));
+        let input_schema = Arc::new(Schema::new(fields));
+        let mut columns = names
+            .iter()
+            .map(|name| Arc::new(StringArray::from(vec![*name; 3])) as ArrayRef)
+            .collect::<Vec<_>>();
+        columns.extend([
+            Arc::new(Int64Array::from(vec![None, Some(777), None])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![None, Some(2), None])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![0, 4, 9])) as ArrayRef,
+        ]);
+        let batch = RecordBatch::try_new(input_schema.clone(), columns)?;
+        for lineage in [
+            None,
+            Some(RowLineage {
+                first_row_id: Some(100),
+                data_sequence_number: 7,
+            }),
+        ] {
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![batch.slice(0, 2), batch.slice(2, 1)]],
+                input_schema.clone(),
+                None,
+            )?;
+            let plan = Arc::new(IcebergMergeMetadataExec::try_new(
+                input,
+                "data.parquet".to_string(),
+                0,
+                String::new(),
+                None,
+                None,
+                lineage,
+            )?);
+            assert_eq!(plan.schema(), data_schema);
+            let batches = collect(plan, Arc::new(TaskContext::default())).await?;
+            let output = concat_batches(&data_schema, &batches)?;
+            for index in 0..names.len() {
+                assert_eq!(output.column(index), batch.column(index));
+            }
+            let expected_ids = if lineage.is_some() {
+                vec![Some(100), Some(777), Some(109)]
+            } else {
+                vec![None, Some(777), None]
+            };
+            let expected_sequences = if lineage.is_some() {
+                vec![Some(7), Some(2), Some(7)]
+            } else {
+                vec![None, Some(2), None]
+            };
+            for (name, values) in LINEAGE_COLUMNS
+                .into_iter()
+                .zip([expected_ids, expected_sequences])
+            {
+                assert_eq!(
+                    output.column(data_schema.index_of(name)?).as_ref(),
+                    &Int64Array::from(values) as &dyn Array,
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn partitioned_lineage_uses_reader_positions_across_batches() -> Result<()> {

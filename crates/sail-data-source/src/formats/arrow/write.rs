@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,8 +21,9 @@ impl WriteFormat for ArrowWriteFormat {
         ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        input.sink.file_extension = ArrowFormat.get_ext();
-        ArrowFormat
+        let format = ArrowFormat::default();
+        input.sink.file_extension = format.get_ext();
+        format
             .create_writer_physical_plan(input.input, ctx, input.sink, input.sort_order)
             .await
     }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureField,
     LakeProcedureParameter, LakeProcedureTarget,
@@ -115,6 +117,67 @@ impl IcebergProcedureType {
         let timestamp = LakeProcedureDataType::TimestampMicros;
         let string_map = LakeProcedureDataType::StringMap;
         let (parameters, output, access) = match self {
+            Self::Migrate | Self::Snapshot => {
+                let migrate = self == Self::Migrate;
+                let mut params = if migrate {
+                    vec![LakeProcedureParameter::required("table", string)]
+                } else {
+                    vec![
+                        LakeProcedureParameter::required("source_table", string),
+                        LakeProcedureParameter::required("table", string),
+                        LakeProcedureParameter::optional("location", string),
+                    ]
+                };
+                params.push(LakeProcedureParameter::optional("properties", string_map));
+                if migrate {
+                    params.push(LakeProcedureParameter::optional(
+                        "drop_backup",
+                        LakeProcedureDataType::Boolean,
+                    ));
+                    params.push(LakeProcedureParameter::optional(
+                        "backup_table_name",
+                        string,
+                    ));
+                }
+                params.push(LakeProcedureParameter::optional(
+                    "parallelism",
+                    LakeProcedureDataType::Int32,
+                ));
+                params.push(LakeProcedureParameter::optional(
+                    "ignore_missing_files",
+                    LakeProcedureDataType::Boolean,
+                ));
+                (
+                    params,
+                    vec![LakeProcedureField::new(
+                        if migrate {
+                            "migrated_files_count"
+                        } else {
+                            "imported_files_count"
+                        },
+                        long,
+                        false,
+                    )],
+                    LakeProcedureAccess::MetadataCommit,
+                )
+            }
+            Self::AddFiles => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::required("source_table", string),
+                    LakeProcedureParameter::optional("partition_filter", string_map),
+                    LakeProcedureParameter::optional(
+                        "check_duplicate_files",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                    LakeProcedureParameter::optional("parallelism", LakeProcedureDataType::Int32),
+                ],
+                vec![
+                    LakeProcedureField::new("added_files_count", long, false),
+                    LakeProcedureField::new("changed_partition_count", long, true),
+                ],
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::AncestorsOf => (
                 vec![
                     LakeProcedureParameter::required("table", string),
@@ -185,6 +248,61 @@ impl IcebergProcedureType {
                 ],
                 LakeProcedureAccess::MetadataCommit,
             ),
+            Self::RewriteManifests => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("use_caching", LakeProcedureDataType::Boolean),
+                    LakeProcedureParameter::optional("spec_id", LakeProcedureDataType::Int32),
+                ],
+                vec![
+                    LakeProcedureField::new(
+                        "rewritten_manifests_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                    LakeProcedureField::new(
+                        "added_manifests_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                ],
+                LakeProcedureAccess::MetadataCommit,
+            ),
+            Self::ExpireSnapshots => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("older_than", timestamp),
+                    LakeProcedureParameter::optional("retain_last", LakeProcedureDataType::Int32),
+                    LakeProcedureParameter::optional(
+                        "max_concurrent_deletes",
+                        LakeProcedureDataType::Int32,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "stream_results",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "snapshot_ids",
+                        LakeProcedureDataType::Int64Array,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "clean_expired_metadata",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                ],
+                [
+                    "deleted_data_files_count",
+                    "deleted_position_delete_files_count",
+                    "deleted_equality_delete_files_count",
+                    "deleted_manifest_files_count",
+                    "deleted_manifest_lists_count",
+                    "deleted_statistics_files_count",
+                ]
+                .into_iter()
+                .map(|name| LakeProcedureField::new(name, long, true))
+                .collect(),
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::FastForward => (
                 vec![
                     LakeProcedureParameter::required("table", string),
@@ -205,7 +323,11 @@ impl IcebergProcedureType {
             parameters,
             output,
             access,
-            target: LakeProcedureTarget::table("table"),
+            target: if matches!(self, Self::Migrate | Self::Snapshot) {
+                LakeProcedureTarget::Catalog
+            } else {
+                LakeProcedureTarget::table("table")
+            },
         })
     }
 

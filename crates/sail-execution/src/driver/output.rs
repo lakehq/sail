@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
 
@@ -12,6 +15,7 @@ use futures::stream::SelectAll;
 use futures::{Stream, StreamExt};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::QueryCancellation;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -54,6 +58,10 @@ pub enum JobOutputItem {
     Stream {
         key: TaskStreamKey,
         stream: TaskStreamSource,
+        /// The cause of the task failures of the job so far, if the task attempt is a
+        /// retry. It is the cause that the driver infers for a job that fails, which
+        /// is not necessarily the failure that led to this attempt.
+        retry_cause: Option<CommonErrorCause>,
     },
     Error {
         cause: CommonErrorCause,
@@ -94,12 +102,21 @@ pub fn build_job_output(
     ctx: &mut ActorContext<DriverActor>,
     job_id: JobId,
     schema: SchemaRef,
+    shutdown: Arc<QueryCancellation>,
 ) -> (JobOutputManager, SendableRecordBatchStream) {
     let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
     let handle = ctx.handle().clone();
+    // A paused consumer must see the driver cancellation when it resumes.
+    let result = shutdown.clone().cancel_stream(ReceiverStream::new(rx), || {
+        datafusion::common::exec_err!("query cancelled because the driver is shutting down")
+    });
     ctx.spawn(async move {
-        let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+        let outcome = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            outcome = forward_job_output(JobOutputStream::new(receiver), &tx) => outcome,
+        };
         // Output errors and consumer cancellation can precede terminal task updates.
         // Tell the scheduler why output ended so cleanup records the correct job status.
         // Keep `tx` alive until cleanup has been sent, before signaling EOF to the client.
@@ -109,10 +126,7 @@ pub fn build_job_output(
     });
     (
         JobOutputManager { sender },
-        Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            ReceiverStream::new(rx),
-        )),
+        Box::pin(RecordBatchStreamAdapter::new(schema, result)),
     )
 }
 
@@ -180,15 +194,23 @@ impl Stream for JobOutputStream {
                         TaskStreamError::from(cause),
                     )))));
                 }
-                Poll::Ready(Some(JobOutputItem::Stream { key, stream })) => {
+                Poll::Ready(Some(JobOutputItem::Stream {
+                    key,
+                    stream,
+                    retry_cause,
+                })) => {
                     if self.emitted.contains(&OutputPartition::from(&key)) {
                         self.state = JobOutputState::Failed;
-                        return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
-                            TaskStreamError::Unknown(format!(
+                        // The output of the earlier attempt cannot be taken back, so the
+                        // job fails with the cause of its task failures so far.
+                        let error = match retry_cause {
+                            Some(cause) => TaskStreamError::from(cause),
+                            None => TaskStreamError::Unknown(format!(
                                 "cannot add stream for {}: a different attempt has already produced job output",
                                 TaskStreamKeyDisplay(&key)
                             )),
-                        )))));
+                        };
+                        return Poll::Ready(Some(Err(DataFusionError::External(Box::new(error)))));
                     }
                     inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
                     inner.push(TaskStreamWrapper::new(key, stream));
@@ -374,6 +396,7 @@ mod tests {
                 .try_send(JobOutputItem::Stream {
                     key: stream_key(),
                     stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: None,
                 })
                 .is_ok()
         );
@@ -397,6 +420,7 @@ mod tests {
                         ..stream_key()
                     },
                     stream: Box::pin(futures::stream::iter([Ok(batch)])),
+                    retry_cause: None,
                 })
                 .is_ok()
         );
@@ -405,6 +429,107 @@ mod tests {
             Poll::Ready(Some(Err(error))) if error.to_string().contains(
                 "a different attempt has already produced job output"
             )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_attempt_output_fails_retry_with_its_cause() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(1);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
+        ));
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+
+        // The retry cannot replace the output, so the job fails with the task failure
+        // that the retry carries.
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch)])),
+                    retry_cause: Some(CommonErrorCause::Execution(
+                        "forced task failure".to_string(),
+                    )),
+                })
+                .is_ok()
+        );
+        let Poll::Ready(Some(Err(error))) = Pin::new(&mut output).poll_next(&mut cx) else {
+            return Err(DataFusionError::Internal(
+                "the retry must fail the job output".to_string(),
+            ));
+        };
+        let message = error.to_string();
+        assert!(message.contains("forced task failure"), "{message}");
+        assert!(!message.contains("a different attempt"), "{message}");
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(None)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn retry_replaces_attempt_without_output() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(2);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // The first attempt has not produced any output when the retry arrives, so the
+        // retry replaces it whether or not it carries a cause.
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::pending()),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: Some(CommonErrorCause::Execution(
+                        "forced task failure".to_string(),
+                    )),
+                })
+                .is_ok()
+        );
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
         ));
         Ok(())
     }
@@ -426,6 +551,7 @@ mod tests {
                         .try_send(JobOutputItem::Stream {
                             key,
                             stream: Box::pin(futures::stream::empty()),
+                            retry_cause: None,
                         })
                         .is_ok()
                 );
@@ -462,6 +588,7 @@ mod tests {
                         stream: Box::pin(futures::stream::iter([Err(TaskStreamError::Unknown(
                             "test stream failure".to_string(),
                         ))])),
+                        retry_cause: None,
                     })
                     .is_ok()
             );
@@ -536,6 +663,7 @@ mod tests {
         JobOutputItem::Stream {
             key: stream_key(),
             stream: Box::pin(futures::stream::empty()),
+            retry_cause: None,
         }
     }
 

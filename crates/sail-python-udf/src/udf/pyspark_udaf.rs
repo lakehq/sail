@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -17,6 +19,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,7 +34,7 @@ pub enum PySparkAggregateMode {
     Window,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
     kind: PySparkGroupAggKind,
@@ -84,6 +87,15 @@ impl PySparkGroupAggregateUDF {
             config,
             actual_arg_count,
             udf: LazyPyObject::new(),
+        }
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
         }
     }
 
@@ -142,7 +154,7 @@ impl PySparkGroupAggregateUDF {
     }
 
     fn batch_accumulator(&self) -> Result<BatchAggregateAccumulator> {
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = with_blocking_python(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupAggregator {
             udf,
             output_type: self.output_type.clone(),
@@ -195,7 +207,7 @@ struct PySparkGroupAggregator {
 
 impl BatchAggregator for PySparkGroupAggregator {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let data = with_blocking_python(|py| -> PyUdfResult<_> {
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;

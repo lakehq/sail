@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PySparkUdfKind {
@@ -27,7 +30,7 @@ pub enum PySparkUdfKind {
     ScalarArrowIter,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkUDF {
     signature: Signature,
     kind: PySparkUdfKind,
@@ -66,6 +69,15 @@ impl PySparkUDF {
             output_type,
             config,
             udf: LazyPyObject::new(),
+        }
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
         }
     }
 
@@ -137,8 +149,8 @@ impl ScalarUDFImpl for PySparkUDF {
             args, number_rows, ..
         } = args;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
-        let udf = Python::attach(|py| self.udf(py))?;
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let udf = with_blocking_python(|py| self.udf(py))?;
+        let data = with_blocking_python(|py| -> PyUdfResult<_> {
             let output = udf.call1(
                 py,
                 (

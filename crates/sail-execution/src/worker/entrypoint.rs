@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeHandle;
+use sail_common::runtime::{RuntimeHandle, stop_signal};
 use sail_common::telemetry::{ContextPropagationEnv, SpanAttribute};
 
 use crate::error::ExecutionError;
-use crate::worker::{WorkerActor, WorkerOptions};
+use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
 pub async fn run_worker(
     config: &AppConfig,
@@ -37,10 +39,17 @@ pub async fn run_worker(
             return Err(Box::new(e));
         }
     };
-    let _handle = {
+    let signal = stop_signal()?;
+    let handle = {
         let _guard = span.set_local_parent();
         system.spawn::<WorkerActor>(options)
     };
-    system.join().await;
+    tokio::select! {
+        () = system.join() => {}
+        () = signal => {
+            let _ = handle.send(WorkerMessage::Shutdown).await;
+            system.join().await;
+        }
+    }
     Ok(())
 }

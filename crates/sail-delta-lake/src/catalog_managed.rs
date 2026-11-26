@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::catalog::delta::{
     DELTA_TABLE_TYPE_VALUE, DELTA_UNITY_TABLE_ID_KEY, unity_table_id_value,
 };

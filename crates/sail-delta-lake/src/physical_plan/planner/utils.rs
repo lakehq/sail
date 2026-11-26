@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -16,8 +6,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
-use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
+use datafusion::logical_expr::{Expr, ScalarUDF};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -30,6 +20,7 @@ use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
@@ -42,7 +33,7 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
+    DeltaPathKey, DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
@@ -108,6 +99,12 @@ fn action_replay_key_expr(
     let path = Expr::Cast(Cast::new(
         Box::new(struct_field_expr(action_expr.clone(), FIELD_NAME_PATH)),
         DataType::Utf8,
+    ));
+    // Normalize the comparison key before partitioning, sorting, or hashing.
+    // The Add payload below continues to carry its original URI spelling.
+    let path = Expr::ScalarFunction(ScalarFunction::new_udf(
+        Arc::new(ScalarUDF::from(DeltaPathKey::default())),
+        vec![path],
     ));
     let path_bytes = Expr::ScalarFunction(ScalarFunction::new_udf(
         datafusion::functions::string::octet_length(),
@@ -569,7 +566,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![add_key, remove_key],
     )))?;
 
@@ -615,7 +612,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![size_expr_i64, lit_i64(0)],
     )))?;
 
@@ -624,7 +621,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let mod_time_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![mod_time_expr_i64, lit_i64(0)],
     )))?;
 

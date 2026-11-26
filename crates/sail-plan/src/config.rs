@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -79,6 +81,10 @@ pub struct PlanConfig {
     /// Whether to resolve REBALANCE hints (`spark.sql.adaptive.enabled`).
     /// This does not enable Spark's adaptive execution engine.
     pub adaptive_enabled: bool,
+    /// Rows sampled for each output partition to pick range repartitioning split points
+    /// (`spark.sql.execution.rangeExchange.sampleSizePerPartition`). Spark checks that it
+    /// is positive only when it samples, so it is kept as set here.
+    pub range_exchange_sample_size_per_partition: i32,
     /// Whether a table-valued function may receive more than one `TABLE (...)` argument
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
@@ -137,6 +143,7 @@ impl Default for PlanConfig {
             shuffle_partitions: 200,
             disable_hints: false,
             adaptive_enabled: true,
+            range_exchange_sample_size_per_partition: 100,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
         }

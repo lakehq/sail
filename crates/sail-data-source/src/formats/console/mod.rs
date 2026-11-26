@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod options;
 mod writer;
 
@@ -48,6 +50,7 @@ impl DataSource for ConsoleDataSource {
             options,
             lakehouse_table: _,
             sql_insert: _,
+            identity_columns_to_track: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console data source only supports append mode");

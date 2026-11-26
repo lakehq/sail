@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
@@ -75,7 +77,7 @@ impl TableProvider for PythonTableProvider {
     async fn scan(
         &self,
         _state: &dyn datafusion::catalog::Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

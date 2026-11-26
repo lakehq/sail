@@ -1,9 +1,10 @@
-/// [Credit]: <https://github.com/apache/arrow-rs/blob/master/arrow-cast/src/display.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/arrow-rs/blob/ffd216d57469a33303c0d2ec9b974fd25cc0e0f9/arrow-cast/src/display.rs
+
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
-use chrono::{Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
-use datafusion::arrow::array::timezone::Tz;
+use chrono::{Duration, NaiveDate, SecondsFormat};
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal32Type,
@@ -32,6 +33,7 @@ use crate::formatter::{
     Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
     TimestampNanosecondFormatter, TimestampSecondFormatter,
 };
+use crate::utils::datetime::SparkZone;
 use crate::variant::is_marked_variant_storage_type;
 
 /// Format for displaying datetime values
@@ -564,12 +566,15 @@ macro_rules! try_convert {
 macro_rules! timestamp_display {
     ($t:ty, $formatter:expr_2021 $(,)?) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = (Option<Tz>, TimeFormat<'a>);
+            type State = (Option<SparkZone>, TimeFormat<'a>);
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
                     DataType::Timestamp(_, Some(tz)) => Ok((
-                        Some(options.timezone.unwrap_or(tz).parse()?),
+                        Some(
+                            SparkZone::parse(options.timezone.unwrap_or(tz))
+                                .map_err(|e| ArrowError::CastError(e.to_string()))?,
+                        ),
                         options.timestamp_tz_format,
                     )),
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
@@ -583,7 +588,7 @@ macro_rules! timestamp_display {
                 match s {
                     (Some(tz), TimeFormat::Rfc3339) => {
                         let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
-                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        let date = tz.at_utc(&naive.and_utc());
                         write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
                     }
                     (None, TimeFormat::Rfc3339) => {
@@ -592,14 +597,24 @@ macro_rules! timestamp_display {
                     }
                     (Some(tz), TimeFormat::Custom(s)) => {
                         let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
-                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        let date = tz.at_utc(&naive.and_utc());
                         write!(f, "{}", date.format(s))?
                     }
                     (None, TimeFormat::Custom(s)) => {
                         let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
                         write!(f, "{}", naive.format(s))?
                     }
-                    (tz, TimeFormat::Spark) => write!(f, "{}", $formatter(value, tz.as_ref()))?,
+                    (Some(tz), TimeFormat::Spark) => {
+                        if let Some(local) = as_datetime::<$t>(value)
+                            .and_then(|naive| tz.local_datetime(&naive.and_utc()))
+                        {
+                            let local = local.and_utc();
+                            write!(f, "{}", crate::formatter::TimestampFormatter(&local, None))?;
+                        } else {
+                            write!(f, "ERROR")?;
+                        }
+                    }
+                    (None, TimeFormat::Spark) => write!(f, "{}", $formatter(value, None))?,
                 }
                 Ok(())
             }

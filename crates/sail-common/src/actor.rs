@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -433,11 +435,9 @@ where
             }
             self.ctx.reap();
         }
-        // The receiver will be dropped at the end of this function call,
-        // and the other end of the channel will then know that the actor is no longer running.
-        // But here we explicitly close the receiver so that the other end knows sooner
-        // that the actor is no longer running, since the actor may take some time to stop.
-        Q::close(&mut self.receiver);
+        // Discard queued messages before teardown. Their reply senders may belong to
+        // requests that the stop hook must wait for.
+        drop(self.receiver);
         self.actor.stop(&mut self.ctx).await;
         self.ctx.reap();
         // The remaining tasks will be aborted when the `ActorContext` is dropped.
@@ -467,7 +467,9 @@ mod tests {
 
     use super::*;
 
-    struct TestActor;
+    struct TestActor {
+        pending_reply: Option<oneshot::Receiver<String>>,
+    }
     struct UnboundedTestActor;
 
     struct ParentActor {
@@ -514,14 +516,20 @@ mod tests {
 
     impl Actor for TestActor {
         type Message = TestMessage;
-        type Options = ();
+        type Options = Option<oneshot::Receiver<String>>;
 
         fn name() -> &'static str {
             "TestActor"
         }
 
-        fn new(_: Self::Options) -> Self {
-            Self
+        fn new(pending_reply: Self::Options) -> Self {
+            Self { pending_reply }
+        }
+
+        async fn stop(self, _: &mut ActorContext<Self>) {
+            if let Some(reply) = self.pending_reply {
+                assert!(reply.await.is_err());
+            }
         }
 
         async fn receive(
@@ -579,7 +587,7 @@ mod tests {
         }
 
         async fn start(&mut self, ctx: &mut ActorContext<Self>) {
-            let child = ctx.children_mut().spawn::<TestActor>(());
+            let child = ctx.children_mut().spawn::<TestActor>(None);
             if let Some(sender) = self.child.take() {
                 let _ = sender.send(child);
             }
@@ -593,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn test_bounded_actor_handle_send() {
         let mut system = ActorSystem::new();
-        let handle = system.spawn::<TestActor>(());
+        let handle = system.spawn::<TestActor>(None);
         assert!(!handle.sender.is_closed());
         let (tx, rx) = oneshot::channel();
         assert!(
@@ -628,9 +636,31 @@ mod tests {
     #[tokio::test]
     async fn test_actor_handle_stop() {
         let mut system = ActorSystem::new();
-        let handle = system.spawn::<TestActor>(());
+        let handle = system.spawn::<TestActor>(None);
         assert!(handle.send(TestMessage::Stop).await.is_ok());
         system.join().await;
+    }
+
+    #[tokio::test]
+    async fn test_discard_queued_replies_before_stop_hook() {
+        let mut system = ActorSystem::new();
+        let (reply, pending_reply) = oneshot::channel();
+        let actor = system.spawn::<TestActor>(Some(pending_reply));
+        assert!(actor.send(TestMessage::Stop).await.is_ok());
+        assert!(
+            actor
+                .send(TestMessage::Echo {
+                    value: String::new(),
+                    reply
+                })
+                .await
+                .is_ok()
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), system.join())
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

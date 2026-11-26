@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -19,10 +21,6 @@ impl OptimizerRule for RewriteBinaryGrouping {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(

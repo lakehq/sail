@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::physical_plan::Metric;
 use datafusion::physical_plan::metrics::MetricValue;
 use sail_common::telemetry::KeyValue;
@@ -112,6 +114,8 @@ impl MetricEmitter for AggregateMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
+            // Per-expression timers drill down into the aggregate-level timers above.
+            MetricValue::Time { name, .. } if name.starts_with("agg_expr_") => MetricHandled::Yes,
             _ => MetricHandled::No,
         }
     }

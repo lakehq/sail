@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod encoding;
 pub mod marker;
 pub mod schema;
@@ -5,6 +7,7 @@ pub mod stream;
 
 use datafusion::arrow::array::{BooleanArray, BooleanBuilder, RecordBatch};
 
+#[expect(clippy::allow_attributes)]
 pub(crate) mod r#gen {
     tonic::include_proto!("sail.streaming");
 }

@@ -1,27 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cmp::Ordering;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
     FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
     Int64Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
     StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{
+    DataType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use serde_json::{Map, Value};
 
-use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
+use crate::utils::nested::opt_downcast_arg;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -42,7 +45,9 @@ macro_rules! downcast_and_convert {
 /// Options for to_json function
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ToJsonOptions {
+    timezone: Arc<str>,
     timestamp_format: DateTimeFormat,
+    timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,
     sort_keys: bool,
 }
@@ -54,30 +59,16 @@ impl ToJsonOptions {
     // Default ISO 8601 format with timezone offset (not Z)
     // Using Java DateTimeFormatter patterns
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
+    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
-    fn from_map(map: &MapArray) -> Result<Self> {
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
-            .map(DateTimeFormat::for_formatting)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_formatting(Self::TIMESTAMP_FORMAT_DEFAULT)
-                    .expect("default timestamp format should be valid")
-            });
-
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
-            .map(DateTimeFormat::for_formatting)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
-                    .expect("default date format should be valid")
-            });
-
+    fn from_map(map: &MapArray, session_timezone: &Arc<str>) -> Result<Self> {
+        let format = |option, default: &str| {
+            DateTimeFormat::for_formatting(
+                find_key_value(map, option).as_deref().unwrap_or(default),
+            )
+        };
         let sort_keys = find_key_value(map, Self::SORT_KEYS_OPTION)
             .as_deref()
             .map(parse_boolean_option)
@@ -85,8 +76,14 @@ impl ToJsonOptions {
             .unwrap_or(false);
 
         Ok(Self {
-            timestamp_format,
-            date_format,
+            timezone: find_key_value(map, "timeZone")
+                .map_or_else(|| Arc::clone(session_timezone), Arc::from),
+            timestamp_format: format(
+                Self::TIMESTAMP_FORMAT_OPTION,
+                Self::TIMESTAMP_FORMAT_DEFAULT,
+            )?,
+            timestamp_ntz_format: format("timestampNTZFormat", Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)?,
+            date_format: format(Self::DATE_FORMAT_OPTION, Self::DATE_FORMAT_DEFAULT)?,
             sort_keys,
         })
     }
@@ -96,8 +93,13 @@ impl Default for ToJsonOptions {
     #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
+            timezone: Arc::from("UTC"),
             timestamp_format: DateTimeFormat::for_formatting(Self::TIMESTAMP_FORMAT_DEFAULT)
                 .expect("default timestamp format should be valid"),
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             sort_keys: false,
@@ -106,20 +108,20 @@ impl Default for ToJsonOptions {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkToJson {
+pub struct ToJson {
+    session_timezone: Arc<str>,
     signature: Signature,
     aliases: [String; 1],
 }
 
-impl Default for SparkToJson {
-    fn default() -> Self {
-        Self::new()
+impl ToJson {
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
-}
 
-impl SparkToJson {
-    pub fn new() -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
+            session_timezone,
             signature: Signature::new(
                 TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
                 Volatility::Immutable,
@@ -129,7 +131,7 @@ impl SparkToJson {
     }
 }
 
-impl ScalarUDFImpl for SparkToJson {
+impl ScalarUDFImpl for ToJson {
     fn name(&self) -> &str {
         self.aliases[0].as_str()
     }
@@ -153,8 +155,9 @@ impl ScalarUDFImpl for SparkToJson {
             && matches!(field.data_type(), DataType::Struct(_))
             && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
         {
-            let result = crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
+            let result = crate::scalar::variant::variant_to_json::variant_to_json_columnar(
                 &args.args[0],
+                &sail_common_datafusion::utils::datetime::SparkZone::parse(&self.session_timezone)?,
             )?;
             // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
             return match result {
@@ -168,15 +171,11 @@ impl ScalarUDFImpl for SparkToJson {
                 other => Ok(other),
             };
         }
-        make_scalar_function(to_json_inner, vec![])(&args.args)
+        make_scalar_function(
+            |arrays| to_json_inner(arrays, &self.session_timezone),
+            vec![],
+        )(&args.args)
     }
-}
-
-pub fn to_json_udf() -> Arc<ScalarUDF> {
-    static STATIC_TO_JSON: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
-    STATIC_TO_JSON
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkToJson::new())))
-        .clone()
 }
 
 /// Core implementation of the `to_json` function logic.
@@ -185,7 +184,7 @@ pub fn to_json_udf() -> Arc<ScalarUDF> {
 /// - `args`: An array of input arrays, where:
 ///   - `args[0]` is the value to convert to JSON (struct, map, array, etc.)
 ///   - `args[1]` (optional) is a `MapArray` of options like timestampFormat, dateFormat, etc.
-fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn to_json_inner(args: &[ArrayRef], session_timezone: &Arc<str>) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 2 {
         return Err(datafusion_common::DataFusionError::Plan(
             "to_json requires 1 or 2 arguments".to_string(),
@@ -198,9 +197,12 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
             )
         })?;
-        ToJsonOptions::from_map(map_array)?
+        ToJsonOptions::from_map(map_array, session_timezone)?
     } else {
-        ToJsonOptions::default()
+        ToJsonOptions {
+            timezone: Arc::clone(session_timezone),
+            ..Default::default()
+        }
     };
 
     array_to_json_strings(&args[0], &options)
@@ -295,15 +297,29 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let value = arr.value(index);
             Ok(decimal_to_json_number(value, *scale))
         }
-        DataType::Timestamp(_, tz) => {
-            let arr =
-                array.as_primitive::<datafusion::arrow::datatypes::TimestampMicrosecondType>();
-            let value = arr.value(index);
-            let formatted = format_timestamp(
+        DataType::Timestamp(unit, tz) => {
+            let value = match unit {
+                TimeUnit::Second => array.as_primitive::<TimestampSecondType>().value(index),
+                TimeUnit::Millisecond => array
+                    .as_primitive::<TimestampMillisecondType>()
+                    .value(index),
+                TimeUnit::Microsecond => array
+                    .as_primitive::<TimestampMicrosecondType>()
+                    .value(index),
+                TimeUnit::Nanosecond => {
+                    array.as_primitive::<TimestampNanosecondType>().value(index)
+                }
+            };
+            let formatted = crate::scalar::datetime::date_format::format_timestamp_value(
                 value,
-                tz.as_ref().map(|s| s.as_ref()),
-                &options.timestamp_format,
-            );
+                unit,
+                tz.as_ref().map(|_| &options.timezone),
+                if tz.is_some() {
+                    &options.timestamp_format
+                } else {
+                    &options.timestamp_ntz_format
+                },
+            )?;
             Ok(Value::String(formatted))
         }
         DataType::Struct(_) => {
@@ -539,48 +555,10 @@ fn struct_to_values_array(
     Ok(Value::Array(json_values))
 }
 
-fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> String {
-    use chrono::Offset;
-
-    use crate::scalar::datetime::format::{
-        DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
-    };
-
-    if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
-        let (datetime, timezone) = if let Some(tz_str) = tz {
-            if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
-                let local_dt = dt_utc.with_timezone(&tz);
-                let offset = local_dt.offset().fix();
-                (
-                    local_dt.naive_local(),
-                    Some(TimeZoneDisplay {
-                        offset,
-                        name: Some(tz_str),
-                    }),
-                )
-            } else {
-                (dt_utc.naive_utc(), None)
-            }
-        } else {
-            (dt_utc.naive_utc(), None)
-        };
-
-        let input = DateTimeFormatInput {
-            datetime,
-            timezone,
-            zone_id: tz,
-            timestamp_kind: TimestampKind::Normal,
-            precision: TimePrecision::Microsecond,
-        };
-
-        format.format(input).unwrap_or_else(|_| value.to_string())
-    } else {
-        value.to_string()
-    }
-}
-
 fn format_date(days: i32, format: &DateTimeFormat) -> String {
-    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+    use crate::scalar::datetime::utils::format::{
+        DateTimeFormatInput, TimePrecision, TimestampKind,
+    };
 
     chrono::DateTime::from_timestamp(days as i64 * 24 * 3600, 0)
         .map(|date| {
@@ -653,9 +631,10 @@ fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
         .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
         .and_then(|x| x.as_any().downcast_ref::<StringArray>())
         .and_then(|x| {
-            x.iter()
-                .enumerate()
-                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
+            x.iter().enumerate().find(|(_, x)| {
+                x.as_ref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(search_key))
+            })
         })
         .map(|(i, _)| i)
 }
@@ -791,7 +770,11 @@ mod tests {
             Arc::new(StringArray::from(vec!["TRUE"])),
             vec![0, 1],
         )?;
-        let sorted_json = map_to_json(&outer, 0, &ToJsonOptions::from_map(&option_map)?)?;
+        let sorted_json = map_to_json(
+            &outer,
+            0,
+            &ToJsonOptions::from_map(&option_map, &Arc::from("UTC"))?,
+        )?;
         assert_eq!(
             json_string(&sorted_json)?,
             r#"{"alpha":{"alpha_inner":"A","zeta_inner":"Z"},"zeta":{"alpha_inner":"a","zeta_inner":"z"}}"#

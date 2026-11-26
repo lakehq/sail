@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::identifier::Ident;
@@ -40,6 +42,7 @@ pub enum DataType {
     UInt16(Uint16),
     UInt32(Uint32),
     UInt64(Uint64),
+    Uuid(crate::ast::keywords::Uuid),
     Binary(Binary),
     Bytea(Bytea),
     Float(Float),

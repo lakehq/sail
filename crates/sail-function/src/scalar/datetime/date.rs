@@ -1,0 +1,291 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
+
+use datafusion::arrow::array::{Array, Date32Array, new_null_array};
+use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, TimeUnit};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_sql_analyzer::parser::parse_date;
+
+use crate::scalar::datetime::utils::common::string_array_iter;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct Date {
+    signature: Signature,
+    is_try: bool,
+}
+
+impl Date {
+    /// Creates a Date.
+    ///
+    /// When `is_try` is true, returns NULL on invalid input (for try_cast).
+    /// When `is_try` is false, throws an error on invalid input (for cast).
+    pub fn new(is_try: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            is_try,
+        }
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
+    }
+
+    /// Compute the local epoch day directly. A valid date can be outside the range of a
+    /// timestamp after applying the session offset.
+    fn fixed_offset_date(
+        &self,
+        timestamp: ColumnarValue,
+        unit: TimeUnit,
+        offset_seconds: i32,
+    ) -> Result<ColumnarValue> {
+        let ticks_per_second: i128 = match unit {
+            TimeUnit::Second => 1,
+            TimeUnit::Millisecond => 1_000,
+            TimeUnit::Microsecond => 1_000_000,
+            TimeUnit::Nanosecond => 1_000_000_000,
+        };
+        let scalar = matches!(timestamp, ColumnarValue::Scalar(_));
+        let array = timestamp.to_array(1)?;
+        let ticks = datafusion::arrow::compute::cast(&array, &DataType::Int64)?;
+        let ticks = datafusion_common::cast::as_int64_array(&ticks)?;
+        let days = ticks
+            .iter()
+            .map(|value| {
+                let Some(value) = value else {
+                    return Ok(None);
+                };
+                let local = i128::from(value) + i128::from(offset_seconds) * ticks_per_second;
+                let day = local.div_euclid(86_400 * ticks_per_second);
+                match i32::try_from(day) {
+                    Ok(day) => Ok(Some(day)),
+                    Err(_) if self.is_try => Ok(None),
+                    Err(_) => exec_err!("[DATETIME_OVERFLOW] date out of range"),
+                }
+            })
+            .collect::<Result<Date32Array>>()?;
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &days, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(Arc::new(days)))
+        }
+    }
+
+    fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
+        match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
+            Ok(v) => Ok(Some(v)),
+            Err(_e) if is_try => Ok(None),
+            Err(_) => {
+                let sql_value = value.replace('\\', "\\\\").replace('\'', "\\'");
+                Err(exec_datafusion_err!(
+                    "[CAST_INVALID_INPUT] The value '{sql_value}' of the type \"STRING\" cannot be cast to \"DATE\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead."
+                ))
+            }
+        }
+    }
+
+    fn formatted_string_to_date32(
+        value: &str,
+        format: &DateTimeFormat,
+        is_try: bool,
+    ) -> Result<Option<i32>> {
+        match format
+            .parse_date_value(value)
+            .map(Date32Type::from_naive_date)
+        {
+            Ok(v) => Ok(Some(v)),
+            Err(_e) if is_try => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl ScalarUDFImpl for Date {
+    fn name(&self) -> &str {
+        "spark_date"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Date32)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = match args.arg_fields {
+            [timestamp, offset]
+                if !self.is_try
+                    && matches!(timestamp.data_type(), DataType::Timestamp(_, Some(_)))
+                    && offset.data_type() == &DataType::Int32 =>
+            {
+                timestamp.is_nullable() || offset.is_nullable()
+            }
+            _ => true,
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            nullable,
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let (arg, format) = match args.len() {
+            1 => (args.one()?, None),
+            2 => {
+                let (arg, format) = args.two()?;
+                (arg, Some(format))
+            }
+            _ => return exec_err!("spark_date requires 1 or 2 arguments"),
+        };
+        if let DataType::Timestamp(unit, Some(_)) = arg.data_type()
+            && let Some(ColumnarValue::Scalar(ScalarValue::Int32(Some(offset)))) = &format
+        {
+            return self.fixed_offset_date(arg, unit, *offset);
+        }
+        let is_try = self.is_try;
+        match (arg, format) {
+            (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
+                parse_array_with_format_array(&array, &format_array, is_try)
+            }
+            (ColumnarValue::Scalar(scalar), Some(ColumnarValue::Array(format_array))) => {
+                let arrays = ColumnarValue::values_to_arrays(&[
+                    ColumnarValue::Scalar(scalar),
+                    ColumnarValue::Array(format_array),
+                ])?;
+                let array = arrays[0].clone();
+                let format_array = arrays[1].clone();
+                parse_array_with_format_array(&array, &format_array, is_try)
+            }
+            (ColumnarValue::Array(array), format) => {
+                let format = match format {
+                    Some(ColumnarValue::Scalar(scalar)) => {
+                        match parse_scalar_date_format(&scalar)? {
+                            Some(format) => Some(format),
+                            None => {
+                                return Ok(ColumnarValue::Array(new_null_array(
+                                    &DataType::Date32,
+                                    array.len(),
+                                )));
+                            }
+                        }
+                    }
+                    Some(ColumnarValue::Array(_)) => unreachable!(),
+                    None => None,
+                };
+                let array = string_array_iter(array.as_ref())?
+                    .map(|value| {
+                        value
+                            .map(|value| match &format {
+                                Some(format) => {
+                                    Self::formatted_string_to_date32(value, format, is_try)
+                                }
+                                None => Self::string_to_date32(value, is_try),
+                            })
+                            .transpose()
+                            .map(Option::flatten)
+                    })
+                    .collect::<Result<Date32Array>>()?;
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            (ColumnarValue::Scalar(scalar), format) => {
+                let format = match format {
+                    Some(ColumnarValue::Scalar(scalar)) => {
+                        match parse_scalar_date_format(&scalar)? {
+                            Some(format) => Some(format),
+                            None => {
+                                return Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)));
+                            }
+                        }
+                    }
+                    Some(ColumnarValue::Array(_)) => unreachable!(),
+                    None => None,
+                };
+                let value = match scalar.try_as_str() {
+                    Some(x) => x
+                        .map(|v| match &format {
+                            Some(format) => Self::formatted_string_to_date32(v, format, is_try),
+                            None => Self::string_to_date32(v, is_try),
+                        })
+                        .transpose()?
+                        .flatten(),
+                    _ => {
+                        return exec_err!("expected string scalar for `date`");
+                    }
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::Date32(value)))
+            }
+        }
+    }
+}
+
+fn parse_scalar_date_format(format: &ScalarValue) -> Result<Option<DateTimeFormat>> {
+    match format.try_as_str() {
+        Some(Some(pattern)) => Ok(Some(DateTimeFormat::for_parsing(pattern)?)),
+        Some(None) => Ok(None),
+        None => exec_err!("spark_date format argument must be a string scalar"),
+    }
+}
+
+fn parse_array_with_format_array(
+    array: &Arc<dyn datafusion::arrow::array::Array>,
+    format_array: &Arc<dyn datafusion::arrow::array::Array>,
+    is_try: bool,
+) -> Result<ColumnarValue> {
+    if array.len() != format_array.len() {
+        return exec_err!("spark_date value and format arrays must have the same length");
+    }
+    let mut cache = HashMap::<String, DateTimeFormat>::new();
+    let formats = string_array_iter(format_array.as_ref())?;
+    let array = parse_array_with_formats(array, formats, &mut cache, is_try)?;
+    Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
+fn parse_array_with_formats<'f>(
+    array: &Arc<dyn datafusion::arrow::array::Array>,
+    formats: impl Iterator<Item = Option<&'f str>>,
+    cache: &mut HashMap<String, DateTimeFormat>,
+    is_try: bool,
+) -> Result<Date32Array> {
+    parse_values_with_formats(string_array_iter(array.as_ref())?, formats, cache, is_try)
+}
+
+fn parse_values_with_formats<'v, 'f>(
+    values: impl Iterator<Item = Option<&'v str>>,
+    formats: impl Iterator<Item = Option<&'f str>>,
+    cache: &mut HashMap<String, DateTimeFormat>,
+    is_try: bool,
+) -> Result<Date32Array> {
+    values
+        .zip(formats)
+        .map(|(value, format)| match (value, format) {
+            (Some(value), Some(format)) => {
+                let format = get_or_parse_format(cache, format)?;
+                Date::formatted_string_to_date32(value, format, is_try)
+            }
+            _ => Ok(None),
+        })
+        .collect::<Result<_>>()
+}
+
+fn get_or_parse_format<'a>(
+    cache: &'a mut HashMap<String, DateTimeFormat>,
+    pattern: &str,
+) -> Result<&'a DateTimeFormat> {
+    match cache.entry(pattern.to_string()) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
+    }
+}

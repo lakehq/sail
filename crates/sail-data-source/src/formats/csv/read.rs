@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use bytes::Bytes;
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -12,12 +14,13 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::delimited::newline_delimited_stream;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt};
+use sail_common_datafusion::type_coercion::binary_type_coercion::type_union_coercion;
 
 use super::decoder::{CsvInputDecoder, decode_csv_input_stream};
 use super::source::CsvSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::{
-    NanosecondTimestamps, infer_listing_compression, try_merge_normalized,
+    NanosecondTimestamps, SchemaSampling, infer_listing_compression, try_merge_normalized,
 };
 use crate::options::r#gen::CsvReadOptions;
 
@@ -28,6 +31,19 @@ pub struct CsvReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for CsvReadFormat {
+    fn configure_schema_inference(
+        &mut self,
+        _ctx: &dyn Session,
+        hadoop_paths: bool,
+        _case_sensitive: bool,
+    ) -> Result<SchemaSampling> {
+        Ok(if hadoop_paths && self.options.multi_line {
+            SchemaSampling::MultilineCsv
+        } else {
+            SchemaSampling::Sample
+        })
+    }
+
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
@@ -44,6 +60,9 @@ impl ReadFormat for CsvReadFormat {
         Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/0d1f2ebe2cc97c91b736bc0a160b5b73cf40437a/datafusion/datasource-csv/src/file_format.rs
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
@@ -91,6 +110,10 @@ impl ReadFormat for CsvReadFormat {
                         )
                     })?;
 
+                // Blank or comment-only files do not supply the first multiline CSV header.
+                if self.options.multi_line && schema.fields.is_empty() {
+                    continue;
+                }
                 records_to_read = records_to_read.saturating_sub(records_read);
                 schemas.push(schema);
                 if records_to_read == 0 {
@@ -99,6 +122,28 @@ impl ReadFormat for CsvReadFormat {
             }
         }
 
+        // Spark takes multiline CSV field names from the first header and combines
+        // the types inferred from each file by position.
+        if self.options.multi_line && schemas.len() > 1 {
+            let mut files = schemas.into_iter();
+            let mut first = files.next().unwrap_or_else(Schema::empty);
+            let mut fields = first.fields.to_vec();
+            for file in files {
+                for (field, other) in fields.iter_mut().zip(file.fields()) {
+                    let (a, b) = (field.data_type(), other.data_type());
+                    if a != b {
+                        let ty = if a.is_string() || b.is_string() {
+                            DataType::Utf8
+                        } else {
+                            type_union_coercion(a, b).unwrap_or(DataType::Utf8)
+                        };
+                        *field = Arc::new(field.as_ref().clone().with_data_type(ty));
+                    }
+                }
+            }
+            first.fields = fields.into();
+            schemas = vec![first];
+        }
         let mut schema = try_merge_normalized(schemas, NanosecondTimestamps::WidenToMicrosecond)?;
         if !self.options.infer_schema {
             schema = super::convert_string_columns(schema);
@@ -107,7 +152,11 @@ impl ReadFormat for CsvReadFormat {
 
         Ok(Arc::new(schema))
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/0d1f2ebe2cc97c91b736bc0a160b5b73cf40437a/datafusion/datasource-csv/src/file_format.rs
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
@@ -143,6 +192,7 @@ impl ReadFormat for CsvReadFormat {
 
         Ok(config)
     }
+    // SPDX-SnippetEnd
 
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()

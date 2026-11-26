@@ -1,44 +1,60 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/catalog-listing/src/table.rs
+
 // The listing table planner is adapted from the DataFusion `ListingTable` implementation,
 // specifically the `TableProvider::scan_with_args` trait method.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Metadata};
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::datasource::listing::helpers::{filter_partitioned_file, pruned_partition_list};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion::physical_expr::create_lex_ordering;
+use datafusion::logical_expr::{Expr, LogicalPlan, ScalarUDF, TableScan, UserDefinedLogicalNode};
+use datafusion::physical_expr::expressions::{Column, Literal, cast};
+use datafusion::physical_expr::{
+    Partitioning, PhysicalExpr, ScalarFunctionExpr, create_lex_ordering,
+};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{
+    DFSchema, ScalarValue, Statistics, internal_err, plan_err, project_schema,
+};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
-    FileScanConfig, output_partitioning_from_partition_fields,
+    FileScanConfig, output_range_partitioning_from_split_points,
 };
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
+use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::qualified_partition_path;
+use crate::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, is_direct_input,
+    is_metadata_file, matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -47,7 +63,7 @@ use crate::listing::write::{FileWriteNode, FileWriteOptions};
 struct ListFilesResult {
     file_groups: Vec<FileGroup>,
     statistics: Statistics,
-    grouped_by_partition: bool,
+    partitioning: Option<Partitioning>,
 }
 
 /// Physical planner for logical listing table scans.
@@ -92,7 +108,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             return Ok(None);
         };
 
-        let projection = scan.projection.clone();
+        let projection = source.scan_projection(scan.projection.as_deref());
         let filters = unnormalize_cols(scan.filters.clone());
         let limit = scan.fetch;
 
@@ -114,7 +130,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let ListFilesResult {
             mut file_groups,
             statistics,
-            grouped_by_partition: partitioned_by_file_group,
+            mut partitioning,
         } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
@@ -146,6 +162,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             Some(Ok(new_groups)) => {
                 if new_groups.len() <= source.config().target_partitions {
                     file_groups = new_groups;
+                    partitioning = None;
                 } else {
                     log::debug!(
                         "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
@@ -168,16 +185,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )))));
         };
 
-        let output_partitioning = if partitioned_by_file_group {
-            output_partitioning_from_partition_fields(
-                table_schema,
-                source.config().schema.table_partition_cols(),
-                file_groups.len(),
-            )
-        } else {
-            None
-        };
-
         let config = source
             .config()
             .read_format
@@ -192,7 +199,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                     preserve_order: false,
                     output_ordering,
                     statistics,
-                    output_partitioning,
+                    output_partitioning: partitioning,
                     schema: source.config().schema.clone(),
                     compression: source.config().compression,
                 },
@@ -227,6 +234,56 @@ async fn plan_file_write(
         .iter()
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
+    let physical_input = if table_partition_cols.is_empty() {
+        physical_input
+    } else {
+        let schema = physical_input.schema();
+        let exprs = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let column = if table_partition_cols
+                    .iter()
+                    .any(|(name, _)| name == field.name())
+                {
+                    let value: Arc<dyn PhysicalExpr> = match field.data_type() {
+                        DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                            Arc::new(ScalarFunctionExpr::try_new(
+                                Arc::new(ScalarUDF::from(HivePartitionFloat::default())),
+                                vec![column],
+                                &schema,
+                                Arc::clone(session.config().options()),
+                            )?)
+                        }
+                        DataType::Date64 => cast(
+                            cast(column, &schema, DataType::Date32)?,
+                            &schema,
+                            DataType::Utf8,
+                        )?,
+                        _ => cast(column, &schema, DataType::Utf8)?,
+                    };
+                    if field.is_nullable() {
+                        let null_marker =
+                            Arc::new(Literal::new(ScalarValue::from(HIVE_DEFAULT_PARTITION_NAME)));
+                        Arc::new(ScalarFunctionExpr::try_new(
+                            datafusion::functions::core::coalesce(),
+                            vec![value, null_marker],
+                            &schema,
+                            Arc::clone(session.config().options()),
+                        )?) as Arc<dyn PhysicalExpr>
+                    } else {
+                        value
+                    }
+                } else {
+                    column
+                };
+                Ok((column, field.name().clone()))
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Arc::new(ProjectionExec::try_new(exprs, physical_input)?)
+    };
     let conf = FileSinkConfig {
         original_url: url.to_string(),
         object_store_url: object_store_url.clone(),
@@ -250,6 +307,11 @@ async fn plan_file_write(
             },
         )
         .await?;
+    let plan: Arc<dyn ExecutionPlan> = if partition_by.is_empty() {
+        plan
+    } else {
+        Arc::new(HivePartitionWriteExec::new(plan))
+    };
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
@@ -342,13 +404,13 @@ async fn list_files_for_scan<'a>(
     filters: &'a [Expr],
     limit: Option<usize>,
 ) -> datafusion_common::Result<ListFilesResult> {
-    let store = if let Some(url) = source.config().table_paths.first() {
-        ctx.runtime_env().object_store(url)?
+    let (store, object_store_url) = if let Some(url) = source.config().table_paths.first() {
+        (ctx.runtime_env().object_store(url)?, url.object_store())
     } else {
         return Ok(ListFilesResult {
             file_groups: vec![],
+            partitioning: None,
             statistics: Statistics::new_unknown(source.config().schema.file_schema()),
-            grouped_by_partition: false,
         });
     };
 
@@ -363,33 +425,98 @@ async fn list_files_for_scan<'a>(
     let store_ref = store.as_ref();
     let partition_cols_ref = partition_cols.as_slice();
     let path_glob_filter = source.config().path_glob_filter.as_ref();
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(
-        |table_path| async move {
-            let files =
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                    .await?;
-            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
-            let files = files.try_filter(move |file| {
-                let location = &file.object_meta.location;
-                futures::future::ready(
-                    !has_hidden_path_component(table_path, location)
-                        && matches_path_glob_filter(path_glob_filter, location),
-                )
-            });
-            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
-        },
-    ))
+    let table_paths = source
+        .config()
+        .table_paths
+        .iter()
+        .map(|url| scoped_listing_url(url, ctx.session_id()))
+        .collect::<Vec<_>>();
+    let partition_fields = source.config().schema.table_partition_cols();
+    let base_path = source
+        .config()
+        .base_path
+        .as_ref()
+        .filter(|_| !partition_fields.is_empty());
+    let direct_only = source.config().base_path.is_some() && partition_fields.is_empty();
+    let partition_schema = base_path
+        .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Metadata::new()))
+        .transpose()?;
+    // The listing helper inspects the boolean value bit. IS TRUE also tests validity.
+    let predicate = datafusion_expr::utils::conjunction(filters.iter().cloned()).map(Expr::is_true);
+    let base_partitions = base_path.zip(partition_schema.as_ref());
+    let predicate = predicate.as_slice();
+    let (listing_filters, listing_cols) = if base_partitions.is_some() {
+        // List only the selected input paths. Their partition values are relative to basePath.
+        (&[][..], &[][..])
+    } else {
+        (filters, partition_cols_ref)
+    };
+    let file_list = future::try_join_all(table_paths.iter().map(|table_path| async move {
+        let files = pruned_partition_list(
+            ctx,
+            store_ref,
+            table_path,
+            listing_filters,
+            "",
+            listing_cols,
+        )
+        .await?;
+        // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
+        let files = files.try_filter(move |file| {
+            let location = &file.object_meta.location;
+            futures::future::ready(
+                (!direct_only || is_direct_input(table_path, location))
+                    && !location.filename().is_some_and(is_metadata_file)
+                    && (!source.config().partition_directories_only
+                        || super::utils::in_partition_directories(table_path, location))
+                    && !has_hidden_path_component(table_path, location)
+                    && matches_path_glob_filter(path_glob_filter, location),
+            )
+        });
+        let files = if let Some((base, schema)) = base_partitions {
+            files
+                .try_filter_map(move |mut file| async move {
+                    let Some(values) = file.object_meta.location.parent().and_then(|dir| {
+                        base.get(&qualified_partition_path(table_path, dir.as_ref()))
+                    }) else {
+                        return Ok(None);
+                    };
+                    file.partition_values.clone_from(values);
+                    filter_partitioned_file(file, predicate, schema)
+                })
+                .boxed()
+        } else {
+            files.boxed()
+        };
+        Ok::<_, datafusion_common::DataFusionError>(files)
+    }))
     .await?;
 
     let meta_fetch_concurrency: usize =
         ctx.config_options().execution.meta_fetch_concurrency.into();
-    let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
+    // Spark enumerates each input separately for a flat table. Partitioned and recursive
+    // scans instead work from one list of distinct leaf files.
+    let deduplicate = table_paths.len() > 1
+        && (source.config().recursive_file_lookup || !partition_fields.is_empty());
+    let mut seen = HashSet::new();
+    let file_list = stream::iter(file_list)
+        .flatten_unordered(meta_fetch_concurrency)
+        .try_filter(|file| {
+            future::ready(!deduplicate || seen.insert(file.object_meta.location.clone()))
+        });
 
     let files = file_list
         .map(|part_file| async {
             let part_file = part_file?;
             let (statistics, ordering) = if source.config().collect_stat {
-                do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
+                do_collect_statistics_and_ordering(
+                    source,
+                    ctx,
+                    &store,
+                    &object_store_url,
+                    &part_file,
+                )
+                .await?
             } else {
                 (
                     Arc::new(Statistics::new_unknown(
@@ -410,22 +537,23 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-    let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
-        let grouped = file_group.group_by_partition_values(source.config().target_partitions);
+    let mut partitioning = None;
+    let file_groups = if threshold > 0 && !partition_cols.is_empty() {
+        let (grouped, split_points) = file_group
+            .group_by_partition_values_with_split_points(source.config().target_partitions);
         if grouped.len() >= threshold {
-            (grouped, true)
+            partitioning = output_range_partitioning_from_split_points(
+                source.config().schema.table_schema(),
+                partition_fields,
+                split_points,
+            )?;
+            grouped
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-            (
-                FileGroup::new(all_files).split_files(source.config().target_partitions),
-                false,
-            )
+            FileGroup::new(all_files).split_files(source.config().target_partitions)
         }
     } else {
-        (
-            file_group.split_files(source.config().target_partitions),
-            false,
-        )
+        file_group.split_files(source.config().target_partitions)
     };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
@@ -438,7 +566,7 @@ async fn list_files_for_scan<'a>(
     Ok(ListFilesResult {
         file_groups,
         statistics: stats,
-        grouped_by_partition,
+        partitioning,
     })
 }
 
@@ -446,6 +574,7 @@ async fn do_collect_statistics_and_ordering(
     source: &ListingTableSource,
     ctx: &dyn Session,
     store: &Arc<dyn ObjectStore>,
+    object_store_url: &ObjectStoreUrl,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let meta = &part_file.object_meta;
@@ -456,8 +585,11 @@ async fn do_collect_statistics_and_ordering(
         table: Some(statistics_cache_table_ref(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
+            source.config().read_format.statistics_field_matching(),
         )),
-        path: meta.location.clone(),
+        // Scope the path explicitly, since the store in the table reference above depends on
+        // DataFusion's `pruned_partition_list` copying it from the scoped listing URL.
+        path: scoped_path(object_store_url, ctx.session_id(), &meta.location),
     };
 
     if let Some(cached) = file_statistic_cache
@@ -478,6 +610,7 @@ async fn do_collect_statistics_and_ordering(
         .infer_file_meta(
             ctx,
             store,
+            object_store_url,
             meta,
             source.config().schema.file_schema().clone(),
             source.config().compression,
@@ -503,9 +636,11 @@ async fn do_collect_statistics_and_ordering(
 fn statistics_cache_table_ref(
     table: Option<&datafusion_common::TableReference>,
     schema: &arrow::datatypes::Schema,
+    matching: StructFieldMatching,
 ) -> datafusion_common::TableReference {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
+    std::hash::Hash::hash(&matching, &mut hasher);
     for field in schema.fields() {
         std::hash::Hash::hash(field.name(), &mut hasher);
         std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);

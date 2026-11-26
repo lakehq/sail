@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
 };
@@ -15,6 +18,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::{SeededRandomRewriter, contains_generator};
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
@@ -40,12 +44,29 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            let Some(input_idx) = input_names
                 .iter()
                 .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+            else {
+                // As in Spark, a missing column is filled with nulls if the field is nullable.
+                if !target_field.is_nullable() {
+                    return Err(PlanError::analysis(format!(
+                        "[UNRESOLVED_COLUMN] A column, variable, or function parameter with name `{target_name}` cannot be resolved."
+                    )));
+                }
+                let expr = lit(ScalarValue::try_from(target_field.data_type())?);
+                let field_id = state.register_field_name(target_name);
+                let expr = if target_field.metadata().is_empty() {
+                    expr.alias(field_id)
+                } else {
+                    expr.alias_with_metadata(
+                        field_id,
+                        Some(FieldMetadata::from(target_field.metadata())),
+                    )
+                };
+                projected_exprs.push(expr);
+                continue;
+            };
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
@@ -233,8 +254,17 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        // Generator arguments consume random values over the input rows; sibling
+        // expressions consume them over the expanded output, as in a Project.
+        let (input, expr) = if expr.iter().any(|e| contains_generator(&e.expr)) {
+            self.rewrite_generator_projection::<SeededRandomRewriter>(input, expr, state)?
+        } else {
+            self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?
+        };
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
+        // The expressions around the window functions can be evaluated as a whole now.
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let mut expr = self.rewrite_named_expressions(expr, state)?;
         // Spark preserves qualifiers only on untouched columns. Keep them on the

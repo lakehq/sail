@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package sail.plan;
@@ -79,42 +81,21 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
-    PartitionPairJoinExecNode partition_pair_join = 67;
-    ReplayExecNode replay = 68;
-    SampledRangeRepartitionExecNode sampled_range_repartition = 69;
-    RangeSampleExecNode range_sample = 70;
-    RangeBoundsExecNode range_bounds = 71;
-    RangeAssignExecNode range_assign = 72;
+    SeededRandomExecNode seeded_random = 67;
+    IdentityGenerateExecNode identity_generate = 68;
+    TailExecNode tail = 69;
+    IcebergImportedExecNode iceberg_imported = 70;
+    bytes unsupported_iceberg_row_scan_schema = 71;
+    RangePartitionSampleExecNode range_partition_sample = 72;
+    RangePartitionResampleExecNode range_partition_resample = 73;
+    RangeSplitPointsExecNode range_split_points = 74;
+    RangeChannelExecNode range_channel = 75;
+    RangeResampleExecNode range_resample = 76;
+    RangeResampleDecisionExecNode range_resample_decision = 77;
+    HivePartitionWriteExecNode hive_partition_write = 78;
+    PartitionPairJoinExecNode partition_pair_join = 79;
+    ReplayExecNode replay = 80;
   }
-}
-
-message RangeKeyColumn {
-  uint64 index = 1;
-  bool descending = 2;
-  bool nulls_first = 3;
-}
-
-message SampledRangeRepartitionExecNode {
-  bytes input = 1;
-  LexOrdering ordering = 2;
-  uint64 partitions = 3;
-}
-
-message RangeSampleExecNode {
-  bytes input = 1;
-  repeated RangeKeyColumn keys = 2;
-}
-
-message RangeBoundsExecNode {
-  bytes input = 1;
-  uint64 partitions = 2;
-  repeated SortOptions ordering = 3;
-}
-
-message RangeAssignExecNode {
-  bytes input = 1;
-  bytes bounds = 2;
-  repeated RangeKeyColumn keys = 3;
 }
 
 message PartitionPairJoinExecNode {
@@ -124,6 +105,25 @@ message PartitionPairJoinExecNode {
 
 message ReplayExecNode {
   bytes input = 1;
+}
+
+message HivePartitionWriteExecNode {
+  bytes input = 1;
+}
+
+message IdentityGenerateExecNode {
+  bytes input = 1;
+  repeated IdentityGenerateColumn columns = 2;
+  uint64 allocation_partitions = 3;
+}
+
+message IdentityGenerateColumn {
+  string output = 1;
+  optional uint64 mask_index = 2;
+  sint64 start = 3;
+  sint64 step = 4;
+  optional sint64 high_water_mark = 5;
+  string column_name = 6;
 }
 
 message InputFileMetadataExecNode {
@@ -159,7 +159,14 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    Float16LiteralExprNode float16_literal = 7;
   }
+}
+
+message Float16LiteralExprNode {
+  // Absent means null; otherwise the raw IEEE 754 binary16 bits (0..65535).
+  optional uint32 bits = 1;
+  map<string, string> metadata = 2;
 }
 
 message SchemaEvolutionDefaultExprNode {
@@ -174,18 +181,20 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_NAME = 0;
   STRUCT_FIELD_MATCHING_PHYSICAL_NAME = 1;
   STRUCT_FIELD_MATCHING_FIELD_ID = 2;
+  STRUCT_FIELD_MATCHING_CASE_INSENSITIVE_NAME = 3;
 }
 
-enum SchemaEvolutionTimezoneMode {
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+enum SchemaEvolutionCastMode {
+  SCHEMA_EVOLUTION_CAST_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_CAST_MODE_RELAXED_TIMEZONE = 1;
+  SCHEMA_EVOLUTION_CAST_MODE_PARQUET = 2;
 }
 
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
-  SchemaEvolutionTimezoneMode timezone_mode = 4;
+  SchemaEvolutionCastMode cast_mode = 4;
 }
 
 message LambdaExprNode {
@@ -215,8 +224,20 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    CoalesceLazyUdf coalesce_lazy = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
+    SparkArrayZipWithUdf zip_with = 15;
   }
 }
+
+message CoalesceLazyUdf {}
+
+message SparkMapZipWithUdf {
+  bool ansi_mode = 1;
+  string session_timezone = 2;
+}
+
+message SparkArrayZipWithUdf {}
 
 message SparkArrayAggregateUdf {
   bool element_first = 1;
@@ -236,6 +257,7 @@ message SparkTransformValuesUdf {}
 
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;
+  bool preserve_duplicates = 2;
 }
 
 message SparkArrayFilterUdf {
@@ -312,6 +334,11 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    UuidCastUdf uuid_cast = 41;
+    SparkIntervalUdf spark_interval = 42;
+    SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
+    SparkToJsonUdf spark_to_json = 44;
+    SparkToJsonUdf variant_to_json = 45;
   }
 }
 
@@ -337,11 +364,26 @@ message ExtendedAggregateUdf {
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
     PercentileDiscUdaf percentile_disc = 5;
+    ArrayAggUdaf array_agg = 6;
+    FirstValueUdaf first_value = 7;
+    LastValueUdaf last_value = 8;
   }
 }
 
 message PercentileDiscUdaf {
   bool ansi_mode = 1;
+}
+
+message ArrayAggUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message FirstValueUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message LastValueUdaf {
+  bool is_input_pre_ordered = 1;
 }
 
 message StandardUdf {}
@@ -379,6 +421,10 @@ message ExplodeUdf {
 
 message XpathTypedUdf {
   string name = 1;
+}
+
+message SparkToJsonUdf {
+  string session_timezone = 1;
 }
 
 message SparkToXmlUdf {
@@ -448,6 +494,7 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+  optional string timezone = 2;
 }
 
 message SparkCeilUdf {
@@ -490,6 +537,17 @@ message SparkNegativeUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkIntervalUdf {
+  // SparkIntervalMetadata JSON, decoded once when reconstructing the UDF.
+  optional string qualifier = 1;
+  bool safe = 2;
+}
+
+message UuidCastUdf {
+  bytes target = 1;
+  bool safe = 2;
 }
 
 message SparkStructRenameUdf {
@@ -740,6 +798,11 @@ message SystemTableExecNode {
   optional uint64 fetch = 4;
 }
 
+message TailExecNode {
+  bytes input = 1;
+  uint64 fetch = 2;
+}
+
 message SchemaPivotExecNode {
   bytes input = 1;
   repeated string names = 2;
@@ -791,7 +854,7 @@ message ParquetExecNode {
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
-  SchemaEvolutionTimezoneMode timezone_mode = 6;
+  SchemaEvolutionCastMode cast_mode = 6;
   repeated bytes virtual_columns = 7;
 }
 
@@ -848,12 +911,14 @@ message PartitionedTopKExecNode {
   uint64 partition_prefix_len = 2;
   uint64 fetch = 3;
   PartitionedTopKWindowFnKind window_fn_kind = 4;
+  optional bytes ranking_field = 5;
 }
 
 enum PartitionedTopKWindowFnKind {
   PARTITIONED_TOP_K_WINDOW_FN_KIND_UNSPECIFIED = 0;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_ROW_NUMBER = 1;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_RANK = 2;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_DENSE_RANK = 3;
 }
 
 message AppendMode {}
@@ -893,6 +958,9 @@ message DeltaSnapshotContext {
 
 message DeltaCommitContext {
   optional DeltaSnapshotContext base_snapshot = 1;
+  repeated string identity_columns_to_track = 2;
+  optional uint64 identity_writer_partitions = 3;
+  optional string transaction_json = 4;
 }
 
 message DeltaWriteContext {
@@ -1052,6 +1120,63 @@ message SparkPartitionIdExecNode {
   bytes schema = 3;
 }
 
+message SeededRandomExecNode {
+  bytes input = 1;
+  repeated SeededRandomColumn columns = 2;
+  bytes schema = 3;
+}
+
+message SeededRandomColumn {
+  string name = 1;
+  bytes expr = 2;
+  PartitionSeed seed = 3;
+}
+
+enum PartitionSeed {
+  PARTITION_SEED_OFFSET = 0;
+  PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
+message RangePartitionSampleExecNode {
+  bytes input = 1;
+  uint64 sample_size = 2;
+}
+
+message RangePartitionResampleExecNode {
+  bytes input = 1;
+  double fraction = 2;
+  repeated uint64 partitions = 3;
+}
+
+message RangeSampleOptions {
+  repeated SortOptions sort_options = 1;
+  uint64 num_partitions = 2;
+  double sample_size = 3;
+  uint64 partition_sample_size = 4;
+}
+
+message RangeSplitPointsExecNode {
+  bytes sample = 1;
+  bytes resample = 2;
+  RangeSampleOptions options = 3;
+}
+
+message RangeResampleDecisionExecNode {
+  bytes sample = 1;
+  RangeSampleOptions options = 2;
+}
+
+message RangeResampleExecNode {
+  bytes input = 1;
+  bytes decisions = 2;
+}
+
+message RangeChannelExecNode {
+  bytes input = 1;
+  bytes split_points = 2;
+  LexOrdering ordering = 3;
+}
+
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
@@ -1155,12 +1280,16 @@ message IcebergCommitExecNode {
     CommandOutput command_output = 9;
     IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
   }
+  // Typed private replacement metadata and staged catalog identity, never a live guard.
+  optional string table_replacement_json = 11;
 }
 
 message IcebergRewriteDataFilesOutput {
   bytes schema = 1;
   int32 rewritten_data_files_count = 2;
   int64 rewritten_bytes_count = 3;
+  // V2 pins the starting data sequence; V3 inherits the new commit sequence.
+  optional int64 starting_sequence_number = 4;
 }
 
 message IcebergManifestScanExecNode {
@@ -1372,4 +1501,14 @@ message DeltaOptimizeRewriteExecNode {
 
 message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message SparkSchemaOfXmlUdf {
+  bool case_sensitive = 1;
+  bool timestamp_ntz = 2;
+}
+
+message IcebergImportedExecNode {
+  bytes base_config = 1;
+  string format = 2;
 }

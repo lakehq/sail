@@ -1,7 +1,12 @@
 [package]
 name = "sail-physical-plan"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -11,15 +16,15 @@ workspace = true
 sail-catalog = { path = "../sail-catalog" }
 sail-cache = { path = "../sail-cache" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-proto = { workspace = true }
-prost = { workspace = true }
 datafusion-datasource-parquet = { workspace = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
+rand = { workspace = true }
 object_store = { workspace = true }
 parquet = { workspace = true }
 serde = { workspace = true }

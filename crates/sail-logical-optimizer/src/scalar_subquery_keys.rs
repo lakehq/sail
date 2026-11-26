@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn::nanvl;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet};
+use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet, TryCast};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
 use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
 use datafusion_expr::utils::{
@@ -89,6 +91,7 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
     let inner_key = |expression: &Expr| {
         matches!(expression, Expr::Column(_))
             || matches!(expression, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
+            || matches!(expression, Expr::TryCast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
     };
     let (left, right) = (
         strip_identity_cast(&binary.left),
@@ -109,6 +112,9 @@ fn strip_identity_cast(expression: &Expr) -> &Expr {
     match expression {
         Expr::Cast(cast) => match cast.expr.as_ref() {
             input @ Expr::Cast(inner) if inner.field.data_type() == cast.field.data_type() => input,
+            input @ Expr::TryCast(inner) if inner.field.data_type() == cast.field.data_type() => {
+                input
+            }
             _ => expression,
         },
         _ => expression,
@@ -262,6 +268,15 @@ fn normalize_keys(
     aliases: &AliasGenerator,
     reserved: &mut BTreeSet<String>,
 ) -> Result<Transformed<LogicalPlan>> {
+    normalize_user_window_keys(plan.clone())?
+        .transform_data(|plan| lift_keys(&plan, aliases, reserved))
+}
+
+fn lift_keys(
+    plan: &LogicalPlan,
+    aliases: &AliasGenerator,
+    reserved: &mut BTreeSet<String>,
+) -> Result<Transformed<LogicalPlan>> {
     let mut has_aggregate = false;
     let mut has_cast = false;
     let mut has_window = false;
@@ -292,7 +307,7 @@ fn normalize_keys(
     // An inner column compared to an outer value already selects one group per
     // outer row, so casts of that column need no separate key.
     let mut pinned = HashSet::new();
-    let (mut grouping_columns, mut compared) = (HashSet::new(), HashSet::new());
+    let mut compared = HashSet::new();
     let mut always_grouped: Option<HashSet<Column>> = None;
     plan.apply(|node| {
         reads_grouping_id |= expressions_exist(node, is_grouping_id)?;
@@ -301,8 +316,7 @@ fn normalize_keys(
         {
             // Native pull-up adds no grouping for a column that every set of every
             // grouping-set aggregate already groups.
-            let (columns, always) = grouping_set_columns(&aggregate.group_expr)?;
-            grouping_columns.extend(columns);
+            let (_, always) = grouping_set_columns(&aggregate.group_expr)?;
             always_grouped = Some(match always_grouped.take() {
                 Some(previous) => previous.intersection(&always).cloned().collect(),
                 None => always,
@@ -338,10 +352,15 @@ fn normalize_keys(
                     ));
         }
         eligible &= !expressions_exist(node, |part| match part {
-            Expr::ScalarSubquery(_)
-            | Expr::Exists(_)
-            | Expr::InSubquery(_)
-            | Expr::SetComparison(_) => true,
+            Expr::ScalarSubquery(query) => {
+                !has_window
+                    || !query.outer_ref_columns.is_empty()
+                    || query
+                        .subquery
+                        .exists(|node| expressions_exist(node, |expr| expr.is_volatile_node()))
+                        .unwrap_or(true)
+            }
+            Expr::Exists(_) | Expr::InSubquery(_) | Expr::SetComparison(_) => true,
             Expr::ScalarFunction(function) => {
                 function.func.signature().volatility == Volatility::Volatile
             }
@@ -387,17 +406,15 @@ fn normalize_keys(
     if !eligible {
         return Ok(Transformed::no(plan.clone()));
     }
-    // Native pull-up would also group every grouping set by a grouping column compared
-    // with the outer query, including sets that omit it, which GROUPING reads. Give it
-    // a prefixed key instead, as for a window domain.
-    let regrouped = if reads_grouping_id {
+    // Use private keys for grouping sets that omit correlated columns. This keeps
+    // subtotal columns and grouping bits intact when the optimizer adds the keys.
+    let regrouped = if has_grouping_sets {
         compared
             .iter()
             .filter(|column| {
-                grouping_columns.contains(*column)
-                    && !always_grouped
-                        .as_ref()
-                        .is_some_and(|always| always.contains(*column))
+                !always_grouped
+                    .as_ref()
+                    .is_some_and(|always| always.contains(*column))
             })
             .cloned()
             .collect::<Vec<_>>()
@@ -428,12 +445,7 @@ fn normalize_keys(
     ) {
         return Ok(Transformed::no(plan.clone()));
     }
-    // Without a cast, carry correlations only to windows over non-floating keys: Sail's
-    // equality keeps NaN payloads apart, so floating partitions or peers would split them.
-    if !has_cast
-        && regrouped.is_empty()
-        && (!windowed_correlation || !domains.is_empty() || has_floating_window_key(plan)?)
-    {
+    if !has_cast && regrouped.is_empty() && !windowed_correlation {
         return Ok(Transformed::no(plan.clone()));
     }
     for aggregate in keyed {
@@ -485,8 +497,31 @@ fn normalize_keys(
     }))
 }
 
+/// A conversion and its original failure behavior.
+enum KeyCast {
+    Cast(FieldRef),
+    TryCast(FieldRef),
+}
+
+impl KeyCast {
+    fn field(&self) -> &FieldRef {
+        match self {
+            Self::Cast(field) | Self::TryCast(field) => field,
+        }
+    }
+
+    fn apply(self, expression: Expr) -> Expr {
+        match self {
+            Self::Cast(field) => Expr::Cast(Cast::new_from_field(Box::new(expression), field)),
+            Self::TryCast(field) => {
+                Expr::TryCast(TryCast::new_from_field(Box::new(expression), field))
+            }
+        }
+    }
+}
+
 /// The optional cast, inner column and outer comparison value.
-type KeyEquality<'a> = (Option<&'a Cast>, &'a Column, &'a Expr);
+type KeyEquality<'a> = (Option<KeyCast>, &'a Column, &'a Expr);
 
 /// Return the cast equality that a filter below an aggregate hands to that aggregate.
 fn lifted_key<'a>(
@@ -501,7 +536,18 @@ fn lifted_key<'a>(
             let Expr::Column(column) = cast.expr.as_ref() else {
                 return None;
             };
-            (!pinned.contains(&column.name)).then_some((Some(cast), column, outer))
+            (!pinned.contains(&column.name))
+                .then(|| (Some(KeyCast::Cast(Arc::clone(&cast.field))), column, outer))
+        }
+        Expr::TryCast(cast) => {
+            let Expr::Column(column) = cast.expr.as_ref() else {
+                return None;
+            };
+            Some((
+                Some(KeyCast::TryCast(Arc::clone(&cast.field))),
+                column,
+                outer,
+            ))
         }
         _ => None,
     }
@@ -531,13 +577,14 @@ fn split_lifted<'a>(
 }
 
 /// Merge -0.0 and 0.0 in a floating window key, including floating leaves of arrays and structs.
-fn normalize_window_key(key: &mut Expr, schema: &DFSchema) -> Result<()> {
+fn normalize_window_key(key: &mut Expr, schema: &DFSchema) -> Result<bool> {
     if NormalizeFloatKeys::has_float(&key.get_type(schema)?)
         && !matches!(key, Expr::ScalarFunction(function) if function.func.inner().is::<NormalizeFloatKeys>())
     {
         *key = ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![key.clone()]);
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Find the floating domains whose filters reach a window before an aggregate.
@@ -573,35 +620,63 @@ fn collect_window_domains(
     found
 }
 
-/// Whether a window partitions or orders by a floating value.
-fn has_floating_window_key(plan: &LogicalPlan) -> Result<bool> {
-    plan.exists(|node| {
-        let LogicalPlan::Window(window) = node else {
-            return Ok(false);
-        };
-        let schema = window.input.schema();
-        window
-            .window_expr
-            .iter()
-            .try_fold(false, |found, expression| {
-                Ok(found
-                    || expression.exists(|part| {
-                        let Expr::WindowFunction(function) = part else {
-                            return Ok(false);
+/// Normalize user keys without moving volatile or nested expressions across operators.
+pub(super) fn normalize_user_window_keys(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    fn visit(plan: LogicalPlan, aggregated: bool) -> Result<(Transformed<LogicalPlan>, bool)> {
+        if matches!(plan, LogicalPlan::Subquery(_)) {
+            return Ok((Transformed::no(plan), false));
+        }
+        let aggregate = matches!(plan, LogicalPlan::Aggregate(_));
+        let mut correlated = false;
+        let result = plan.map_children(|input| {
+            let (result, input_correlated) = visit(input, aggregated || aggregate)?;
+            correlated |= input_correlated;
+            Ok(result)
+        })?;
+        let result = result.transform_data(|plan| {
+            let LogicalPlan::Window(window) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            if !aggregated || !correlated {
+                return Ok(Transformed::no(plan));
+            }
+            let schema = Arc::clone(window.input.schema());
+            let names = NamePreserver::new(&plan);
+            let result = plan.map_expressions(|expression| {
+                let name = names.save(&expression);
+                expression
+                    .transform_up(|expression| {
+                        let Expr::WindowFunction(mut function) = expression else {
+                            return Ok(Transformed::no(expression));
                         };
-                        Ok(function
-                            .params
-                            .partition_by
-                            .iter()
-                            .chain(function.params.order_by.iter().map(|sort| &sort.expr))
-                            .any(|key| {
-                                key.get_type(schema).map_or(true, |data_type| {
-                                    NormalizeFloatKeys::has_float(&data_type)
-                                })
-                            }))
-                    })?)
-            })
-    })
+                        let mut changed = false;
+                        for key in function.params.partition_by.iter_mut().chain(
+                            function
+                                .params
+                                .order_by
+                                .iter_mut()
+                                .map(|sort| &mut sort.expr),
+                        ) {
+                            changed |= normalize_window_key(key, &schema)?;
+                        }
+                        Ok(Transformed::new_transformed(
+                            Expr::WindowFunction(function),
+                            changed,
+                        ))
+                    })
+                    .map(|result| result.update_data(|expression| name.restore(expression)))
+            })?;
+            if result.transformed {
+                result.map_data(LogicalPlan::recompute_schema)
+            } else {
+                Ok(result)
+            }
+        })?;
+        correlated |= matches!(&result.data, LogicalPlan::Filter(filter) if filter.predicate.contains_outer());
+        Ok((result, correlated && !aggregate))
+    }
+
+    visit(plan, false).map(|(result, _)| result)
 }
 
 /// Collect the correlations that stay in their filters after cast equalities are
@@ -636,6 +711,7 @@ fn lifted_scope<'a>(
             );
             supported &= ancestors[..nearest].iter().rev().all(|node| match node {
                 LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => true,
+                LogicalPlan::Unnest(_) => !plain,
                 LogicalPlan::Aggregate(aggregate) => {
                     let grouping = has_grouping_set(&aggregate.group_expr);
                     let carried = !(grouping && plain);
@@ -660,9 +736,15 @@ fn lifted_scope<'a>(
 
 /// A cast equality lifted from its filter to the first window or aggregate above it.
 struct Pending {
-    cast: Option<Cast>,
+    cast: Option<KeyCast>,
     column: Column,
     outer: Expr,
+}
+
+struct GroupingIdMask {
+    bits: usize,
+    original_type: DataType,
+    physical_type: DataType,
 }
 
 /// Keep correlation inputs available until native pull-up adds them to aggregation.
@@ -679,7 +761,7 @@ struct Lift<'a> {
     grouping_ids_fit: bool,
     /// The user's grouping-bit count and grouping-ID type of the aggregate below the
     /// current node whose duplicate sets were given a key, until another aggregate.
-    open_mask: Option<(usize, DataType)>,
+    open_mask: Option<GroupingIdMask>,
     /// Whether any grouping-ID read was masked.
     masked: bool,
     /// How many grouping-set aggregates are above the current node.
@@ -724,7 +806,7 @@ impl Lift<'_> {
             }
         };
         let plan = match &open {
-            Some((bits, data_type)) => mask_grouping_id(plan, *bits, data_type)?,
+            Some(mask) => mask_grouping_id(plan, mask)?,
             None => plan,
         };
         let mut opened = None;
@@ -740,7 +822,7 @@ impl Lift<'_> {
                     LogicalPlan::Filter(filter)
                 } else {
                     pending.extend(lifted.into_iter().map(|(cast, column, outer)| Pending {
-                        cast: cast.cloned(),
+                        cast,
                         column: column.clone(),
                         outer: outer.clone(),
                     }));
@@ -848,25 +930,30 @@ impl Lift<'_> {
                             .filter(|key| self.hidden.contains(&key.name))
                             .map(|key| key.name.as_str())
                             .collect::<HashSet<_>>();
-                        let ordinal = if correlated_below_aggregate(&aggregate.input, &carried)? {
+                        let layout = if correlated_below_aggregate(&aggregate.input, &carried)? {
                             None
                         } else {
-                            grouping_id_fits(&aggregate, &keys, self.reads_grouping_id)
+                            grouping_id_layout(&aggregate, &keys, self.reads_grouping_id)
                         };
-                        self.grouping_ids_fit &= ordinal.is_some();
+                        self.grouping_ids_fit &= layout.is_some();
                         // Keys add grouping bits below the ordinal of the user's duplicate
                         // sets, which a whole grouping-ID read would then see. Native pull-up
                         // also regroups by raw correlated columns, so those keep its layout.
                         if self.reads_grouping_id
-                            && ordinal.is_some()
+                            && let Some((_, physical_type)) = layout
                             && keys.iter().all(|key| self.hidden.contains(&key.name))
-                            && grouping_id_fits(&aggregate, &BTreeSet::new(), false)
-                                .is_some_and(|ordinal| ordinal > 0)
                             && let Ok(field) = aggregate
                                 .schema
                                 .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
+                            && (physical_type != *field.data_type()
+                                || grouping_id_layout(&aggregate, &BTreeSet::new(), false)
+                                    .is_some_and(|(ordinal, _)| ordinal > 0))
                         {
-                            opened = Some((bits, field.data_type().clone()));
+                            opened = Some(GroupingIdMask {
+                                bits,
+                                original_type: field.data_type().clone(),
+                                physical_type,
+                            });
                             self.masked = true;
                         }
                         group_expr.append(&mut aggregate.group_expr);
@@ -937,7 +1024,7 @@ impl Lift<'_> {
         } in pending.drain(..)
         {
             let data_type = match &cast {
-                Some(cast) => cast.field.data_type().clone(),
+                Some(cast) => cast.field().data_type().clone(),
                 None => input
                     .schema()
                     .qualified_field_from_column(&column)?
@@ -949,34 +1036,37 @@ impl Lift<'_> {
             // same floating equality classes; keep raw payloads in their own fields.
             let canonical =
                 (cast.is_none() || windowed) && NormalizeFloatKeys::has_float(&data_type);
+            let merge_nans = cast.is_none() && windowed;
             let outer = if canonical {
-                ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![outer])
+                normalize_private_float_key(outer, &data_type, merge_nans)
             } else {
                 outer
             };
-            let float_string_nan = if cast.is_some() && data_type.is_string() {
-                input
-                    .schema()
-                    .qualified_field_from_column(&column)
-                    .ok()
-                    .and_then(|(_, field)| match field.data_type() {
-                        DataType::Float32 => {
-                            Some(ScalarValue::Float32(Some(f32::from_bits(0x7fc0_0000))))
-                        }
-                        DataType::Float64 => Some(ScalarValue::Float64(Some(f64::from_bits(
-                            0x7ff8_0000_0000_0000,
-                        )))),
-                        _ => None,
-                    })
-            } else {
-                None
-            };
+            let float_string_nan =
+                if matches!(cast, Some(KeyCast::Cast(_))) && data_type.is_string() {
+                    input
+                        .schema()
+                        .qualified_field_from_column(&column)
+                        .ok()
+                        .and_then(|(_, field)| match field.data_type() {
+                            DataType::Float32 => {
+                                Some(ScalarValue::Float32(Some(f32::from_bits(0x7fc0_0000))))
+                            }
+                            DataType::Float64 => Some(ScalarValue::Float64(Some(f64::from_bits(
+                                0x7ff8_0000_0000_0000,
+                            )))),
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
             // Match Spark's float-to-string shortcut, including its signed-zero
             // collapse. Only this private key merges NaN payloads; raw values stay intact.
             let key = if let Some(nan) = float_string_nan {
                 ScalarUDF::from(NormalizeFloatKeys::new())
                     .call(vec![nanvl(Expr::Column(column), lit(nan))])
             } else if !canonical
+                && !matches!(cast, Some(KeyCast::TryCast(_)))
                 && input
                     .schema()
                     .qualified_field_from_column(&column)
@@ -986,14 +1076,11 @@ impl Lift<'_> {
                 Expr::Column(column)
             } else {
                 let value = match cast {
-                    Some(cast) => Expr::Cast(Cast {
-                        expr: Box::new(Expr::Column(column)),
-                        ..cast
-                    }),
+                    Some(cast) => cast.apply(Expr::Column(column)),
                     None => Expr::Column(column),
                 };
                 if canonical {
-                    ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![value])
+                    normalize_private_float_key(value, &data_type, merge_nans)
                 } else {
                     value
                 }
@@ -1028,6 +1115,24 @@ impl Lift<'_> {
             None => input,
         }))
     }
+}
+
+fn normalize_private_float_key(expr: Expr, data_type: &DataType, merge_nans: bool) -> Expr {
+    let nan = if merge_nans {
+        match data_type {
+            DataType::Float32 => Some(ScalarValue::Float32(Some(f32::NAN))),
+            DataType::Float64 => Some(ScalarValue::Float64(Some(f64::NAN))),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let expr = if let Some(nan) = nan {
+        nanvl(expr, lit(nan))
+    } else {
+        expr
+    };
+    ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![expr])
 }
 
 /// The columns that grouping expressions read, and the grouping columns of every set.
@@ -1083,7 +1188,11 @@ fn correlated_below_aggregate(plan: &LogicalPlan, carried: &HashSet<&str>) -> Re
 /// or GROUPING_ID reads must also keep its type, which GROUPING literals were
 /// resolved with, and a clear top bit, since GROUPING_ID casts it to BIGINT.
 /// Returns the largest duplicate-set ordinal if it fits.
-fn grouping_id_fits(aggregate: &Aggregate, keys: &BTreeSet<Column>, read: bool) -> Option<usize> {
+fn grouping_id_layout(
+    aggregate: &Aggregate,
+    keys: &BTreeSet<Column>,
+    read: bool,
+) -> Option<(usize, DataType)> {
     let mut prospective = aggregate.group_expr.clone();
     prospective.extend(keys.iter().cloned().map(Expr::Column));
     let Ok(expanded) = enumerate_grouping_sets(prospective) else {
@@ -1106,19 +1215,10 @@ fn grouping_id_fits(aggregate: &Aggregate, keys: &BTreeSet<Column>, read: bool) 
     }
     let ordinal = duplicates.into_values().max().unwrap_or(1) - 1;
     let bits = groups.len() + (usize::BITS - ordinal.leading_zeros()) as usize;
-    if !read {
-        // DataFusion shifts the ordinal past the grouping bits, which overflows in
-        // debug builds when there are exactly 64 of them.
-        return (groups.len() < 64 && bits <= 64).then_some(ordinal);
-    }
-    (bits < 64
-        && aggregate
-            .schema
-            .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
-            .is_ok_and(|field| {
-                Aggregate::grouping_id_type(groups.len(), ordinal) == *field.data_type()
-            }))
-    .then_some(ordinal)
+    // DataFusion shifts the ordinal past the grouping bits, which overflows in
+    // debug builds when there are exactly 64 of them.
+    (groups.len() < 64 && bits <= 64 && (!read || bits < 64))
+        .then(|| (ordinal, Aggregate::grouping_id_type(groups.len(), ordinal)))
 }
 
 fn is_grouping_id(expression: &Expr) -> bool {
@@ -1127,11 +1227,12 @@ fn is_grouping_id(expression: &Expr) -> bool {
 
 /// Keep only the user's grouping bits of every whole grouping-ID read in a node, dropping
 /// the key bits and the duplicate-set ordinal above them. GROUPING already reads one bit.
-fn mask_grouping_id(plan: LogicalPlan, bits: usize, data_type: &DataType) -> Result<LogicalPlan> {
+fn mask_grouping_id(plan: LogicalPlan, layout: &GroupingIdMask) -> Result<LogicalPlan> {
     let mask = Expr::Literal(
-        ScalarValue::UInt64(Some((1_u64 << bits) - 1)).cast_to(data_type)?,
+        ScalarValue::UInt64(Some((1_u64 << layout.bits) - 1)).cast_to(&layout.physical_type)?,
         None,
     );
+    let widened = layout.physical_type != layout.original_type;
     let names = NamePreserver::new(&plan);
     Ok(plan
         .map_expressions(|expression| {
@@ -1143,16 +1244,21 @@ fn mask_grouping_id(plan: LogicalPlan, bits: usize, data_type: &DataType) -> Res
                             ref left,
                             op: Operator::BitwiseAnd,
                             ref right,
-                        }) if is_grouping_id(left)
+                        }) if !widened
+                            && is_grouping_id(left)
                             && matches!(right.as_ref(), Expr::Literal(..)) =>
                         {
                             Transformed::new(expression, false, TreeNodeRecursion::Jump)
                         }
-                        expression if is_grouping_id(&expression) => Transformed::new(
-                            bitwise_and(expression, mask.clone()),
-                            true,
-                            TreeNodeRecursion::Jump,
-                        ),
+                        expression if is_grouping_id(&expression) => {
+                            let bits = bitwise_and(expression, mask.clone());
+                            let bits = if widened {
+                                datafusion_expr::cast(bits, layout.original_type.clone())
+                            } else {
+                                bits
+                            };
+                            Transformed::new(bits, true, TreeNodeRecursion::Jump)
+                        }
                         expression => Transformed::no(expression),
                     })
                 })?
@@ -1209,10 +1315,7 @@ mod tests {
                         Column::from_name("outer"),
                     );
                     let mut pending = vec![Pending {
-                        cast: Some(Cast::new(
-                            Box::new(Expr::Column(column.clone())),
-                            to.clone(),
-                        )),
+                        cast: Some(KeyCast::Cast(Arc::new(Field::new("", to.clone(), true)))),
                         column: column.clone(),
                         outer: outer.clone(),
                     }];
@@ -1468,7 +1571,7 @@ mod tests {
         ));
     }
     #[test]
-    fn time64_string_formatter_can_merge_unvalidated_raw_times() -> Result<()> {
+    fn time64_string_formatter_rejects_invalid_times() -> Result<()> {
         for (zero, wrapped) in [
             (
                 ScalarValue::Time64Microsecond(Some(0)),
@@ -1479,11 +1582,11 @@ mod tests {
                 ScalarValue::Time64Nanosecond(Some(4_294_967_296_000_000_000)),
             ),
         ] {
-            assert_ne!(zero, wrapped);
             assert_eq!(
                 zero.cast_to(&DataType::Utf8)?,
-                wrapped.cast_to(&DataType::Utf8)?
+                ScalarValue::Utf8(Some("00:00:00".into()))
             );
+            assert!(wrapped.cast_to(&DataType::Utf8).is_err());
             assert!(!injective_cast(&zero.data_type(), &DataType::Utf8));
         }
         Ok(())

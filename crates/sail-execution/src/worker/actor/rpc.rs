@@ -1,14 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskStreamKey;
+use crate::id::TaskStreamKeySet;
+use crate::rpc::server_options;
 use crate::shuffle::ShuffleCompression;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
@@ -23,14 +26,14 @@ struct WorkerTaskStreamFetcher {
 }
 
 #[async_trait]
-impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
+impl TaskStreamFetcher<TaskStreamKeySet> for WorkerTaskStreamFetcher {
     async fn fetch(
         &self,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let message = TaskRunnerMessage::FetchLocalStream {
-            key,
+        let message = TaskRunnerMessage::FetchLocalStreams {
+            keys,
             result: sender,
         };
         self.handle
@@ -60,7 +63,7 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server = TaskStreamFlightServer::<TaskStreamKey>::new(
+        let flight_server = TaskStreamFlightServer::<TaskStreamKeySet>::new(
             Box::new(WorkerTaskStreamFetcher {
                 handle: task_runner,
             }),
@@ -77,7 +80,8 @@ impl WorkerActor {
             .send(WorkerMessage::ServerReady { port, signal: tx })
             .await?;
 
-        ServerBuilder::new("sail_worker", Default::default())
+        ServerBuilder::new("sail_worker", server_options())
+            .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
             .add_service(service, Some(crate::worker::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)

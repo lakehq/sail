@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use datafusion::catalog::Session;
 use datafusion::prelude::SessionConfig;
@@ -26,10 +16,33 @@ pub mod r#gen {
 pub(crate) mod parsers {
     pub(crate) use sail_data_source::options::parsers::*;
 
-    pub(crate) use super::{parse_delta_log_replay_strategy, parse_user_metadata};
+    pub(crate) use super::{
+        parse_delta_log_replay_strategy, parse_explicit_string, parse_txn_version,
+    };
 }
 
 const USER_METADATA_CONFIG: &str = "spark.databricks.delta.commitInfo.userMetadata";
+const REPLACE_WHERE_CHECK_CONFIG: &str =
+    "spark.databricks.delta.replaceWhere.constraintCheck.enabled";
+
+pub(crate) fn session_replace_where_constraint_check(
+    config: &SessionConfig,
+) -> datafusion_common::Result<bool> {
+    let value = match config.get_extension::<SessionConfigService>() {
+        Some(service) => service.get_option(REPLACE_WHERE_CHECK_CONFIG)?,
+        None => None,
+    };
+    value
+        .map(|value| {
+            value.to_ascii_lowercase().parse::<bool>().map_err(|_| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "{REPLACE_WHERE_CHECK_CONFIG} must be a boolean, got: {value}"
+                ))
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(true))
+}
 
 pub(crate) fn session_user_metadata(
     config: &SessionConfig,
@@ -40,9 +53,22 @@ pub(crate) fn session_user_metadata(
     }
 }
 
-pub(crate) fn parse_user_metadata(_key: &str, value: &str) -> DataSourceResult<Option<String>> {
+pub(crate) fn parse_explicit_string(_key: &str, value: &str) -> DataSourceResult<Option<String>> {
     // An empty string is an explicit value that overrides the session default.
     Ok(Some(value.to_string()))
+}
+
+pub(crate) fn parse_txn_version(key: &str, value: &str) -> DataSourceResult<Option<i64>> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 0)
+        .map(Some)
+        .ok_or_else(|| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+            cause: Some("must be a non-negative integer".to_string()),
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Default, Serialize, Deserialize)]
@@ -87,6 +113,11 @@ impl ResolveOptions for r#gen::DeltaWriteOptions {
             partial.merge(layer.build_partial_options()?);
         }
         let mut options = partial.finalize()?;
+        match (&options.txn_app_id, options.txn_version) {
+            (Some(_), None) => return Err(DataSourceError::MissingOption { key: "txnVersion" }),
+            (None, Some(_)) => return Err(DataSourceError::MissingOption { key: "txnAppId" }),
+            _ => {}
+        }
         // An explicit value, including an empty string, takes precedence.
         if options.user_metadata.is_none() {
             options.user_metadata = session_user_metadata(ctx.config())?;
@@ -113,16 +144,24 @@ mod tests {
         value: Mutex<Option<String>>,
         reads: AtomicUsize,
         fail: bool,
+        key: Option<&'static str>,
     }
 
     impl SessionConfigProvider for Provider {
         fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
-            assert_eq!(keys, &[USER_METADATA_CONFIG]);
+            assert_eq!(keys, &[self.key.unwrap_or(USER_METADATA_CONFIG)]);
             self.reads.fetch_add(1, Ordering::SeqCst);
             if self.fail {
                 return Err(DataFusionError::Plan("provider failed".to_string()));
             }
             Ok(vec![self.value.lock().unwrap().clone()])
+        }
+
+        fn get_options_with_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<std::collections::BTreeMap<String, String>> {
+            Ok(Default::default())
         }
     }
 
@@ -138,6 +177,110 @@ mod tests {
         OptionLayer::OptionList {
             items: vec![(key.to_string(), value.to_string())],
         }
+    }
+
+    #[test]
+    fn replace_where_check_defaults_and_errors() {
+        assert!(session_replace_where_constraint_check(&SessionConfig::new()).unwrap());
+        let provider = Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            ..Default::default()
+        });
+        let state = state(provider.clone());
+        for (value, expected) in [
+            (None, true),
+            (Some("true"), true),
+            (Some("FALSE"), false),
+            (Some("false"), false),
+            (Some("TRUE"), true),
+        ] {
+            *provider.value.lock().unwrap() = value.map(str::to_string);
+            assert_eq!(
+                session_replace_where_constraint_check(state.config()).unwrap(),
+                expected
+            );
+        }
+        for value in ["", "1", "yes"] {
+            *provider.value.lock().unwrap() = Some(value.to_string());
+            assert!(matches!(
+                session_replace_where_constraint_check(state.config()),
+                Err(DataFusionError::Plan(_))
+            ));
+        }
+        let failing = state_with_failing_replace_where_provider();
+        assert!(matches!(
+            session_replace_where_constraint_check(failing.config()),
+            Err(DataFusionError::Plan(message)) if message == "provider failed"
+        ));
+    }
+
+    fn state_with_failing_replace_where_provider() -> SessionState {
+        state(Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            fail: true,
+            ..Default::default()
+        }))
+    }
+
+    #[tokio::test]
+    async fn replace_where_check_is_captured_in_the_incoming_plan() -> Result<()> {
+        use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
+        use sail_common_datafusion::datasource::{DataSource, SinkInfo, SinkMode};
+        use sail_common_datafusion::logical_expr::ExprWithSource;
+
+        use crate::lake_source::DeltaLakeSource;
+
+        let provider = Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            ..Default::default()
+        });
+        let state = state(provider.clone());
+        let input = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1).alias("p")])?
+            .build()?;
+        let info = SinkInfo {
+            input: input.clone(),
+            identity_columns_to_track: vec![],
+            sql_insert: false,
+            mode: SinkMode::OverwriteIf {
+                condition: Box::new(ExprWithSource::new(col("p").eq(lit(1)), None)),
+            },
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: vec![OptionLayer::OptionList {
+                items: vec![
+                    ("path".to_string(), "/unused".to_string()),
+                    (REPLACE_WHERE_CHECK_CONFIG.to_string(), "false".to_string()),
+                ],
+            }],
+            lakehouse_table: None,
+        };
+        let checked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
+        *provider.value.lock().unwrap() = Some("false".to_string());
+        let unchecked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
+        *provider.value.lock().unwrap() = Some("true".to_string());
+        assert!(matches!(checked.inputs()[0], LogicalPlan::Filter(_)));
+        assert_eq!(unchecked.inputs()[0], &input);
+        assert_eq!(provider.reads.load(Ordering::SeqCst), 2);
+        // A non-conditional write must not consult this setting.
+        let append = SinkInfo {
+            mode: SinkMode::Append,
+            ..info.clone()
+        };
+        assert!(
+            DeltaLakeSource
+                .create_writer(&state_with_failing_replace_where_provider(), append)
+                .await
+                .is_ok()
+        );
+        assert!(
+            DeltaLakeSource
+                .create_writer(&state_with_failing_replace_where_provider(), info)
+                .await
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Formatter;
@@ -16,14 +18,47 @@ pub struct RemoteError {
 
 /// A mutation may have committed and must not be retried automatically.
 #[derive(Debug, Error)]
-#[error("commit state unknown: {0}")]
-pub struct CommitStateUnknownError(pub String);
+pub struct CommitStateUnknownError {
+    message: String,
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+}
+
+impl CommitStateUnknownError {
+    pub fn with_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
 
 impl From<String> for CommitStateUnknownError {
     fn from(message: String) -> Self {
-        Self(message)
+        Self {
+            message,
+            source: None,
+        }
     }
 }
+
+impl fmt::Display for CommitStateUnknownError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "commit state unknown: {}", self.message)?;
+        if let Some(source) = &self.source {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A definite rejection invalidated prepared output; retry requires a new plan.
+#[derive(Debug, Error)]
+#[error("commit requires replanning: {0}")]
+pub struct CommitRequiresReplanningError(pub String);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonErrorCause {
@@ -73,6 +108,7 @@ pub enum CommonErrorCause {
     Execution(String),
     DeltaTable(String),
     CommitStateUnknown(String),
+    CommitRequiresReplanning(String),
 }
 
 impl fmt::Display for CommonErrorCause {
@@ -103,7 +139,8 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x)
-            | CommonErrorCause::CommitStateUnknown(x) => write!(f, "{x}"),
+            | CommonErrorCause::CommitStateUnknown(x)
+            | CommonErrorCause::CommitRequiresReplanning(x) => write!(f, "{x}"),
             CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
                 write!(f, "{summary}")
             }
@@ -113,7 +150,10 @@ impl fmt::Display for CommonErrorCause {
 
 impl CommonErrorCause {
     pub fn is_retryable(&self) -> bool {
-        !matches!(self, Self::CommitStateUnknown(_))
+        !matches!(
+            self,
+            Self::CommitStateUnknown(_) | Self::CommitRequiresReplanning(_)
+        )
     }
 
     fn build<Py: PythonErrorCauseExtractor>(
@@ -158,7 +198,7 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<DataFusionError>() {
             return match e {
-                DataFusionError::ArrowError(e, _) => Self::build::<Py>(e, seen),
+                DataFusionError::ArrowError(e, _) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::ParquetError(e) => Self::FormatParquet(e.to_string()),
                 DataFusionError::ObjectStore(e) => Self::Io(e.to_string()),
                 DataFusionError::IoError(e) => Self::Io(e.to_string()),
@@ -171,7 +211,7 @@ impl CommonErrorCause {
                 DataFusionError::ExecutionJoin(e) => Self::Execution(e.to_string()),
                 DataFusionError::ResourcesExhausted(x) => Self::Execution(x.clone()),
                 DataFusionError::External(e) => Self::build::<Py>(e.as_ref(), seen),
-                DataFusionError::Context(_, e) => Self::build::<Py>(e, seen),
+                DataFusionError::Context(_, e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Substrait(x) => Self::Unknown(x.clone()),
                 DataFusionError::Diagnostic(_, e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Collection(errors) => {
@@ -181,7 +221,8 @@ impl CommonErrorCause {
                         .collect::<Vec<_>>();
                     causes
                         .iter()
-                        .find(|cause| !cause.is_retryable())
+                        .find(|cause| matches!(cause, Self::CommitStateUnknown(_)))
+                        .or_else(|| causes.iter().find(|cause| !cause.is_retryable()))
                         .or_else(|| causes.first())
                         .cloned()
                         .unwrap_or_else(|| Self::Unknown("empty error collection".to_string()))
@@ -203,6 +244,10 @@ impl CommonErrorCause {
             return Self::CommitStateUnknown(e.to_string());
         }
 
+        if let Some(e) = error.downcast_ref::<CommitRequiresReplanningError>() {
+            return Self::CommitRequiresReplanning(e.to_string());
+        }
+
         if let Some(e) = error.source() {
             Self::build::<Py>(e, seen)
         } else {
@@ -214,5 +259,115 @@ impl CommonErrorCause {
     /// from the innermost error.
     pub fn new<Py: PythonErrorCauseExtractor>(error: &(dyn std::error::Error + 'static)) -> Self {
         Self::build::<Py>(error, &mut HashSet::new())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::error::Error;
+    use std::io;
+
+    use super::*;
+
+    struct NoPythonError;
+
+    impl PythonErrorCauseExtractor for NoPythonError {
+        fn extract(_: &(dyn Error + 'static)) -> Option<PythonErrorCause> {
+            None
+        }
+    }
+
+    #[test]
+    fn replanning_cause_survives_wrappers_and_serialization() {
+        fn rejection() -> DataFusionError {
+            DataFusionError::External(Box::new(CommitRequiresReplanningError(
+                "prepared output is stale".into(),
+            )))
+        }
+        for error in [
+            rejection(),
+            DataFusionError::Context("commit failed".into(), Box::new(rejection())),
+            DataFusionError::Shared(std::sync::Arc::new(rejection())),
+            DataFusionError::ArrowError(
+                Box::new(ArrowError::ExternalError(Box::new(rejection()))),
+                None,
+            ),
+            DataFusionError::Collection(vec![
+                DataFusionError::Execution("worker disconnected".into()),
+                rejection(),
+            ]),
+        ] {
+            let cause = CommonErrorCause::new::<NoPythonError>(&error);
+            assert!(!cause.is_retryable());
+            let json = serde_json::to_value(&cause).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "commitRequiresReplanning": "commit requires replanning: prepared output is stale"
+                })
+            );
+            let remote = DataFusionError::External(Box::new(RemoteError {
+                cause: serde_json::from_value(json).unwrap(),
+            }));
+            assert!(matches!(CommonErrorCause::new::<NoPythonError>(&remote),
+                CommonErrorCause::CommitRequiresReplanning(message)
+                    if message == "commit requires replanning: prepared output is stale"));
+        }
+        assert!(
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::Execution(
+                "worker disconnected".into()
+            ))
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn unknown_commit_takes_precedence_over_definite_rejection() {
+        let error = DataFusionError::Collection(vec![
+            DataFusionError::External(Box::new(CommitRequiresReplanningError(
+                "stale output".into(),
+            ))),
+            DataFusionError::External(Box::new(CommitStateUnknownError::from(
+                "response lost".to_string(),
+            ))),
+        ]);
+        assert!(matches!(
+            CommonErrorCause::new::<NoPythonError>(&error),
+            CommonErrorCause::CommitStateUnknown(_)
+        ));
+    }
+
+    #[test]
+    fn commit_state_unknown_without_source_preserves_behavior() {
+        let error = CommitStateUnknownError::from("catalog commit may have succeeded".to_string());
+        let expected = "commit state unknown: catalog commit may have succeeded";
+        assert_eq!(error.to_string(), expected);
+        assert!(error.source().is_none());
+        let cause =
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::External(Box::new(error)));
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == expected)
+        );
+        assert!(!cause.is_retryable());
+    }
+
+    #[test]
+    fn commit_state_unknown_with_source_preserves_typed_cause() {
+        let error = CommitStateUnknownError::with_source(
+            "commit may have succeeded",
+            io::Error::new(io::ErrorKind::PermissionDenied, "verification denied"),
+        );
+        let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "verification denied");
+        let expected = "commit state unknown: commit may have succeeded: verification denied";
+        assert_eq!(error.to_string(), expected);
+        let cause =
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::External(Box::new(error)));
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == expected)
+        );
+        assert!(!cause.is_retryable());
     }
 }

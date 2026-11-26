@@ -1,11 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Common Celeborn wire protocol types and transport-message decoding.
 
-#[expect(clippy::enum_variant_names)]
+#[expect(clippy::allow_attributes)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/celeborn.rs"));
 }
 
 pub(crate) mod transport;
+pub use transport::TransportConnection;
 
 /// Celeborn operation status codes, mirroring the `StatusCode` enum in Java.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -11,6 +13,8 @@ import yaml
 from syrupy.data import Snapshot, SnapshotCollection
 from syrupy.exceptions import TaintedSnapshotError
 from syrupy.extensions.base import AbstractSyrupyExtension
+
+from pysail.testing.bdd import scenario_feature_path
 
 if TYPE_CHECKING:
     from syrupy.extensions.base import SnapshotIndex
@@ -301,8 +305,6 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
         """
         _ = index
         item = test_location.item
-        obj = getattr(item, "obj", None)
-        scenario = getattr(obj, "__scenario__", None)
 
         # Collect the metadata to customize the snapshot.
         # The metadata can be specified via the pytest marker for the test function.
@@ -316,14 +318,10 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
                     raise ValueError(msg)
                 metadata.update(marker.kwargs)
 
-        if scenario is not None:
-            feature = getattr(scenario, "feature", None)
-            feature_filename = getattr(feature, "filename", None)
-            if feature_filename is not None:
-                feature_path = Path(feature_filename)
-                test_dir = Path(test_location.filepath).parent
-                rel = feature_path.relative_to(test_dir)
-                return str(rel.with_suffix(""))
+        if (feature_path := scenario_feature_path(item)) is not None:
+            test_dir = Path(test_location.filepath).resolve().parent
+            rel = feature_path.relative_to(test_dir)
+            return str(rel.with_suffix(""))
         if group := metadata.get("group"):
             return f"{test_location.basename}.{group}"
         return test_location.basename

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -178,15 +180,20 @@ impl Actor for DriverActor {
                 sequence,
             } => self.handle_update_task(ctx, key, status, message, cause, sequence),
             DriverMessage::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
+            DriverMessage::RangeSplitPointsRead {
+                job_id,
+                shuffle,
+                partitions,
+            } => self.handle_range_split_points_read(ctx, job_id, shuffle, partitions),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
-            DriverMessage::FetchWorkerStream {
+            DriverMessage::FetchWorkerStreams {
                 worker_id,
-                key,
+                keys,
                 schema,
                 result,
-            } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
+            } => self.handle_fetch_worker_streams(ctx, worker_id, keys, schema, result),
             DriverMessage::CelebornGetLifecycleManager { result } => {
                 self.handle_celeborn_get_lifecycle_manager(result)
             }

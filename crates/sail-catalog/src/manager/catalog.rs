@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -5,6 +7,13 @@ use crate::manager::CatalogManager;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
+    pub fn catalog_capabilities(
+        &self,
+        catalog: &str,
+    ) -> CatalogResult<Vec<crate::lakehouse::LakehouseCapability>> {
+        Ok(self.state()?.get_catalog(catalog)?.lakehouse_capabilities())
+    }
+
     pub fn default_catalog(&self) -> CatalogResult<Arc<str>> {
         Ok(self.state()?.default_catalog.clone())
     }

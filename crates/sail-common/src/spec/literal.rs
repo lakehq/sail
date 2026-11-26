@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 pub use arrow_buffer::i256;
@@ -405,6 +407,10 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         }),
         spec::DataType::ConfiguredUtf8 { .. } => Ok(Literal::Utf8 { value: None }),
         spec::DataType::ConfiguredBinary => Ok(Literal::Binary { value: None }),
+        spec::DataType::Uuid => Ok(Literal::FixedSizeBinary {
+            size: 16,
+            value: None,
+        }),
         spec::DataType::UserDefined { sql_type, .. } => data_type_to_null_literal(*sql_type),
         spec::DataType::Variant => {
             // For null variant, use the Variant type directly

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -36,8 +38,9 @@ impl ReadFormat for BinaryReadFormat {
                 .options()
                 .execution
                 .time_zone
-                .clone()
-                .unwrap_or_else(|| "UTC".to_string()),
+                .as_ref()
+                .map(|tz| tz.as_str())
+                .unwrap_or("UTC"),
         );
         Ok(super::read_schema(tz))
     }

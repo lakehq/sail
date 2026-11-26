@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -307,6 +309,9 @@ impl ExecutionPlan for IcebergProcedureExec {
                 Some(table) => table,
                 None => {
                     let target = prepare_lake_procedure_execution(context.as_ref(), &call).await?;
+                    if matches!(target, sail_common_datafusion::lakeprocedure::LakeProcedureExecutionTarget::Catalog { .. }) {
+                        return crate::procedure::migration::execute(&context, &call).await;
+                    }
                     ProcedureTable::from_execution_target(target).await?
                 }
             };
@@ -330,6 +335,7 @@ impl ExecutionPlan for IcebergProcedureExec {
                     execution_schema.clone(),
                     rewrite_data_files.rewritten_data_files_count(),
                     rewrite_data_files.rewritten_bytes_count(),
+                    rewrite_data_files.starting_sequence_number(),
                 )
                 .execute(0, Arc::clone(&context))?;
                 let batch = stream.next().await.ok_or_else(|| {

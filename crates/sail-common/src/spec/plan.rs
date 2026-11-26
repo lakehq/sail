@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -381,6 +383,12 @@ pub enum CommandNode {
     },
     CreateTable {
         table: ObjectName,
+        #[serde(flatten)]
+        definition: TableDefinition,
+    },
+    CloneTable {
+        table: ObjectName,
+        source: ObjectName,
         #[serde(flatten)]
         definition: TableDefinition,
     },

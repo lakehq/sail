@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 
 use chrono::{DateTime, Datelike, Days, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -76,6 +78,19 @@ impl SparkZone {
         FixedOffset::east_opt(seconds)
             .map(Self::Fixed)
             .ok_or_else(|| exec_datafusion_err!("invalid time-zone offset: {seconds}"))
+    }
+
+    pub fn at_utc(&self, instant: &DateTime<Utc>) -> DateTime<FixedOffset> {
+        match self {
+            Self::Fixed(zone) => instant.with_timezone(zone),
+            Self::Named(zone) => instant.with_timezone(zone).fixed_offset(),
+        }
+    }
+
+    pub fn local_datetime(&self, instant: &DateTime<Utc>) -> Option<NaiveDateTime> {
+        instant
+            .naive_utc()
+            .checked_add_offset(*self.at_utc(instant).offset())
     }
 
     pub fn current_date(&self) -> (i64, u32, u32) {

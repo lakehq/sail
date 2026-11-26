@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
@@ -152,12 +154,6 @@ impl DataSource for CheckpointDataSource {
             .source
             .try_pushdown_sort(order)?
             .map(|source| self.map_source(source)))
-    }
-
-    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
-        self.source
-            .with_preserve_order(preserve_order)
-            .map(|source| self.map_source(source))
     }
 
     fn with_new_state(&self, state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn DataSource>> {
@@ -867,16 +863,11 @@ mod tests {
     fn storage_schema_uses_positional_names_and_preserves_metadata() {
         let logical = Arc::new(Schema::new_with_metadata(
             vec![
-                Field::new("value", DataType::Int64, false).with_metadata(
-                    [("field-key".to_string(), "field-value".to_string())]
-                        .into_iter()
-                        .collect(),
-                ),
+                Field::new("value", DataType::Int64, false)
+                    .with_metadata([("field-key", "field-value")]),
                 Field::new("value", DataType::Utf8, true),
             ],
-            [("schema-key".to_string(), "schema-value".to_string())]
-                .into_iter()
-                .collect(),
+            [("schema-key", "schema-value")],
         ));
 
         let storage = checkpoint_storage_schema(&logical);

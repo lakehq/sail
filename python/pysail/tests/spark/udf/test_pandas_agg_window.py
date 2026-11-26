@@ -1,16 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Window
-from pyspark.sql.functions import PandasUDFType, pandas_udf
-
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pyspark.sql.functions import pandas_udf
 
 
 def test_registered_pandas_grouped_agg_udf_as_window_function(spark):
-    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
-    def mean_udf(v):
-        return v.mean()
+    @pandas_udf("double")
+    def mean_udf(v: pd.Series) -> float:
+        return float(v.mean())
 
     spark.udf.register("mean_udf", mean_udf)
     df = spark.createDataFrame(
@@ -32,10 +32,10 @@ def test_registered_pandas_grouped_agg_udf_as_window_function(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only: error message differs from JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests a Sail error message that differs from JVM Spark")
 def test_registered_pandas_scalar_udf_rejected_as_window_function(spark):
-    @pandas_udf("string", PandasUDFType.SCALAR)
-    def my_upper(s):
+    @pandas_udf("string")
+    def my_upper(s: pd.Series) -> pd.Series:
         return s.str.upper()
 
     spark.udf.register("my_upper_scalar", my_upper)
@@ -50,8 +50,8 @@ def test_registered_pandas_scalar_udf_rejected_as_window_function(spark):
 def test_pandas_window_retraction_preserves_nulls_and_multiple_arguments(spark, frame_type):
     from pyspark.sql import functions as F  # noqa: N812
 
-    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
-    def paired_sum(a, b):
+    @pandas_udf("double")
+    def paired_sum(a: pd.Series, b: pd.Series) -> float:
         return float((a.fillna(0) + b.fillna(0)).sum())
 
     df = spark.createDataFrame(
@@ -73,8 +73,8 @@ def test_pandas_window_retraction_preserves_nulls_and_multiple_arguments(spark, 
 def test_pandas_window_retracts_to_an_empty_range(spark, invocation):
     from pyspark.sql import functions as F  # noqa: N812
 
-    @pandas_udf("long", PandasUDFType.GROUPED_AGG)
-    def frame_size(values):
+    @pandas_udf("long")
+    def frame_size(values: pd.Series) -> int:
         return len(values)
 
     df = spark.createDataFrame([(0,), (1,), (8,), (9,)], "id long")

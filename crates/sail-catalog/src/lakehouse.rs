@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
@@ -29,6 +31,7 @@ pub enum LakehouseCapability {
     DeltaRatifiedCommits,
     IcebergRestCommit,
     IcebergRestScanPlanning,
+    IcebergImportRegistration,
     VersionedCatalogReferences,
     CrossFormatMetadata,
     GovernancePolicies,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Helper functions to define Arrow data types used in system tables.
 use std::collections::HashMap;
 use std::sync::Arc;

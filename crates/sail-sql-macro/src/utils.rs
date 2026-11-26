@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use syn::parse::Parser;
 use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, Lit, LitStr};

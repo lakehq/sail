@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Durable system events emitted by the driver.
 
 use chrono::{DateTime, Utc};
@@ -18,6 +20,7 @@ pub enum SystemEvent {
     },
     SessionCreated {
         session_id: String,
+        client_session_id: String,
         user_id: String,
         status: String,
         created_at: DateTime<Utc>,
@@ -92,6 +95,14 @@ pub enum SystemEvent {
         port: Option<u16>,
         status: String,
         updated_at: DateTime<Utc>,
+    },
+    StageResized {
+        session_id: String,
+        job_id: u64,
+        stage: u64,
+        partitions: u64,
+        inputs: Vec<StageInput>,
+        distribution: String,
     },
 }
 

@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeSet;
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::functions::core::expr_fn::coalesce;
-use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
@@ -12,11 +12,16 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit};
+use datafusion_expr::{
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, ScalarUDF, expr_fn, ident, lit,
+};
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_logical_optimizer::{exists_by_count, pull_up_correlated_filters_in_predicate_subquery};
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
+use crate::shared_cte::{CteReference, exists_in_plan_or_cte_definitions};
 
 pub(crate) struct ExistsRewriter<'s> {
     plan: LogicalPlan,
@@ -28,8 +33,8 @@ impl<'s> PlanRewriter<'s> for ExistsRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -76,10 +81,9 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 // correlated input is empty. Let scalar decorrelation preserve
                 // that row before applying the membership comparison.
                 let equal = (*query.expr).eq(expr_fn::scalar_subquery(inner));
-                return Ok(Transformed::yes(coalesce(vec![
-                    if query.negated { !equal } else { equal },
-                    lit(false),
-                ])));
+                return Ok(Transformed::yes(ScalarUDF::from(CoalesceFunc::new()).call(
+                    vec![if query.negated { !equal } else { equal }, lit(false)],
+                )));
             }
             if Self::scalar_aggregate_has_filter(&inner) == Some(true) {
                 // A scalar subquery uses NULL both for a missing row and for
@@ -109,7 +113,8 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 let equal = (*query.expr).eq(value);
                 return Ok(Transformed::yes(
                     datafusion_expr::when(packed.is_null(), lit(query.negated)).otherwise(
-                        coalesce(vec![if query.negated { !equal } else { equal }, lit(false)]),
+                        ScalarUDF::from(CoalesceFunc::new())
+                            .call(vec![if query.negated { !equal } else { equal }, lit(false)]),
                     )?,
                 ));
             }
@@ -164,38 +169,60 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
 }
 
 impl ExistsRewriter<'_> {
+    /// Returns whether the rewrite of a correlated EXISTS subquery stops in the plan,
+    /// without a decision from an aggregation or a limit at the top of the plan
+    /// that does not depend on the rows of its input.
+    fn stops_in(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(projection) => Self::stops_in(&projection.input),
+            LogicalPlan::SubqueryAlias(alias) => Self::stops_in(&alias.input),
+            LogicalPlan::Sort(sort) => Self::stops_in(&sort.input),
+            LogicalPlan::Aggregate(aggregate) => !aggregate.group_expr.is_empty(),
+            LogicalPlan::Limit(limit) => {
+                if matches!(limit.get_fetch_type(), Ok(FetchType::Literal(Some(0)))) {
+                    false
+                } else if matches!(limit.get_skip_type(), Ok(SkipType::Literal(0))) {
+                    Self::stops_in(&limit.input)
+                } else {
+                    // The rows are counted after skipping some of them.
+                    true
+                }
+            }
+            LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(scan) {
+                Some(reference) => Self::stops_in(reference.definition().resolved()),
+                None => true,
+            },
+            _ => true,
+        }
+    }
+
+    /// Returns the plan in which the bounds of each limit are integer literals.
+    fn literal_limits(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform_up(|plan| {
+            let LogicalPlan::Limit(mut limit) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let evaluator = LiteralEvaluator::new();
+            for bound in [&mut limit.skip, &mut limit.fetch].into_iter().flatten() {
+                if bound.is_volatile() {
+                    return Err(plan_datafusion_err!("LIMIT/OFFSET must be constant"));
+                }
+                let value = evaluator.evaluate(bound)?;
+                **bound = lit(LiteralValue(&value).try_to_i64()?);
+            }
+            Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+        })
+        .data()
+    }
+
     fn count_rows(&mut self, query: LogicalPlan, skip: usize) -> Result<Expr> {
         let output = self.state.register_field_name("");
-        let skip = i64::try_from(skip).map_err(|error| plan_datafusion_err!("{error}"))?;
-        // COUNT produces one non-null result even when the subquery has no rows.
-        let query = LogicalPlanBuilder::from(query)
-            .aggregate(Vec::<Expr>::new(), vec![count(lit(1_i64)).alias(&output)])?
-            .project(vec![ident(output).gt(lit(skip))])?
-            .build()?;
-        Self::validate_correlated_operators(&query)?;
-        Ok(coalesce(vec![
-            expr_fn::scalar_subquery(Arc::new(query)),
-            lit(false),
-        ]))
+        exists_by_count(query, skip, &output, Self::validate_correlated_operators)
     }
 
     fn correlated_exists(&mut self, query: LogicalPlan) -> Result<Expr> {
-        let mut query = query
-            .transform_up(|plan| {
-                let LogicalPlan::Limit(mut limit) = plan else {
-                    return Ok(Transformed::no(plan));
-                };
-                let evaluator = LiteralEvaluator::new();
-                for bound in [&mut limit.skip, &mut limit.fetch].into_iter().flatten() {
-                    if bound.is_volatile() {
-                        return Err(plan_datafusion_err!("LIMIT/OFFSET must be constant"));
-                    }
-                    let value = evaluator.evaluate(bound)?;
-                    **bound = lit(LiteralValue(&value).try_to_i64()?);
-                }
-                Ok(Transformed::yes(LogicalPlan::Limit(limit)))
-            })
-            .data()?;
+        let mut query =
+            Self::literal_limits(pull_up_correlated_filters_in_predicate_subquery(query)?.data)?;
         let query = loop {
             query = match query {
                 LogicalPlan::Projection(projection) => Arc::unwrap_or_clone(projection.input),
@@ -214,10 +241,14 @@ impl ExistsRewriter<'_> {
                             if Self::scalar_aggregate_has_filter(&limit.input).is_some() {
                                 return Ok(lit(false));
                             }
-                            if limit.input.exists(|plan| {
-                                Ok(matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()))
+                            if exists_in_plan_or_cte_definitions(&limit.input, &mut |plan| {
+                                Ok(
+                                    matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()),
+                                )
                             })? {
-                                return not_impl_err!("projected correlated EXISTS with OFFSET over nested scalar aggregation");
+                                return not_impl_err!(
+                                    "projected correlated EXISTS with OFFSET over nested scalar aggregation"
+                                );
                             }
                             return self.count_rows(Arc::unwrap_or_clone(limit.input), skip);
                         }
@@ -228,10 +259,25 @@ impl ExistsRewriter<'_> {
                         }
                     }
                 }
+                // The rewrite looks at a CTE reference as at its definition, except that
+                // a reference to a volatile definition is kept when the rewrite would
+                // stop in the definition, so that it reads the evaluation of the other
+                // references.
+                LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(&scan) {
+                    Some(reference)
+                        if !(reference.definition().volatile()
+                            && Self::stops_in(reference.definition().resolved())) =>
+                    {
+                        Self::literal_limits(reference.definition().resolved().as_ref().clone())?
+                    }
+                    _ => break LogicalPlan::TableScan(scan),
+                },
                 query => break query,
             };
         };
         // Pulling these operators above correlation would change empty-input semantics.
+        // The definition of a CTE reference does not refer to the outer query, so the
+        // correlation is not pulled up through it.
         if query.exists(|plan| {
             Ok(match plan {
                 LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
@@ -264,6 +310,7 @@ impl ExistsRewriter<'_> {
                 Expr::Column(column) if columns.contains(&column) => Ok(Transformed::yes(
                     Expr::Column(Column::new(Some(alias.clone()), column.name)),
                 )),
+                Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
                 expr => Ok(Transformed::no(expr)),
             })
             .data()?;
@@ -278,7 +325,7 @@ impl ExistsRewriter<'_> {
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;
-        Ok(coalesce(vec![
+        Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![
             Expr::Column(Column::new(Some(alias), "mark")),
             lit(false),
         ]))

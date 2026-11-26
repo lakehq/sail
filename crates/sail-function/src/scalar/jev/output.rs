@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow::array::{Float64Array, Int64Array, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16};
 use parquet_variant_compute::VariantArrayBuilder;
 
 use super::*;
-use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
+use crate::scalar::variant::parse_json::convert_variant_binaryview_to_binary;
 
 fn map_field(name: &str, value: Field) -> Field {
     Field::new(

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -19,7 +21,7 @@ use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKeySet, WorkerId};
 use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -87,6 +89,9 @@ impl WorkerPool {
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,
+            task_stream_memory_limit: self.options.task_stream_memory_limit,
+            shuffle_write_buffer_size: self.options.shuffle_write_buffer_size,
+            task_stream_stall_timeout: self.options.task_stream_stall_timeout,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
             shuffle_backend: self.options.shuffle_backend.clone(),
@@ -409,11 +414,11 @@ impl WorkerPool {
         });
     }
 
-    pub fn fetch_task_stream(
+    pub fn fetch_task_streams(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
-        key: &TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
     ) -> ExecutionResult<TaskStreamSource> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
@@ -430,10 +435,17 @@ impl WorkerPool {
                 )));
             }
         };
-        let key = key.clone();
+        if keys.release {
+            // A reader that releases the streams does not read the source that it
+            // gets, so the request is sent here and not when the source is read.
+            ctx.spawn(async move {
+                let _ = client.fetch_task_streams(keys, schema).await;
+            });
+            return Ok(Box::pin(futures::stream::empty()));
+        }
         let stream = futures::stream::once(async move {
             client
-                .fetch_task_stream(key, schema.clone())
+                .fetch_task_streams(keys, schema.clone())
                 .await
                 .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })

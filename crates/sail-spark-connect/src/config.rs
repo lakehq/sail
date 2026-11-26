@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,7 +10,8 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SparkConfigKey,
+    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SPARK_CONFIG_V4_3,
+    SparkConfigKey,
 };
 use crate::spark::connect;
 
@@ -54,6 +57,7 @@ impl SparkRuntimeConfig {
                     (Some("4"), Some("0")) => &SPARK_CONFIG_V4_0,
                     (Some("4"), Some("1")) => &SPARK_CONFIG_V4_1,
                     (Some("4"), Some("2")) => &SPARK_CONFIG_V4_2,
+                    (Some("4"), Some("3")) => &SPARK_CONFIG_V4_3,
                     _ => {
                         return Err(SparkError::invalid(format!(
                             "unsupported PySpark version: {version}"
@@ -160,6 +164,27 @@ impl SparkRuntimeConfig {
                 ));
             }
         }
+        // Spark rejects a value that is not an int instead of storing it, so a bad value
+        // cannot fail later queries. It checks that the value is positive only when it samples.
+        if key == SparkConfigKey::SPARK_SQL_EXECUTION_RANGE_EXCHANGE_SAMPLE_SIZE_PER_PARTITION
+            && value.trim().parse::<i32>().is_err()
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
+                is invalid. It should be a/an 'int' value. SQLSTATE: 22022"
+            )));
+        }
+        // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
+        // rather than at the point of use, so that a rejected value leaves both the session
+        // configuration and the mirrored DataFusion Parquet option as they were.
+        if key == SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
+            && value.trim().to_lowercase().parse::<bool>().is_err()
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
+                is invalid. It should be a/an 'boolean' value. SQLSTATE: 22022"
+            )));
+        }
         self.config.insert(key, value);
         Ok(())
     }
@@ -245,6 +270,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         for key in [
             SparkConfigKey::SPARK_DATABRICKS_DELTA_RETENTION_DURATION_CHECK_ENABLED,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_RETENTION_WINDOW_IGNORE_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_LOGGING_ENABLED,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MIN_FILE_SIZE,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_FILE_SIZE,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_DELETED_ROWS_RATIO,
@@ -276,6 +302,18 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.shuffle_partitions = usize::try_from(partitions).map_err(|_| {
                 SparkError::invalid("spark.sql.shuffle.partitions exceeds the platform limit")
             })?;
+        }
+
+        if let Some(value) = config.get_option(
+            SparkConfigKey::SPARK_SQL_EXECUTION_RANGE_EXCHANGE_SAMPLE_SIZE_PER_PARTITION,
+        ) {
+            // `set` rejects a value that is not an int, so this does not fail.
+            output.range_exchange_sample_size_per_partition =
+                value.trim().parse::<i32>().map_err(|_| {
+                    SparkError::internal(format!(
+                        "spark.sql.execution.rangeExchange.sampleSizePerPartition is not an int: {value}"
+                    ))
+                })?;
         }
 
         if let Some(value) = config

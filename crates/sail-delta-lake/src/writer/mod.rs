@@ -1,23 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 mod object_sink;
 mod partitioning;
@@ -41,6 +27,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use partitioning::partition_ranges;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use stats::create_add;
 use uuid::Uuid;
 use variant_shredding::{
@@ -113,6 +100,7 @@ impl WriterConfig {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
+                .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
                 .build()
         });
 
@@ -152,10 +140,11 @@ pub struct DeltaWriter {
     completed_actions: Vec<Add>,
     /// Partition keys that have been closed (debug-only contract enforcement)
     #[cfg(debug_assertions)]
-    closed_partition_keys: std::collections::HashSet<Vec<ScalarValue>>,
+    closed_partition_keys: Option<HashSet<Vec<ScalarValue>>>,
 }
 
 impl DeltaWriter {
+    /// Require input grouped by partition across all batches.
     pub fn new(object_store: Arc<dyn ObjectStore>, table_path: Path, config: WriterConfig) -> Self {
         Self {
             object_store,
@@ -165,8 +154,25 @@ impl DeltaWriter {
             current_writer: None,
             completed_actions: Vec::new(),
             #[cfg(debug_assertions)]
-            closed_partition_keys: std::collections::HashSet::new(),
+            closed_partition_keys: Some(HashSet::new()),
         }
+    }
+
+    /// Accept partition revisits, as required by interleaved CDC pre/postimages.
+    /// Only one partition writer remains open: revisits create fresh files rather
+    /// than retaining a writer per partition or buffering the entire input.
+    pub fn new_unordered(
+        object_store: Arc<dyn ObjectStore>,
+        table_path: Path,
+        config: WriterConfig,
+    ) -> Self {
+        let writer = Self::new(object_store, table_path, config);
+        #[cfg(debug_assertions)]
+        let writer = Self {
+            closed_partition_keys: None,
+            ..writer
+        };
+        writer
     }
 
     /// Write a record batch to the appropriate partition
@@ -240,7 +246,9 @@ impl DeltaWriter {
 
             if let Some(old_key) = self.current_partition_key.take() {
                 #[cfg(debug_assertions)]
-                self.closed_partition_keys.insert(old_key);
+                if let Some(keys) = self.closed_partition_keys.as_mut() {
+                    keys.insert(old_key);
+                }
                 #[cfg(not(debug_assertions))]
                 let _ = old_key;
             }
@@ -249,7 +257,10 @@ impl DeltaWriter {
         #[cfg(debug_assertions)]
         debug_assert!(
             self.config.partition_columns.is_empty()
-                || !self.closed_partition_keys.contains(&partition_key),
+                || self
+                    .closed_partition_keys
+                    .as_ref()
+                    .is_none_or(|keys| !keys.contains(&partition_key)),
             "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key:?}"
         );
 
@@ -763,9 +774,9 @@ mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
-    use object_store::ObjectStore;
     use object_store::memory::InMemory;
     use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use parquet_variant::{Variant, VariantMetadata};
     use parquet_variant_compute::json_to_variant;
     use parquet_variant_json::VariantToJson;
@@ -839,6 +850,76 @@ mod tests {
             VariantShreddingConfig::default(),
         );
         Ok(DeltaWriter::new(object_store, table_path, config))
+    }
+
+    #[tokio::test]
+    async fn unordered_writer_reopens_partitions_with_exact_rows() -> Result<(), DeltaTableError> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        for across_batches in [false, true] {
+            let grouped = make_writer()?;
+            let store = grouped.object_store.clone();
+            let table_path = grouped.table_path.clone();
+            let mut writer =
+                DeltaWriter::new_unordered(store.clone(), table_path.clone(), grouped.config);
+            let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"])?;
+            if across_batches {
+                for i in 0..3 {
+                    writer.write(&batch.slice(i, 1)).await?;
+                }
+            } else {
+                writer.write(&batch).await?;
+            }
+            #[cfg(debug_assertions)]
+            assert!(writer.closed_partition_keys.is_none());
+            let adds = writer.close().await?;
+            assert_eq!(adds.len(), 3);
+            assert_eq!(
+                adds.iter()
+                    .map(|add| &add.path)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                3
+            );
+            let mut rows = Vec::new();
+            for add in adds {
+                let bytes = store
+                    .get(
+                        &Path::parse(format!("{table_path}/{}", add.path))
+                            .map_err(DeltaTableError::generic_err)?,
+                    )
+                    .await
+                    .map_err(DeltaTableError::generic_err)?
+                    .bytes()
+                    .await
+                    .map_err(DeltaTableError::generic_err)?;
+                let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                    .map_err(DeltaTableError::generic_err)?
+                    .build()
+                    .map_err(DeltaTableError::generic_err)?;
+                for batch in reader {
+                    let batch = batch.map_err(DeltaTableError::generic_err)?;
+                    let values = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .ok_or_else(|| DeltaTableError::generic("expected Int32 values"))?;
+                    for value in values.values() {
+                        rows.push((*value, add.partition_values["part"].clone()));
+                    }
+                }
+            }
+            rows.sort();
+            assert_eq!(
+                rows,
+                vec![
+                    (1, Some("a".into())),
+                    (2, Some("b".into())),
+                    (3, Some("a".into()))
+                ]
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1003,8 +1084,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partition_path_with_percent_encoded_value_is_not_double_encoded()
-    -> Result<(), DeltaTableError> {
+    async fn partition_path_is_uri_encoded_once_at_action_creation() -> Result<(), DeltaTableError>
+    {
         use datafusion::arrow::datatypes::TimeUnit;
 
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1046,27 +1127,19 @@ mod tests {
         assert_eq!(adds.len(), 1);
         let path = &adds[0].path;
 
-        assert!(
-            path.contains("%20"),
-            "path should contain %20 (encoded space) in partition dir, got: {path}"
-        );
-        assert!(
-            !path.contains("%2520"),
-            "path must not contain double-encoded %2520: {path}"
-        );
-        assert!(
-            !path.contains("%253A"),
-            "path must not contain double-encoded %253A: {path}"
-        );
-
-        use crate::spec::utils::{decode_path, encode_path};
-        let encoded = encode_path(path);
-        #[expect(clippy::expect_used)]
-        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
-        assert_eq!(
-            decoded, *path,
-            "path should survive one encode/decode round-trip unchanged"
-        );
+        // Hive partition escaping is part of the physical filename. URI encoding
+        // escapes its percent signs once more, but action serialization must not.
+        assert!(path.contains("%2520"), "unexpected log URI: {path}");
+        assert!(path.contains("%253A"), "unexpected log URI: {path}");
+        let json = serde_json::to_value(&adds[0]).map_err(DeltaTableError::generic_err)?;
+        assert_eq!(json["path"].as_str(), Some(path.as_str()));
+        let decoded =
+            crate::spec::utils::decode_path(path).map_err(DeltaTableError::generic_err)?;
+        assert!(decoded.contains("%20"));
+        assert!(!decoded.contains("%2520"));
+        object_store
+            .head(&Path::parse(format!("{table_path}/{decoded}"))?)
+            .await?;
 
         Ok(())
     }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -9,7 +11,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -36,12 +38,16 @@ pub enum TaskRunnerMessage {
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
+        /// The number of the probe among the probes of the stream.
+        probe: usize,
     },
     CreateLocalStream {
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        bounded: bool,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     CreateMaterializedStream {
         key: TaskStreamKey,
@@ -67,14 +73,16 @@ pub enum TaskRunnerMessage {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchWorkerStream {
+    /// Fetches the streams on a worker for a reader that reads them in arbitrary order.
+    FetchWorkerStreams {
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchLocalStream {
-        key: TaskStreamKey,
+    /// Fetches the local streams for a reader that reads them in arbitrary order.
+    FetchLocalStreams {
+        keys: TaskStreamKeySet,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchStorageStream {
@@ -122,8 +130,8 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::CreateMaterializedStream { .. } => "CreateMaterializedStream",
             Self::CreateCelebornStream { .. } => "CreateCelebornStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
-            Self::FetchWorkerStream { .. } => "FetchWorkerStream",
-            Self::FetchLocalStream { .. } => "FetchLocalStream",
+            Self::FetchWorkerStreams { .. } => "FetchWorkerStreams",
+            Self::FetchLocalStreams { .. } => "FetchLocalStreams",
             Self::FetchStorageStream { .. } => "FetchStorageStream",
             Self::FetchCelebornStream { .. } => "FetchCelebornStream",
             Self::CleanUpLocalStreams { .. } => "CleanUpLocalStreams",
@@ -185,8 +193,7 @@ impl SpanAssociation for TaskRunnerMessage {
                     ));
                 }
             }
-            Self::ProbePendingLocalStream { key }
-            | Self::CreateLocalStream { key, .. }
+            Self::ProbePendingLocalStream { key, .. }
             | Self::CreateMaterializedStream { key, .. }
             | Self::CreateStorageStream { key, .. } => {
                 let TaskStreamKey {
@@ -202,7 +209,17 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            Self::CreateCelebornStream {
+            Self::CreateLocalStream {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+                ..
+            }
+            | Self::CreateCelebornStream {
                 key:
                     TaskKey {
                         job_id,
@@ -234,41 +251,21 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            Self::FetchWorkerStream {
+            Self::FetchWorkerStreams {
                 worker_id,
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
+                keys: TaskStreamKeySet { job_id, stage, .. },
                 ..
             } => {
                 properties.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            Self::FetchLocalStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
+            Self::FetchLocalStreams {
+                keys: TaskStreamKeySet { job_id, stage, .. },
                 ..
             } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             Self::FetchStorageStream {
                 key:

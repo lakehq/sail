@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
+mod clone;
 pub mod command;
 pub mod credentials;
+pub mod data_type;
 pub mod error;
 pub mod hive_format;
 pub mod lakehouse;

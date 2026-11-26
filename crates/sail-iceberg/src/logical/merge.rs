@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
@@ -263,7 +265,7 @@ pub(crate) fn ensure_merge_metadata_columns(
                         .with_projection(projection)
                         .with_filters(scan.filters.clone())
                         .with_fetch(scan.fetch)
-                        .with_statistics_requests(scan.statistics_requests.clone())
+                        .with_statistics_requests(scan.statistics_requests.as_ref().clone())
                         .build()?,
                 );
                 return Ok(Transformed::yes(new_scan));

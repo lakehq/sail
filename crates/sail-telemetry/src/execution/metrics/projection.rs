@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::physical_expr_common::metrics::MetricValue;
 use datafusion::physical_plan::Metric;
 use lazy_static::lazy_static;
