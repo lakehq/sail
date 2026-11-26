@@ -188,6 +188,9 @@ pub struct TemporaryViewDefinition {
     /// Whether the query expands a star inside the arguments of a function, which Spark
     /// expands again to the columns that the tables have at each read.
     pub star_in_function: bool,
+    /// Whether the query read tables that the plan of the view does not scan, which Spark
+    /// reads again at each read.
+    pub reads_folded_tables: bool,
 }
 
 impl PartialEq for TemporaryViewDefinition {
@@ -198,6 +201,7 @@ impl PartialEq for TemporaryViewDefinition {
             && self.database == other.database
             && Arc::ptr_eq(&self.config, &other.config)
             && self.star_in_function == other.star_in_function
+            && self.reads_folded_tables == other.reads_folded_tables
     }
 }
 

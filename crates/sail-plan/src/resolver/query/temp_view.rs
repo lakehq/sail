@@ -1039,15 +1039,22 @@ impl PlanResolver<'_> {
     /// scan of a source that the view obtains again at each read has a reference to what
     /// it reads in the place of the source, in the plan, in its subqueries, and in the
     /// CTE definitions that the plan refers to. A plan without such a scan is stored as
-    /// it is.
+    /// it is. Also returns whether the definition read a table that the plan does not
+    /// scan, such as the table of a scalar subquery that `typeof` folded into a value.
     pub(in crate::resolver) fn store_view_plan(
         plan: LogicalPlan,
         reads: &ViewDefinitionReads,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<(LogicalPlan, bool)> {
         let required = required_columns(&plan, reads)?;
+        let mut scanned = HashSet::new();
+        visit_scans(&plan, &mut |scan| {
+            scanned.insert(table_source_address(&scan.source));
+            Ok(())
+        })?;
+        let reads_folded_tables = reads.sources().any(|x| !scanned.contains(&x));
         // The stored plan has its own CTE definitions, and the stored scans have the
         // nullability of the tables, which the plan above them was resolved without.
-        Ok(replace_scans(
+        let plan = replace_scans(
             plan,
             &|scan| reads.table_origin(&scan.source).is_some(),
             &|scan| ViewDefinitionSource::changes_nullability(&scan.source),
@@ -1059,7 +1066,8 @@ impl PlanResolver<'_> {
                 let scan = ViewTableReference::store(scan, origin, required)?;
                 Ok(LogicalPlan::TableScan(scan))
             },
-        )?)
+        )?;
+        Ok((plan, reads_folded_tables))
     }
 
     /// Returns the plan of a read of a temporary view, for the stored plan of the view.
@@ -1083,6 +1091,15 @@ impl PlanResolver<'_> {
         // A view created over this view expands the star again as well.
         if definition.as_ref().is_some_and(|x| x.star_in_function) {
             state.record_star_in_function();
+        }
+        // A view whose query read tables that its plan does not scan resolves its query
+        // again at each read, as a view over it does.
+        if let Some(definition) = definition.as_ref().filter(|x| x.reads_folded_tables)
+            && let Some(plan) = self
+                .resolve_view_definition(plan, view, definition, state)
+                .await?
+        {
+            return Ok(plan);
         }
         let plan = plan.clone();
         let mut scans = HashMap::new();
@@ -2287,6 +2304,7 @@ mod tests {
         ColumnUse, FieldMatch, Fit, Read, TableOrigin, ViewTableReference, converts_exactly,
         required_columns, view_definition_source,
     };
+    use crate::resolver::PlanResolver;
     use crate::resolver::query::temp_view::CatalogTableOrigin;
     use crate::resolver::state::{ViewDefinitionReads, table_source_address};
     use crate::shared_cte::CteDefinition;
@@ -3296,6 +3314,19 @@ mod tests {
 
     fn get(expr: Expr, name: &str) -> Expr {
         get_field().call(vec![expr, lit(name)])
+    }
+
+    #[test]
+    fn test_stored_plans_tell_whether_the_definition_read_tables_that_they_do_not_scan()
+    -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, _) = read_table(&mut reads, "t")?;
+        let plan = LogicalPlanBuilder::from(t).project(vec![col("t_a")])?.build()?;
+        assert!(!PlanResolver::store_view_plan(plan.clone(), &reads)?.1);
+        // The table of a scalar subquery that a function folded into a value.
+        read_table(&mut reads, "u")?;
+        assert!(PlanResolver::store_view_plan(plan, &reads)?.1);
+        Ok(())
     }
 
     #[test]

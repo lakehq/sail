@@ -229,6 +229,11 @@ impl ViewDefinitionReads {
             .or_insert_with(|| (SharedTableSource(Arc::clone(source)), origin));
     }
 
+    /// Returns the addresses of the sources that the definition read.
+    pub fn sources(&self) -> impl Iterator<Item = usize> + '_ {
+        self.table_origins.keys().copied()
+    }
+
     /// Returns what the source of a scan reads, if the view obtains it again.
     pub fn table_origin(&self, source: &Arc<dyn TableSource>) -> Option<&Arc<TableOrigin>> {
         self.table_origins

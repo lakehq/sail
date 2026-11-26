@@ -796,6 +796,28 @@ def test_view_reports_its_columns_after_a_change_that_fails_its_reads(spark, tab
         assert message in error(spark, f"SELECT * FROM {view}")
 
 
+@pytest.mark.parametrize("change", ["retyped", "dropped"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+def test_view_of_the_type_of_a_scalar_subquery_reads_the_current_type(spark, tables, kind, change):
+    table = tables("delta", "b INT")
+    table.insert("(1)")
+    view = table.create_view(kind, f"SELECT typeof((SELECT b FROM {table.name} LIMIT 1)) AS ty")
+    outer = table.create_view("sv", f"SELECT ty FROM {view}")
+    if change == "retyped":
+        table.recreate("b STRING", "('x')")
+    else:
+        spark.sql(f"DROP TABLE {table.name}")
+    for name in (view, outer):
+        if kind == "dv":
+            # A DataFrame view keeps the type that its plan computed, as in Spark.
+            assert rows(spark, f"SELECT * FROM {name}") == [("int",)]
+        elif change == "retyped":
+            # A SQL view resolves its query again, as Spark analyzes the query at each read.
+            assert rows(spark, f"SELECT * FROM {name}") == [("string",)]
+        else:
+            assert NOT_FOUND in error(spark, f"SELECT * FROM {name}")
+
+
 # DataFrames of the distinct rows of a table `(a, b)` by both columns, which read only `a`.
 DISTINCT_FRAMES = {
     "distinct": lambda frame: frame.distinct().select("a"),

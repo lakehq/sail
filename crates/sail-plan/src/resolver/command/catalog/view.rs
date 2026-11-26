@@ -167,7 +167,7 @@ impl PlanResolver<'_> {
         let input = rename_logical_plan(input, &fields)?;
         // The view reads its tables again at each read, so its plan does not keep the
         // table sources that the definition was resolved with.
-        let input = Self::store_view_plan(input, &reads)?;
+        let (input, reads_folded_tables) = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
         let definition = match (definition, scope) {
             (Some(query), Some(scope)) => Some(Arc::new(TemporaryViewDefinition {
@@ -178,6 +178,7 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 star_in_function: reads.star_in_function,
+                reads_folded_tables,
             })),
             _ => None,
         };
