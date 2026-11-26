@@ -851,7 +851,10 @@ pub(crate) async fn load_delta_read_state(
             // The commits that the catalog ratified, up to the version of a snapshot that a
             // read with the files of the snapshot loads again. A pinned snapshot has them.
             if let Some(context) = managed_commit_context {
-                let version = pinned.as_ref().map(|x| x.version()).or(options.version_as_of);
+                let version = pinned
+                    .as_ref()
+                    .map(|x| x.version())
+                    .or(options.version_as_of);
                 table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
                     &ctx,
                     context,
