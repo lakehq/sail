@@ -2355,7 +2355,8 @@ def test_view_over_a_persistent_view_reads_its_current_definition(spark, tables,
         # A definition that no longer has the column, and a dropped view. A request for the schema
         # gets the columns that the view was created with.
         spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 1 AS other")
-        error(spark, f"SELECT * FROM {view}")
+        for name in (view, outer):
+            assert "INCOMPATIBLE_VIEW_SCHEMA_CHANGE" in error(spark, f"SELECT * FROM {name}")
         spark.sql(f"DROP VIEW {persistent}")
         for name in (view, outer):
             assert NOT_FOUND in error(spark, f"SELECT * FROM {name}")
