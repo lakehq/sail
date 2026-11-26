@@ -227,6 +227,7 @@ impl PositionDeleteAccumulator {
                     table_store,
                     &target.positional_deletes,
                     &path,
+                    None,
                 )
                 .await?;
                 if combined
@@ -486,6 +487,7 @@ mod tests {
                 &store,
                 &[PositionDeleteFile::try_from(&files[0]).expect("descriptor")],
                 path,
+                None,
             )
             .await
             .expect("read DV");
