@@ -289,7 +289,7 @@ def test_view_reads_the_current_database_of_its_creation(spark, tmp_path, kind):
             assert rows(spark, f"SELECT * FROM {views[0]}") == [(a, catalog, 1), (a, catalog, 2)]
             assert rows(spark, f"SELECT * FROM {views[1]}") == [(1,), (2,)]
     finally:
-        spark.sql("USE default")
+        spark.catalog.setCurrentDatabase("default")
         for view in views:
             drop_view(spark, view)
         spark.sql(f"DROP TABLE IF EXISTS {table}")
