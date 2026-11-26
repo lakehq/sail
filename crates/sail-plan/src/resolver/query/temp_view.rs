@@ -37,6 +37,7 @@ use datafusion_expr::{
     TableSource, UserDefinedLogicalNode, lit, when,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
+use datafusion_functions::core::named_struct::NamedStructFunc;
 use datafusion_functions::core::{get_field, named_struct};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
@@ -53,6 +54,7 @@ use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_function::scalar::r#struct::struct_rename::StructRename;
 
 use super::read::{CatalogTableRead, rename_source};
@@ -1572,6 +1574,46 @@ fn field_access(expr: &Expr) -> Option<(&Column, Vec<String>)> {
     }
 }
 
+/// Returns the value that a struct field access selects from a struct that the expression
+/// builds, such as `a` for `named_struct('p', a, 'q', b).p`, which does not read `b`.
+fn constructed_field(expr: &Expr) -> Option<Expr> {
+    let Expr::ScalarFunction(function) = expr else {
+        return None;
+    };
+    if !function.func.inner().is::<GetFieldFunc>() {
+        return None;
+    }
+    let [base, Expr::Literal(name, _)] = function.args.as_slice() else {
+        return None;
+    };
+    let name = name.try_as_str().flatten()?;
+    let Some(base) = constructed_field(base) else {
+        return struct_argument(base, name).cloned();
+    };
+    match struct_argument(&base, name) {
+        Some(value) => Some(value.clone()),
+        None => Some(get_field().call(vec![base, lit(name)])),
+    }
+}
+
+/// Returns the argument of a struct constructor that is the value of the field `name`.
+fn struct_argument<'a>(expr: &'a Expr, name: &str) -> Option<&'a Expr> {
+    let Expr::ScalarFunction(function) = expr else {
+        return None;
+    };
+    if function.func.inner().is::<NamedStructFunc>() {
+        return function.args.chunks_exact(2).find_map(|pair| match pair {
+            [Expr::Literal(field, _), value] if field.try_as_str().flatten() == Some(name) => {
+                Some(value)
+            }
+            _ => None,
+        });
+    }
+    let fields = function.func.inner().downcast_ref::<StructFromFields>()?;
+    let position = fields.field_names().iter().position(|x| x == name)?;
+    function.args.get(position)
+}
+
 /// Adds the columns that an expression reads, and the fields of the structs that it
 /// reads only through field accesses. A subquery whose values the expression compares or
 /// returns reads the outputs of the subquery, while `EXISTS` reads only what the operators
@@ -1583,6 +1625,10 @@ fn add_expression_uses(
     expr.apply(|e| {
         if let Some((column, path)) = field_access(e) {
             add_use(uses, column.name.clone(), &ColumnUse::path(&path));
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        if let Some(value) = constructed_field(e) {
+            add_expression_uses(&value, uses)?;
             return Ok(TreeNodeRecursion::Jump);
         }
         match e {
@@ -2179,7 +2225,8 @@ mod tests {
         Expr, ExprFunctionExt, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan,
         UserDefinedLogicalNode, col, lit,
     };
-    use datafusion_functions::core::get_field;
+    use datafusion_functions::core::{get_field, named_struct};
+    use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
     use sail_logical_plan::barrier::BarrierNode;
     use sail_logical_plan::monotonic_id::MonotonicIdNode;
     use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
@@ -3728,6 +3775,27 @@ mod tests {
                 (3, ColumnUse::path(&["x".to_string()]))
             ])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_fields_of_built_structs_read_only_their_values() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        let built = named_struct().call(vec![lit("p"), col("t_a"), lit("q"), col("t_b")]);
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![get_field().call(vec![built, lit("p")]).alias("p")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
+        // A struct of Spark, and a field of the field that it selects.
+        let fields = StructFromFields::new(vec!["p".to_string(), "q".to_string()]);
+        let built = datafusion_expr::ScalarUDF::from(fields).call(vec![col("t_s"), col("t_b")]);
+        let selected = get_field().call(vec![get_field().call(vec![built, lit("p")]), lit("x")]);
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![selected.alias("x")])?
+            .build()?;
+        let x = ColumnUse::path(&["x".to_string()]);
+        assert_eq!(uses(&plan, &reads, address)?, Some(vec![(3, x)]));
         Ok(())
     }
 

@@ -315,6 +315,23 @@ COLUMN_CHANGES = {
     ),
     "read column made not null": ("a INT", "(1)", "SELECT * FROM {t}", "a INT NOT NULL", "(5)", [(5,)]),
     "read column retyped to a string": ("a INT", "(1)", "SELECT * FROM {t}", "a STRING", "('x')", None),
+    # A field of a struct that the query builds reads only the value of the field.
+    "field of a named struct, other value retyped": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT named_struct('p', a, 'q', b).p AS p FROM {t}",
+        "a INT, b STRING",
+        "(5, 'x')",
+        [(5,)],
+    ),
+    "field of a struct, other value retyped": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT struct(a, b).a AS p FROM {t}",
+        "a INT, b STRING",
+        "(5, 'x')",
+        [(5,)],
+    ),
     # The type name is computed when the view is created, and the view still reads the column.
     "type name of a retyped column": (
         "a INT, b INT",
