@@ -792,7 +792,7 @@ impl PlanResolver<'_> {
         // Whether a table gained columns, which a star or a natural join of the query of the
         // view would read when the query is resolved again, as a direct query reads them.
         let mut gained_columns = false;
-        let recorded = state.view_definition_mut().map(|reads| reads.clone());
+        let mut recorded = state.view_definition_mut().map(|reads| reads.clone());
         for scan in &references {
             let address = table_source_address(&scan.source);
             if scans.contains_key(&address) {
@@ -811,7 +811,9 @@ impl PlanResolver<'_> {
                 Err(error) => error,
                 Ok(Err(error)) => {
                     // A view that the query creates does not read the scans bound so far.
-                    if let (Some(reads), Some(recorded)) = (state.view_definition_mut(), recorded) {
+                    if let (Some(reads), Some(recorded)) =
+                        (state.view_definition_mut(), recorded.take())
+                    {
                         *reads = recorded;
                     }
                     if let Some(definition) = &definition
@@ -832,14 +834,23 @@ impl PlanResolver<'_> {
             (gained_columns, recompute_schemas) = (false, false);
             break;
         }
-        // The stored plan remains if the query no longer resolves.
-        if gained_columns
-            && let Some(definition) = &definition
-            && let Some(plan) = self
+        if gained_columns && let Some(definition) = &definition {
+            // A view that the query creates reads the scans of the query resolved again, or
+            // the scans bound so far if the stored plan remains since the query no longer
+            // resolves.
+            let bound = match (state.view_definition_mut(), recorded.take()) {
+                (Some(reads), Some(recorded)) => Some(std::mem::replace(reads, recorded)),
+                _ => None,
+            };
+            if let Some(plan) = self
                 .resolve_view_definition_if_possible(&plan, view, definition, state)
                 .await
-        {
-            return Ok(plan);
+            {
+                return Ok(plan);
+            }
+            if let (Some(reads), Some(bound)) = (state.view_definition_mut(), bound) {
+                *reads = bound;
+            }
         }
         let mut bind = |scan: TableScan| {
             Ok(match scans.get(&table_source_address(&scan.source)) {
