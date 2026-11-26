@@ -52,6 +52,7 @@ def drop_view(spark, view):
         spark.catalog.dropGlobalTempView(view.removeprefix("global_temp."))
     else:
         spark.catalog.dropTempView(view)
+    DEFINITIONS.pop(view, None)
 
 
 class Table:
