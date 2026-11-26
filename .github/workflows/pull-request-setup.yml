@@ -1,4 +1,4 @@
-name: Pull Request Validation
+name: Pull Request Setup
 
 on:
   pull_request_target:
@@ -8,8 +8,8 @@ on:
       - reopened
 
 jobs:
-  validate:
-    name: Validate pull request
+  setup:
+    name: Setup
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write
