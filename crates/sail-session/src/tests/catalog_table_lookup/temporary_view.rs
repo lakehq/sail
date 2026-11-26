@@ -541,8 +541,8 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             assert!(error.contains(change), "{error}");
         }
     }
-    // A column that the views read can have nulls now, or none. A view created when it had
-    // none was resolved as if it had nulls.
+    // A column that the views read can have nulls now, or none, and the views resolve their
+    // queries again.
     let not_null = || CreateTableColumnOptions {
         nullable: false,
         ..column("v")

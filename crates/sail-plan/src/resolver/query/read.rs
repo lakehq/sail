@@ -213,8 +213,9 @@ impl PlanResolver<'_> {
     }
 
     /// Looks up a catalog table like [`Self::lookup_catalog_table_or_view`], but without
-    /// temporary views and catalog views. Data-source identifier reads and the targets of
-    /// `INSERT` use this lookup.
+    /// temporary views and catalog views. Data-source identifier reads, the table targets of
+    /// writes (`INSERT` and DataFrame writes, see `resolve_table_info`), and the check of the
+    /// generated columns of a Delta Lake table that is replaced use this lookup.
     pub(in crate::resolver) async fn lookup_catalog_table(
         manager: &CatalogManager,
         reference: &[String],

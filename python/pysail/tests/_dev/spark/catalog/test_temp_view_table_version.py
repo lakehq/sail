@@ -305,7 +305,8 @@ def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tables, 
 
 # The cases of a table that is created again with other columns: its columns and rows,
 # the query of a view over it, the columns and rows that it is created with again, and
-# the rows that the view reads then, or `None` if the view must be created again.
+# the rows that the view reads then, or `None` if the view resolves its query again and
+# reads what the query reads now, or fails as the query fails.
 COLUMN_CHANGES = {
     "unread column dropped": (
         "a INT, b INT, x INT",
@@ -683,9 +684,7 @@ COLUMN_CHANGES = {
         "(5, '10'), (6, '9')",
         [(5,)],
     ),
-    # The resolver casts an integer compared with a FLOAT, or with a DOUBLE after the change,
-    # and adds the rules of DISTINCT to a DOUBLE, so these columns keep their types, unless
-    # their current values convert exactly to the stored type.
+    # Columns compared with a FLOAT, or retyped to a DOUBLE.
     "filter column compared with a float widened": (
         "a INT, b INT, f FLOAT",
         "(1, 10, 1.5)",
@@ -880,7 +879,8 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_chang
 # The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
 # (1, 10), (1, 20), (2, 30) and (1, 10), (3, 40), when one of them is created again with
 # other columns: the query of the view, the table, its columns and rows, and the rows
-# that the view reads then, or `None` if the view must be created again.
+# that the view reads then, or `None` if the view resolves its query again and reads
+# what the query reads now, or fails as the query fails.
 UNION_CHANGES = {
     # The inputs of a union read all their columns, and the query no longer resolves.
     "column dropped on one side": (
@@ -1396,8 +1396,7 @@ def test_view_of_a_map_whose_key_structs_gained_a_field(spark, tables, kind):
     assert spark.table(view).collect() == spark.table(table.name).collect()
 
 
-# Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The
-# definition of a view is resolved as if its columns had nulls, so the view reads the struct.
+# Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct.
 STRUCT_COUNT_QUERIES = {
     "count": "SELECT count(c) AS n FROM {t}",
     "group": "SELECT k, count(c) AS n FROM {t} GROUP BY k",

@@ -120,8 +120,6 @@ impl PlanResolver<'_> {
                 }),
             _ => None,
         };
-        // The tables that the view reads again at each read can have nulls later in columns
-        // that have none now, so the definition is resolved as if all their columns had nulls.
         // The view resolves the query again when its plan no longer fits the tables that it
         // reads, in the scope that records what the query resolves now.
         let query = input.as_ref().clone();
