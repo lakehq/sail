@@ -766,6 +766,36 @@ def test_view_reads_a_table_whose_columns_changed(spark, tables, fmt, kind, case
     assert_view_reads(spark, view, expected)
 
 
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (None, NOT_FOUND),
+        (("b INT", "(20)"), COLUMNS_CHANGED),
+        (("a STRING, b INT", "('x', 20)"), COLUMNS_CHANGED),
+    ],
+    ids=["table dropped", "read column dropped", "read column retyped"],
+)
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_reports_its_columns_after_a_change_that_fails_its_reads(spark, tables, kind, change, message):
+    table = tables("delta", "a INT, b INT")
+    table.insert("(1, 10)")
+    query = f"SELECT a, b + 1 AS c FROM {table.name}"
+    view = table.create_view(kind, query)
+    schema = spark.table(view).schema
+    if change is None:
+        spark.sql(f"DROP TABLE {table.name}")
+    else:
+        table.recreate(*change)
+    if kind in SQL_KINDS and change is not None and change[0].startswith("a "):
+        # A SQL view resolves its query again, and reports the columns that it reads.
+        assert spark.table(view).schema == spark.sql(query).schema
+        assert rows(spark, f"SELECT * FROM {view}") == [("x", 21)]
+    else:
+        # The schema of the view is the schema of its stored plan, and a read fails.
+        assert spark.table(view).schema == schema
+        assert message in error(spark, f"SELECT * FROM {view}")
+
+
 # DataFrames of the distinct rows of a table `(a, b)` by both columns, which read only `a`.
 DISTINCT_FRAMES = {
     "distinct": lambda frame: frame.distinct().select("a"),

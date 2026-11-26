@@ -43,7 +43,9 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
     let spark = ctx.extension::<SparkSession>()?;
     // The schema of a CTE reference is the schema of its definition, so a CTE that is
     // referenced more than once is analyzed once.
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?).with_shared_ctes();
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?)
+        .with_shared_ctes()
+        .with_schema_only();
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;

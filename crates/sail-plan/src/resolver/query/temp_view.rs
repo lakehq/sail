@@ -1111,16 +1111,20 @@ impl PlanResolver<'_> {
                     }
                     // The query fails with the error of the columns that changed if it no
                     // longer resolves, which names the column that the query no longer has.
-                    let Some(definition) = &definition else {
-                        return Err(error);
-                    };
-                    return match self
-                        .resolve_view_definition(&plan, view, definition, state)
-                        .await
+                    if let Some(definition) = &definition
+                        && let Ok(Some(plan)) = self
+                            .resolve_view_definition(&plan, view, definition, state)
+                            .await
                     {
-                        Ok(Some(plan)) => Ok(plan),
-                        _ => Err(error),
-                    };
+                        return Ok(plan);
+                    }
+                    // A request for the schema gets the columns of the stored plan.
+                    if !self.schema_only {
+                        return Err(error);
+                    }
+                    scans.clear();
+                    (gained_columns, recompute_schemas) = (false, false);
+                    break;
                 }
             };
             gained_columns |= gained;
@@ -1206,6 +1210,7 @@ impl PlanResolver<'_> {
             ctx: self.ctx,
             config,
             share_ctes: self.share_ctes,
+            schema_only: self.schema_only,
         };
         let scope = Arc::new(ViewDefinitionScope::Resolve(Arc::clone(definition)));
         let mut query_state = PlanResolverState::new();
