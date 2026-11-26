@@ -21,10 +21,20 @@ impl PlanResolver<'_> {
     #[async_recursion]
     pub(super) async fn resolve_command_with_relations(
         &self,
-        root: spec::CommandPlan,
+        mut root: spec::CommandPlan,
         references: Vec<spec::QueryPlan>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // A temporary view resolves the references with its query, so that it reads their
+        // tables again at each read as it reads its own tables.
+        if let spec::CommandNode::CreateTemporaryView { definition, .. } = &mut root.node {
+            let input = definition.input.clone();
+            *definition.input = spec::QueryPlan::new(spec::QueryNode::WithRelations {
+                root: input,
+                references,
+            });
+            return self.resolve_command_plan(root, state).await;
+        }
         let mut scope = state.enter_with_relations_scope();
         let state = scope.state();
         // Enter a CTE scope so that DataFrame aliases registered below do not leak

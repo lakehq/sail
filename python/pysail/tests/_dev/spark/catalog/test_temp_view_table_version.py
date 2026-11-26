@@ -86,6 +86,18 @@ def test_view_reads_the_rows_committed_after_its_creation(spark, table, kind):
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
+def test_sql_view_over_a_data_frame_argument_reads_the_rows_committed_after_its_creation(spark, table):
+    table.insert("(1)")
+    view = f"sv_{uuid.uuid4().hex}"
+    spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {{df}}", df=spark.table(table.name))
+    table.views.append(view)
+    table.insert("(2)")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+    joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table.name} t ON v.id = t.id"
+    assert rows(spark, joined) == [(1, 1), (2, 2)]
+
+
+@pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
 @pytest.mark.parametrize("kind", KINDS)
 def test_write_reads_the_current_rows_of_a_view_over_its_target(spark, table, kind):
     table.insert("(1)")
