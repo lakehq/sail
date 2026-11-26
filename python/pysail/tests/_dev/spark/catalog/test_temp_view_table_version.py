@@ -1105,16 +1105,17 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_chang
 # The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
 # (1, 10), (1, 20), (2, 30) and (1, 10), (3, 40), when one of them is created again with
 # other columns: the query of the view, the table, its columns and rows, and the rows
-# that the view reads then, or `None` if the view resolves its query again and reads
-# what the query reads now, or fails as the query fails.
+# that the view reads then, a query of the rows that it reads then, or `None` if the view
+# resolves its query again and reads what the query reads now, or fails as the query fails.
 UNION_CHANGES = {
-    # The union reads `b` of neither input.
+    # The union reads `b` of neither input, so the view reads the current rows of `a`,
+    # while the query no longer resolves (main reads the rows of `w` before the change).
     "column dropped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
         "w",
         "a INT",
         "(1), (3)",
-        [(1,), (1,), (1,), (2,), (3,)],
+        "SELECT a FROM {t} UNION ALL SELECT a FROM {w}",
     ),
     "column retyped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
@@ -1149,6 +1150,8 @@ def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tables, fmt,
     union["w"].insert("(1, 10), (3, 40)")
     view = union["t"].create_view(kind, query.format(t=union["t"].name, w=union["w"].name))
     union[changed].recreate(columns, values)
+    if isinstance(expected, str):
+        expected = rows(spark, expected.format(t=union["t"].name, w=union["w"].name))
     assert_view_reads(spark, view, expected)
 
 
