@@ -12,7 +12,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{HashMap, Result, internal_err};
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
@@ -286,40 +286,36 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         )
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
-    //     let num_groups = self.inner.min_max.len();
-    //     selection.validate_num_groups(num_groups)?;
-    //     let num_values = selection.len();
-    //     let data_capacity = selection
-    //         .iter()
-    //         .filter_map(|index| self.inner.min_max[index].as_ref().map(Vec::len))
-    //         .sum();
-    //     let min_maxes = selection
-    //         .iter()
-    //         .map(|index| self.inner.min_max[index].as_deref());
-    //     self.build_array(min_maxes, num_values, data_capacity)
-    // }
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        let num_groups = self.inner.min_max.len();
+        selection.validate_num_groups(num_groups)?;
+        let num_values = selection.len();
+        let data_capacity = selection
+            .iter()
+            .filter_map(|index| self.inner.min_max[index].as_ref().map(Vec::len))
+            .sum();
+        let min_maxes = selection
+            .iter()
+            .map(|index| self.inner.min_max[index].as_deref());
+        self.build_array(min_maxes, num_values, data_capacity)
+    }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn supports_evaluate_preserving(&self) -> bool {
-    //     true
-    // }
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // min/max are their own states (no transition needed)
         self.evaluate(emit_to).map(|arr| vec![arr])
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn state_preserving(&mut self, selection: GroupSelection<'_>) -> Result<Vec<ArrayRef>> {
-    //     self.evaluate_preserving(selection).map(|array| vec![array])
-    // }
+    fn state_preserving(&mut self, selection: GroupSelection<'_>) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn supports_state_preserving(&self) -> bool {
-    //     true
-    // }
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
 
     fn merge_batch(
         &mut self,
@@ -536,6 +532,8 @@ impl MinMaxBytesState {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use arrow::array::StringArray;
+
     use super::*;
 
     fn expected_size(state: &MinMaxBytesState) -> usize {
@@ -598,40 +596,39 @@ mod tests {
         Ok(())
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // #[test]
-    // fn preserving_selected_min_values() -> Result<()> {
-    //     let mut accumulator = MinMaxBytesAccumulator::new_min(DataType::Utf8);
-    //     let values = Arc::new(StringArray::from(vec![
-    //         Some("z"),
-    //         Some("b"),
-    //         None,
-    //         Some("c"),
-    //         Some("a"),
-    //         Some("x"),
-    //     ]));
-    //     accumulator.update_batch(&[values], &[0, 0, 1, 2, 2, 3], None, 4)?;
-    //
-    //     let selection = GroupSelection::try_from_indices(&[3, 0, 1, 2, 3], 4)?;
-    //     let expected = StringArray::from(vec![Some("x"), Some("b"), None, Some("a"), Some("x")]);
-    //     for _ in 0..2 {
-    //         assert_eq!(
-    //             accumulator
-    //                 .evaluate_preserving(selection)?
-    //                 .as_string::<i32>(),
-    //             &expected
-    //         );
-    //     }
-    //
-    //     let values = Arc::new(StringArray::from(vec!["aa", "w"]));
-    //     accumulator.update_batch(&[values], &[0, 3], None, 4)?;
-    //     let expected = StringArray::from(vec![Some("aa"), None, Some("a"), Some("w")]);
-    //     assert_eq!(
-    //         accumulator
-    //             .evaluate_preserving(GroupSelection::all(4))?
-    //             .as_string::<i32>(),
-    //         &expected
-    //     );
-    //     Ok(())
-    // }
+    #[test]
+    fn preserving_selected_min_values() -> Result<()> {
+        let mut accumulator = MinMaxBytesAccumulator::new_min(DataType::Utf8);
+        let values = Arc::new(StringArray::from(vec![
+            Some("z"),
+            Some("b"),
+            None,
+            Some("c"),
+            Some("a"),
+            Some("x"),
+        ]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2, 2, 3], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[3, 0, 1, 2, 3], 4)?;
+        let expected = StringArray::from(vec![Some("x"), Some("b"), None, Some("a"), Some("x")]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_string::<i32>(),
+                &expected
+            );
+        }
+
+        let values = Arc::new(StringArray::from(vec!["aa", "w"]));
+        accumulator.update_batch(&[values], &[0, 3], None, 4)?;
+        let expected = StringArray::from(vec![Some("aa"), None, Some("a"), Some("w")]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_string::<i32>(),
+            &expected
+        );
+        Ok(())
+    }
 }

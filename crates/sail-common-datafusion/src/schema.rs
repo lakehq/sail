@@ -7,7 +7,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion::arrow::array::{
     Array, ArrayData, ArrayRef, RecordBatch, RecordBatchOptions, make_array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Metadata, Schema};
 use datafusion_common::Result;
 
 use crate::array::record_batch::{
@@ -340,9 +340,7 @@ pub fn clear_metadata(schemas: impl IntoIterator<Item = Schema>) -> impl Iterato
                             || key.as_str() == EXTENSION_TYPE_METADATA_KEY
                     })
                     .map(|(key, value)| (key.clone(), value.clone()))
-                    // TODO: Uncomment after DataFusion 56
-                    // .collect::<Metadata>();
-                    .collect::<HashMap<String, String>>();
+                    .collect::<Metadata>();
                 field.as_ref().clone().with_metadata(metadata)
             })
             .collect::<Fields>();
