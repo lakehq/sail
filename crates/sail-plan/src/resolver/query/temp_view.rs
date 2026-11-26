@@ -175,7 +175,7 @@ impl ViewTableReference {
         case_sensitive: bool,
         type_name: &dyn Fn(&DataType) -> String,
     ) -> Result<Vec<Option<(usize, Read)>>, Vec<String>> {
-        let mut changes = vec![];
+        let mut fit = Fit::new(case_sensitive, type_name);
         let matches = match_fields(self.table.fields(), table.fields(), case_sensitive);
         let mut reads = Vec::with_capacity(matches.len());
         for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
@@ -184,36 +184,20 @@ impl ViewTableReference {
                 (Some(ColumnUse::Identity), FieldMatch::Found(position)) => {
                     Some((position, Read::Same))
                 }
-                (Some(used), found) => fit_field(
-                    field,
-                    found,
-                    table.fields(),
-                    &path,
-                    used.fields(),
-                    case_sensitive,
-                    type_name,
-                    &mut changes,
-                ),
+                (Some(used), found) => {
+                    fit.field(field, found, table.fields(), &path, used.fields())
+                }
                 // A column that the view does not read is read only if it did not change.
                 (None, found) => {
-                    let mut unread = vec![];
-                    let read = fit_field(
-                        field,
-                        found,
-                        table.fields(),
-                        &path,
-                        None,
-                        case_sensitive,
-                        type_name,
-                        &mut unread,
-                    );
-                    read.filter(|_| unread.is_empty())
+                    let mut unread = Fit::new(case_sensitive, type_name);
+                    let read = unread.field(field, found, table.fields(), &path, None);
+                    read.filter(|_| unread.changes.is_empty())
                 }
             };
             reads.push(read);
         }
-        if !changes.is_empty() {
-            return Err(changes);
+        if !fit.changes.is_empty() {
+            return Err(fit.changes);
         }
         Ok(self.columns.iter().map(|&i| reads[i].take()).collect())
     }
@@ -264,17 +248,16 @@ impl ViewTableReference {
                 };
                 let column = Expr::Column(Column::new(qualifier.clone(), current.name().clone()));
                 let target = match read {
-                    Read::Same => None,
-                    Read::Cast => Some(cast_target(stored, current)),
-                    Read::Struct(_) => Some(nullable_field(stored)),
+                    Read::Same => {
+                        return Ok(column.alias_qualified(qualifier.clone(), stored.name()));
+                    }
+                    Read::Cast => cast_target(stored, current),
+                    Read::Struct(_) => nullable_field(stored),
                 };
-                let expression = match target {
-                    Some(target) => Expr::Cast(Cast::new_from_field(
-                        Box::new(read_value(column, stored, current, read)?),
-                        Arc::new(target.with_nullable(current.is_nullable())),
-                    )),
-                    None => column,
-                };
+                let expression = Expr::Cast(Cast::new_from_field(
+                    Box::new(read_value(column, stored, current, read)?),
+                    Arc::new(target.with_nullable(current.is_nullable())),
+                ));
                 Ok(expression.alias_qualified(qualifier.clone(), stored.name()))
             })
             .collect::<PlanResult<Vec<_>>>()?;
@@ -447,262 +430,241 @@ enum Read {
     Struct(Vec<Option<(usize, Read)>>),
 }
 
-/// Returns the position of the match of a stored field in the current fields and how the
-/// field is read, and adds the changes of the field.
-fn fit_field(
-    field: &Field,
-    found: FieldMatch,
-    current: &Fields,
-    path: &[String],
-    fields: Option<&HashMap<String, ColumnUse>>,
+/// Finds how the columns of a table now are read as the columns that a view was created
+/// with, and the changes that keep the view from reading them. The nullability of fields,
+/// their metadata, and the names of the fields that Spark does not name (the elements of
+/// lists and the entries of maps) are not compared. The definition of the view was
+/// resolved as if every field had nulls (see [`ViewDefinitionSource`]).
+struct Fit<'a> {
     case_sensitive: bool,
-    type_name: &dyn Fn(&DataType) -> String,
-    changes: &mut Vec<String>,
-) -> Option<(usize, Read)> {
-    match found {
-        FieldMatch::Found(position) => {
-            let read = fit(
+    type_name: &'a dyn Fn(&DataType) -> String,
+    changes: Vec<String>,
+}
+
+impl<'a> Fit<'a> {
+    fn new(case_sensitive: bool, type_name: &'a dyn Fn(&DataType) -> String) -> Self {
+        Self {
+            case_sensitive,
+            type_name,
+            changes: vec![],
+        }
+    }
+
+    /// Returns the position of the match of a stored field in the current fields and how
+    /// the field is read. `used` are the fields that the plan reads, for a struct that it
+    /// does not read whole.
+    fn field(
+        &mut self,
+        field: &Field,
+        found: FieldMatch,
+        current: &Fields,
+        path: &[String],
+        used: Option<&HashMap<String, ColumnUse>>,
+    ) -> Option<(usize, Read)> {
+        match found {
+            FieldMatch::Found(position) => {
+                Some((position, self.value(field, &current[position], used, path)))
+            }
+            FieldMatch::Missing => {
+                let change = describe_field(path, field, self.type_name);
+                self.changes.push(format!("{change} has been removed"));
+                None
+            }
+            FieldMatch::Several(positions) => {
+                let names = positions
+                    .iter()
+                    .map(|&i| current[i].name().as_str())
+                    .collect::<Vec<_>>();
+                self.changes.push(format!(
+                    "{} matches more than one field: [{}]",
+                    quote_names(path),
+                    names.join(", ")
+                ));
+                None
+            }
+        }
+    }
+
+    /// Returns how a value of the current field is read as the stored field.
+    fn value(
+        &mut self,
+        stored: &Field,
+        current: &Field,
+        used: Option<&HashMap<String, ColumnUse>>,
+        path: &[String],
+    ) -> Read {
+        logical_type_changes(stored, current, path, self.type_name, &mut self.changes);
+        let read = self.data_type(stored.data_type(), current.data_type(), used, path);
+        let key = SPARK_METADATA_JSON_KEY;
+        if read == Read::Same && stored.metadata().get(key) != current.metadata().get(key) {
+            Read::Cast
+        } else {
+            read
+        }
+    }
+
+    /// Returns how a value of the current type is read as the stored type.
+    fn data_type(
+        &mut self,
+        stored: &DataType,
+        current: &DataType,
+        used: Option<&HashMap<String, ColumnUse>>,
+        path: &[String],
+    ) -> Read {
+        use DataType::*;
+        if stored == current {
+            return Read::Same;
+        }
+        match (stored, current) {
+            (Struct(stored), Struct(current)) => self.structs(stored, current, used, path),
+            (
+                List(a) | LargeList(a) | ListView(a) | LargeListView(a),
+                List(b) | LargeList(b) | ListView(b) | LargeListView(b),
+            ) => {
+                let read = self.element(a, b, path, "element");
+                if std::mem::discriminant(stored) == std::mem::discriminant(current) {
+                    cast_if_changed(&[read])
+                } else {
+                    Read::Cast
+                }
+            }
+            (FixedSizeList(a, n), FixedSizeList(b, m)) if n == m => {
+                cast_if_changed(&[self.element(a, b, path, "element")])
+            }
+            (Map(a, x), Map(b, y)) if x == y => match (a.data_type(), b.data_type()) {
+                (Struct(a), Struct(b)) if a.len() == 2 && b.len() == 2 => cast_if_changed(&[
+                    self.element(&a[0], &b[0], path, "key"),
+                    self.element(&a[1], &b[1], path, "value"),
+                ]),
+                _ => cast_if_changed(&[self.element(a, b, path, "entries")]),
+            },
+            (Dictionary(x, a), Dictionary(y, b)) if x == y => {
+                let read = self.data_type(a, b, None, path);
+                cast_if_changed(&[self.inside(read, path)])
+            }
+            (RunEndEncoded(x, a), RunEndEncoded(y, b)) if x.data_type() == y.data_type() => {
+                cast_if_changed(&[self.element(a, b, path, "values")])
+            }
+            (Union(a, x), Union(b, y))
+                if x == y
+                    && a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|((i, a), (j, b))| i == j && a.name() == b.name()) =>
+            {
+                let reads = a
+                    .iter()
+                    .zip(b.iter())
+                    .map(|((_, a), (_, b))| self.element(a, b, path, a.name()))
+                    .collect::<Vec<_>>();
+                cast_if_changed(&reads)
+            }
+            _ if same_values(stored, current) => Read::Cast,
+            _ => {
+                self.changes.push(format!(
+                    "{} type has changed from {} to {}",
+                    quote_names(path),
+                    (self.type_name)(stored),
+                    (self.type_name)(current)
+                ));
+                // The reads are not used once there are changes.
+                Read::Same
+            }
+        }
+    }
+
+    /// Returns how a current struct is read as a stored struct. A struct that the plan reads
+    /// only through the fields `used` keeps those fields, and the other fields can change. A
+    /// struct that is read whole keeps all its fields, which are cast by name unless a field
+    /// was renamed in letter case.
+    fn structs(
+        &mut self,
+        stored: &Fields,
+        current: &Fields,
+        used: Option<&HashMap<String, ColumnUse>>,
+        path: &[String],
+    ) -> Read {
+        let matches = match_fields(stored, current, self.case_sensitive);
+        let mut reads = Vec::with_capacity(stored.len());
+        let mut same = stored.len() == current.len();
+        let mut cast = used.is_none();
+        for (i, (field, found)) in stored.iter().zip(matches).enumerate() {
+            let fields = match used {
+                Some(used) => match used
+                    .iter()
+                    .find(|(name, _)| same_name(name, field.name(), self.case_sensitive))
+                {
+                    Some((_, used)) => used.fields(),
+                    None => {
+                        same = false;
+                        reads.push(None);
+                        continue;
+                    }
+                },
+                None => None,
+            };
+            let read = self.field(
                 field,
-                &current[position],
+                found,
+                current,
+                &child_path(path, field.name()),
                 fields,
-                path,
-                case_sensitive,
-                type_name,
-                changes,
             );
-            Some((position, read))
+            if let Some((position, read)) = &read {
+                let renamed = current[*position].name() != field.name();
+                same &= *position == i && !renamed && read == &Read::Same;
+                cast &= !renamed && !matches!(read, Read::Struct(_));
+            }
+            reads.push(read);
         }
-        FieldMatch::Missing => {
-            changes.push(format!(
-                "{} has been removed",
-                describe_field(path, field, type_name)
-            ));
-            None
+        if used.is_none() {
+            for field in current {
+                if !stored
+                    .iter()
+                    .any(|x| same_name(x.name(), field.name(), self.case_sensitive))
+                {
+                    let path = child_path(path, field.name());
+                    let change = describe_field(&path, field, self.type_name);
+                    self.changes.push(format!("{change} has been added"));
+                }
+            }
         }
-        FieldMatch::Several(positions) => {
-            let names = positions
-                .iter()
-                .map(|&i| current[i].name().as_str())
-                .collect::<Vec<_>>();
-            changes.push(format!(
-                "{} matches more than one field: [{}]",
-                quote_names(path),
-                names.join(", ")
-            ));
-            None
+        if same {
+            Read::Same
+        } else if cast {
+            Read::Cast
+        } else {
+            Read::Struct(reads)
         }
     }
-}
 
-/// Returns how a value of the current field is read as the stored field, and adds the
-/// changes from the type that the view was created with to that of the table now. The
-/// nullability of fields, their metadata, and the names of the fields that Spark does not
-/// name (the elements of lists and the entries of maps) are not compared. The definition
-/// of the view was resolved as if every field had nulls (see [`ViewDefinitionSource`]).
-fn fit(
-    stored: &Field,
-    current: &Field,
-    fields: Option<&HashMap<String, ColumnUse>>,
-    path: &[String],
-    case_sensitive: bool,
-    type_name: &dyn Fn(&DataType) -> String,
-    changes: &mut Vec<String>,
-) -> Read {
-    logical_type_changes(stored, current, path, type_name, changes);
-    let read = fit_type(
-        stored.data_type(),
-        current.data_type(),
-        fields,
-        path,
-        case_sensitive,
-        type_name,
-        changes,
-    );
-    let metadata = |field: &Field| field.metadata().get(SPARK_METADATA_JSON_KEY).cloned();
-    if read == Read::Same && metadata(stored) != metadata(current) {
-        Read::Cast
-    } else {
-        read
+    /// Returns how a value inside a list, a map or another such type is read, whole.
+    fn element(&mut self, stored: &Field, current: &Field, path: &[String], name: &str) -> Read {
+        let path = child_path(path, name);
+        let read = self.value(stored, current, None, &path);
+        self.inside(read, &path)
     }
-}
 
-/// Returns how a value of the current type is read as the stored type, as [`fit`] for fields.
-/// `fields` are the fields that the plan reads, for a struct that it does not read whole.
-fn fit_type(
-    stored: &DataType,
-    current: &DataType,
-    fields: Option<&HashMap<String, ColumnUse>>,
-    path: &[String],
-    case_sensitive: bool,
-    type_name: &dyn Fn(&DataType) -> String,
-    changes: &mut Vec<String>,
-) -> Read {
-    use DataType::*;
-    if stored == current {
-        return Read::Same;
-    }
-    // A value inside a list, a map, or another such type is read whole, and is cast. A cast
-    // matches the fields of structs by name, so it cannot read a field that was renamed in
-    // letter case.
-    let inner = |read: Read, path: &[String], changes: &mut Vec<String>| {
+    /// Returns the read of a value inside a list, a map or another such type, which is cast.
+    /// A cast matches the fields of structs by name, so it cannot read a field that was
+    /// renamed in letter case.
+    fn inside(&mut self, read: Read, path: &[String]) -> Read {
         if matches!(read, Read::Struct(_)) {
-            changes.push(format!(
+            self.changes.push(format!(
                 "{} has fields renamed in letter case",
                 quote_names(path)
             ));
         }
         read
-    };
-    let nested = |stored: &Field, current: &Field, name: &str, changes: &mut Vec<String>| {
-        let path = child_path(path, name);
-        let read = fit(
-            stored,
-            current,
-            None,
-            &path,
-            case_sensitive,
-            type_name,
-            changes,
-        );
-        inner(read, &path, changes)
-    };
-    let cast = |reads: &[Read]| match reads.iter().all(|x| x == &Read::Same) {
-        true => Read::Same,
-        false => Read::Cast,
-    };
-    match (stored, current) {
-        (Struct(stored), Struct(current)) => fit_struct(
-            stored,
-            current,
-            fields,
-            path,
-            case_sensitive,
-            type_name,
-            changes,
-        ),
-        (
-            List(a) | LargeList(a) | ListView(a) | LargeListView(a),
-            List(b) | LargeList(b) | ListView(b) | LargeListView(b),
-        ) => {
-            let read = nested(a, b, "element", changes);
-            if std::mem::discriminant(stored) == std::mem::discriminant(current) {
-                cast(&[read])
-            } else {
-                Read::Cast
-            }
-        }
-        (FixedSizeList(a, n), FixedSizeList(b, m)) if n == m => {
-            cast(&[nested(a, b, "element", changes)])
-        }
-        (Map(a, x), Map(b, y)) if x == y => match (a.data_type(), b.data_type()) {
-            (Struct(a), Struct(b)) if a.len() == 2 && b.len() == 2 => cast(&[
-                nested(&a[0], &b[0], "key", changes),
-                nested(&a[1], &b[1], "value", changes),
-            ]),
-            _ => cast(&[nested(a, b, "entries", changes)]),
-        },
-        (Dictionary(x, a), Dictionary(y, b)) if x == y => {
-            let read = fit_type(a, b, None, path, case_sensitive, type_name, changes);
-            cast(&[inner(read, path, changes)])
-        }
-        (RunEndEncoded(x, a), RunEndEncoded(y, b)) if x.data_type() == y.data_type() => {
-            cast(&[nested(a, b, "values", changes)])
-        }
-        (Union(a, x), Union(b, y))
-            if x == y
-                && a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .all(|((i, a), (j, b))| i == j && a.name() == b.name()) =>
-        {
-            let reads = a
-                .iter()
-                .zip(b.iter())
-                .map(|((_, a), (_, b))| nested(a, b, a.name(), changes))
-                .collect::<Vec<_>>();
-            cast(&reads)
-        }
-        _ if same_values(stored, current) => Read::Cast,
-        _ => {
-            changes.push(format!(
-                "{} type has changed from {} to {}",
-                quote_names(path),
-                type_name(stored),
-                type_name(current)
-            ));
-            Read::Same
-        }
     }
 }
 
-/// Returns how a current struct is read as a stored struct, as [`fit`] for fields. A struct
-/// that the plan reads only through the fields `fields` keeps those fields, and the other
-/// fields can change. A struct that is read whole keeps all its fields, which are cast by
-/// name unless a field was renamed in letter case.
-fn fit_struct(
-    stored: &Fields,
-    current: &Fields,
-    fields: Option<&HashMap<String, ColumnUse>>,
-    path: &[String],
-    case_sensitive: bool,
-    type_name: &dyn Fn(&DataType) -> String,
-    changes: &mut Vec<String>,
-) -> Read {
-    let matches = match_fields(stored, current, case_sensitive);
-    let mut reads = Vec::with_capacity(stored.len());
-    let mut same = stored.len() == current.len();
-    let mut cast = fields.is_none();
-    for (i, (field, found)) in stored.iter().zip(matches).enumerate() {
-        let used = match fields {
-            Some(fields) => match fields
-                .iter()
-                .find(|(name, _)| same_name(name, field.name(), case_sensitive))
-            {
-                Some((_, used)) => used.fields(),
-                None => {
-                    same = false;
-                    reads.push(None);
-                    continue;
-                }
-            },
-            None => None,
-        };
-        let read = fit_field(
-            field,
-            found,
-            current,
-            &child_path(path, field.name()),
-            used,
-            case_sensitive,
-            type_name,
-            changes,
-        );
-        if let Some((position, read)) = &read {
-            let renamed = current[*position].name() != field.name();
-            same &= *position == i && !renamed && read == &Read::Same;
-            cast &= !renamed && !matches!(read, Read::Struct(_));
-        }
-        reads.push(read);
-    }
-    if fields.is_none() {
-        for field in current {
-            if !stored
-                .iter()
-                .any(|x| same_name(x.name(), field.name(), case_sensitive))
-            {
-                changes.push(format!(
-                    "{} has been added",
-                    describe_field(&child_path(path, field.name()), field, type_name)
-                ));
-            }
-        }
-    }
-    if same {
+/// Returns a cast if any of the values inside a type is read in another way.
+fn cast_if_changed(reads: &[Read]) -> Read {
+    if reads.iter().all(|x| x == &Read::Same) {
         Read::Same
-    } else if cast {
-        Read::Cast
     } else {
-        Read::Struct(reads)
+        Read::Cast
     }
 }
 
@@ -1730,7 +1692,7 @@ mod tests {
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
     use super::{
-        ColumnUse, Read, TableOrigin, ViewTableReference, fit, required_columns,
+        ColumnUse, Fit, Read, TableOrigin, ViewTableReference, required_columns,
         view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
@@ -1791,12 +1753,12 @@ mod tests {
     /// Returns how a column of the field `current` is read as the field `stored`, if it is
     /// read whole and did not change.
     fn read_of(stored: &Field, current: &Field) -> Result<Read, Vec<String>> {
-        let mut changes = vec![];
-        let read = fit(stored, current, None, &[], false, &type_name, &mut changes);
-        if changes.is_empty() {
+        let mut fit = Fit::new(false, &type_name);
+        let read = fit.value(stored, current, None, &[]);
+        if fit.changes.is_empty() {
             Ok(read)
         } else {
-            Err(changes)
+            Err(fit.changes)
         }
     }
 

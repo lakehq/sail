@@ -789,25 +789,29 @@ def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, table
 
 
 # Queries that read a field of a struct inside an array or a map, over a table `(k, c)` or a
-# table `(k, s STRUCT<c>)`, and the type of `c` with the field `a`.
+# table `(k, s STRUCT<c>)`, the column of the table, and its type and value with the field `a`.
 NESTED_STRUCT_QUERIES = {
     "array": (
         "SELECT c[0].a AS y FROM {t}",
+        "c",
         "ARRAY<STRUCT<{a}: INT, b: INT>>",
         "array(named_struct('{a}', 1, 'b', 2))",
     ),
     "map": (
         "SELECT c['x'].a AS y FROM {t}",
+        "c",
         "MAP<STRING, STRUCT<{a}: INT, b: INT>>",
         "map('x', named_struct('{a}', 1, 'b', 2))",
     ),
     "array in a struct": (
         "SELECT c[0].a AS y FROM (SELECT s.c AS c FROM {t})",
+        "s",
         "STRUCT<c: ARRAY<STRUCT<{a}: INT, b: INT>>>",
         "named_struct('c', array(named_struct('{a}', 1, 'b', 2)))",
     ),
     "map in a struct": (
         "SELECT c['x'].a AS y FROM (SELECT s.c AS c FROM {t})",
+        "s",
         "STRUCT<c: MAP<STRING, STRUCT<{a}: INT, b: INT>>>",
         "named_struct('c', map('x', named_struct('{a}', 1, 'b', 2)))",
     ),
@@ -819,8 +823,7 @@ NESTED_STRUCT_QUERIES = {
 def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
     # A known limit: the view reads the array or the map whole and casts it, which matches the
     # fields of the structs in it by name, so it cannot read a field renamed in letter case.
-    query, data_type, value = NESTED_STRUCT_QUERIES[case]
-    column = "s" if "STRUCT<c:" in data_type else "c"
+    query, column, data_type, value = NESTED_STRUCT_QUERIES[case]
     table = tables("parquet", f"k INT, {column} {data_type.format(a='a')}")
     table.insert(f"(1, {value.format(a='a')})")
     view = table.create_view(kind, query.format(t=table.name))
