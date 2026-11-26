@@ -9,11 +9,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from pyspark.sql.connect.session import SparkSession
 from pyspark.sql.functions import array, col, explode, udf
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-from pysail.testing.spark.session import patch_spark_connect_session, spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.tests._dev.spark.catalog.temp_view_utils import (
     COLUMNS_CHANGED,
@@ -38,14 +37,10 @@ def remote():
 
 
 @pytest.fixture(scope="module")
-def observer(spark, remote):
-    session = SparkSession.builder.remote(remote).create()
-    patch_spark_connect_session(session)
-    try:
-        assert session.session_id != spark.session_id
-        yield session
-    finally:
-        session.stop()
+def observer(remote):
+    """Returns another session of the server of `spark`."""
+    with spark_session_factory(remote) as sessions:
+        yield sessions.create()
 
 
 @pytest.fixture
