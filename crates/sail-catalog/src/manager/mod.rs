@@ -85,6 +85,13 @@ impl CatalogManager {
             .map_err(|e| CatalogError::Internal(e.to_string()))
     }
 
+    /// Returns the catalog and the database that unqualified names refer to: those of the
+    /// session, or those of the session that created a temporary view while the view
+    /// resolves its query again.
+    pub fn current_namespace(&self) -> CatalogResult<(Arc<str>, Namespace)> {
+        Ok(self.state()?.current_namespace())
+    }
+
     pub(super) fn resolve_default_database(
         &self,
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {

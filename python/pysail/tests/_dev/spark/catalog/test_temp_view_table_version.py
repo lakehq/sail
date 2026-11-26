@@ -219,6 +219,40 @@ def test_views_over_views_read_a_table_whose_unread_column_changed_its_type(spar
     assert rows(spark, f"SELECT * FROM {view}") == [(5, 30)]
 
 
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+def test_view_reads_the_current_database_of_its_creation(spark, tmp_path, kind):
+    suffix = uuid.uuid4().hex
+    a, b = f"a_{suffix}", f"b_{suffix}"
+    catalog = spark.sql("SELECT current_catalog()").collect()[0][0]
+    table = f"{a}.t"
+    views = []
+    spark.sql(f"CREATE DATABASE {a}")
+    spark.sql(f"CREATE DATABASE {b}")
+    try:
+        spark.sql(f"USE {a}")
+        spark.sql(f"CREATE TABLE {table} (x INT, y INT) USING delta LOCATION '{tmp_path / suffix}_0'")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 10), (2, 20)")
+        views.append(create_view(spark, kind, "SELECT current_database() AS d, current_catalog() AS c, x FROM t"))
+        views.append(create_view(spark, kind, f"SELECT x FROM t WHERE current_database() = '{a}'"))
+        spark.sql(f"USE {b}")
+        # The views read the table as it is, after a change of a column that they read, which makes
+        # them resolve their queries again, and after the change is undone.
+        for i, columns in enumerate([None, "x BIGINT, y INT", "x INT, y INT"]):
+            if columns is not None:
+                spark.sql(f"DROP TABLE {table}")
+                spark.sql(f"CREATE TABLE {table} ({columns}) USING delta LOCATION '{tmp_path / suffix}_{i}'")
+                spark.sql(f"INSERT INTO {table} VALUES (1, 10), (2, 20)")
+            assert rows(spark, f"SELECT * FROM {views[0]}") == [(a, catalog, 1), (a, catalog, 2)]
+            assert rows(spark, f"SELECT * FROM {views[1]}") == [(1,), (2,)]
+    finally:
+        spark.sql("USE default")
+        for view in views:
+            drop_view(spark, view)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.sql(f"DROP DATABASE IF EXISTS {a} CASCADE")
+        spark.sql(f"DROP DATABASE IF EXISTS {b} CASCADE")
+
+
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_column_renamed_only_in_letter_case(spark, table, kind):
