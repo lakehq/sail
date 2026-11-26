@@ -10,7 +10,7 @@ use sail_common::spec::CreateTableMode;
 use sail_common_datafusion::catalog::delta::is_delta_coordinated_property;
 use sail_common_datafusion::catalog::identity_partition_fields;
 use sail_common_datafusion::lakesource::{CloneMetrics, LakeSourceClone, LakeSourceMetadata};
-use sail_data_source::resolve_table_url;
+use sail_data_source::{canonical_local_path, resolve_table_url};
 use url::Url;
 
 use crate::DeltaTableError;
@@ -45,33 +45,6 @@ pub(crate) fn data_file_url(root: &Url, path: &str) -> Result<Url> {
         );
     }
     Ok(url)
-}
-
-/// Resolve aliases even when the last components do not exist yet.
-fn canonical_local_path(url: &Url) -> Result<std::path::PathBuf> {
-    let path = url
-        .to_file_path()
-        .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
-    for ancestor in path.ancestors() {
-        match ancestor.canonicalize() {
-            Ok(canonical) => {
-                let suffix = path.strip_prefix(ancestor).map_err(external)?;
-                return Ok(if suffix.as_os_str().is_empty() {
-                    canonical
-                } else {
-                    canonical.join(suffix)
-                });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // A dangling link has no physical location to validate.
-                if ancestor.symlink_metadata().is_ok() {
-                    return Err(external(error));
-                }
-            }
-            Err(error) => return Err(external(error)),
-        }
-    }
-    plan_err!("invalid local Delta path")
 }
 
 fn table_url(path: &str) -> Result<Url> {

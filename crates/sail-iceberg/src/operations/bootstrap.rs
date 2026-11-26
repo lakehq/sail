@@ -398,6 +398,25 @@ pub async fn bootstrap_empty_table_metadata(
     table_properties: &[(String, String)],
     metadata_style: NewTableMetadataStyle,
 ) -> Result<BootstrapResult> {
+    let table_metadata =
+        empty_table_metadata(table_url, iceberg_schema, partition_spec, table_properties)?;
+    write_metadata_version(
+        table_url,
+        store_ctx,
+        table_metadata,
+        initial_metadata_version(metadata_style),
+        metadata_style,
+        BaseMetadataCodec::capture(None)?,
+    )
+    .await
+}
+
+pub(crate) fn empty_table_metadata(
+    table_url: &Url,
+    iceberg_schema: IcebergSchema,
+    partition_spec: PartitionSpec,
+    table_properties: &[(String, String)],
+) -> Result<TableMetadata> {
     let (format_version, table_properties) =
         crate::properties::metadata_properties_from_table_properties(table_properties)?;
     let format_version = format_version.max(format_version_for_schema(&iceberg_schema));
@@ -430,15 +449,7 @@ pub async fn bootstrap_empty_table_metadata(
     };
     table_metadata.ensure_required_format_fields();
 
-    write_metadata_version(
-        table_url,
-        store_ctx,
-        table_metadata,
-        initial_metadata_version(metadata_style),
-        metadata_style,
-        BaseMetadataCodec::capture(None)?,
-    )
-    .await
+    Ok(table_metadata)
 }
 
 pub async fn replace_empty_table_metadata(
