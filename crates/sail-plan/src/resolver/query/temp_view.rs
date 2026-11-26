@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::compute::can_cast_types;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::datasource::source_as_provider;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::Cast;
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::{Cast, InSubquery, SetComparison};
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource,
     UserDefinedLogicalNode, lit, when,
@@ -1101,7 +1101,9 @@ fn field_access(expr: &Expr) -> Option<(&Column, Vec<String>)> {
 }
 
 /// Adds the columns that an expression reads, and the fields of the structs that it
-/// reads only through field accesses.
+/// reads only through field accesses. A subquery whose values the expression compares or
+/// returns reads the outputs of the subquery, while `EXISTS` reads only what the operators
+/// of its subquery read.
 fn add_expression_uses(
     expr: &Expr,
     uses: &mut HashMap<String, ColumnUse>,
@@ -1111,8 +1113,18 @@ fn add_expression_uses(
             add_use(uses, column.name.clone(), &ColumnUse::path(&path));
             return Ok(TreeNodeRecursion::Jump);
         }
-        if let Expr::Column(column) | Expr::OuterReferenceColumn(_, column) = e {
-            add_use(uses, column.name.clone(), &ColumnUse::Whole);
+        match e {
+            Expr::Column(column) | Expr::OuterReferenceColumn(_, column) => {
+                add_use(uses, column.name.clone(), &ColumnUse::Whole);
+            }
+            Expr::ScalarSubquery(subquery)
+            | Expr::InSubquery(InSubquery { subquery, .. })
+            | Expr::SetComparison(SetComparison { subquery, .. }) => {
+                for field in subquery.subquery.schema().fields() {
+                    add_use(uses, field.name().clone(), &ColumnUse::Whole);
+                }
+            }
+            _ => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -1136,13 +1148,14 @@ fn add_key_uses(
     Ok(())
 }
 
-/// Adds how each output of a projection reads the columns of its input.
+/// Adds how each output of a projection, or each value that an operator computes, reads
+/// the columns of its input.
 fn add_derivations(
     exprs: &[Expr],
-    schema: &DFSchemaRef,
+    fields: &[FieldRef],
     derivations: &mut HashMap<String, Vec<Derivation<String>>>,
 ) -> datafusion_common::Result<()> {
-    for (expr, field) in exprs.iter().zip(schema.fields()) {
+    for (expr, field) in exprs.iter().zip(fields) {
         derivations
             .entry(field.name().clone())
             .or_default()
@@ -1393,7 +1406,11 @@ fn required_columns(
                     lineages.push(lineage);
                     return Ok(TreeNodeRecursion::Jump);
                 }
-                add_derivations(&projection.expr, &projection.schema, &mut derivations)?;
+                add_derivations(
+                    &projection.expr,
+                    projection.schema.fields(),
+                    &mut derivations,
+                )?;
             }
             LogicalPlan::TableScan(scan) => {
                 if let Some(reference) = CteReference::try_from_scan(scan) {
@@ -1426,13 +1443,23 @@ fn required_columns(
             }
             LogicalPlan::Distinct(Distinct::On(on)) if on.sort_expr.is_none() => {
                 add_key_uses(&on.on_expr, &mut uses)?;
-                add_derivations(&on.select_expr, &on.schema, &mut derivations)?;
+                add_derivations(&on.select_expr, on.schema.fields(), &mut derivations)?;
             }
             LogicalPlan::Aggregate(aggregate) => {
+                // The keys decide the rows, and an aggregate value reads its arguments
+                // when it is read. The values are the last outputs.
                 add_key_uses(&aggregate.group_expr, &mut uses)?;
-                for expr in &aggregate.aggr_expr {
-                    add_expression_uses(expr, &mut uses)?;
-                }
+                let fields = aggregate.schema.fields();
+                let values = fields.len().saturating_sub(aggregate.aggr_expr.len());
+                let fields = fields.get(values..).unwrap_or_default();
+                add_derivations(&aggregate.aggr_expr, fields, &mut derivations)?;
+            }
+            LogicalPlan::Window(window) => {
+                // The input columns are passed on, and a window value reads its arguments
+                // and its keys when it is read. The values follow the input columns.
+                let inputs = window.input.schema().fields().len();
+                let fields = window.schema.fields().get(inputs..).unwrap_or_default();
+                add_derivations(&window.window_expr, fields, &mut derivations)?;
             }
             node => {
                 node.apply_expressions(|e| {
@@ -1441,15 +1468,16 @@ fn required_columns(
                 })?;
                 // These operators pass their input columns on, `UNNEST` the columns that
                 // it does not unnest, which its expressions read, and any other operator
-                // may read all of them.
+                // may read all of them. The expression of a subquery reads the outputs of
+                // the subquery that it needs.
                 let passes_on = match node {
                     LogicalPlan::Filter(_)
                     | LogicalPlan::Sort(_)
-                    | LogicalPlan::Window(_)
                     | LogicalPlan::Join(_)
                     | LogicalPlan::Limit(_)
                     | LogicalPlan::SubqueryAlias(_)
                     | LogicalPlan::Repartition(_)
+                    | LogicalPlan::Subquery(_)
                     | LogicalPlan::Unnest(_) => true,
                     LogicalPlan::Extension(extension) => {
                         add_extension_reads(extension.node.as_ref(), &mut uses, &mut derivations)
@@ -1681,11 +1709,13 @@ mod tests {
     use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::functions_aggregate::expr_fn::{count, sum};
     use datafusion::functions_nested::expr_fn::make_array;
+    use datafusion::functions_window::expr_fn::row_number;
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::{Column, JoinType, ScalarValue};
     use datafusion_expr::expr::Exists;
+    use datafusion_expr::expr_fn::{exists, in_subquery, scalar_subquery};
     use datafusion_expr::{
-        Expr, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan,
+        Expr, ExprFunctionExt, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan,
         UserDefinedLogicalNode, col, lit,
     };
     use datafusion_functions::core::get_field;
@@ -2418,6 +2448,75 @@ mod tests {
     }
 
     #[test]
+    fn test_values_that_are_not_read_do_not_read_their_arguments() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        // `SELECT a FROM (SELECT a, sum(b) AS total FROM t GROUP BY a)`.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .aggregate(vec![col("t_a")], vec![sum(col("t_b")).alias("total")])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
+        // `row_number() OVER (PARTITION BY b ORDER BY c)`, read or not.
+        let window = row_number()
+            .partition_by(vec![col("t_b")])
+            .order_by(vec![col("t_c").sort(true, false)])
+            .build()?;
+        let windowed = LogicalPlanBuilder::from(t).window(vec![window])?.build()?;
+        let value = Expr::Column(Column::from_name(windowed.schema().field(4).name()));
+        let plan = LogicalPlanBuilder::from(windowed.clone())
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
+        let plan = LogicalPlanBuilder::from(windowed)
+            .project(vec![col("t_a"), value])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_subqueries_read_the_outputs_whose_values_are_used() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        let (u, other) = read_table(&mut reads, "u")?;
+        // `SELECT a FROM t WHERE b IN (SELECT c FROM u)`.
+        let values = LogicalPlanBuilder::from(u.clone())
+            .project(vec![col("u_c")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .filter(in_subquery(col("t_b"), Arc::new(values)))?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
+        assert_eq!(uses(&plan, &reads, other)?, whole(&[2]));
+        // `SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.b > 0)`.
+        let rows = LogicalPlanBuilder::from(u.clone())
+            .filter(col("u_b").gt(lit(0)))?
+            .project(["u_a", "u_b", "u_c", "u_s"].map(col).to_vec())?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .filter(exists(Arc::new(rows)))?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, other)?, whole(&[1]));
+        // A scalar subquery in an output that is not read.
+        let value = LogicalPlanBuilder::from(u)
+            .aggregate(Vec::<Expr>::new(), vec![sum(col("u_c")).alias("m")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![
+                col("t_a"),
+                scalar_subquery(Arc::new(value)).alias("v"),
+            ])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
+        assert_eq!(uses(&plan, &reads, other)?, Some(vec![]));
+        Ok(())
+    }
+
+    #[test]
     fn test_columns_that_functions_fold_away_are_read() -> TestResult {
         let mut reads = ViewDefinitionReads::default();
         let (t, address) = read_table(&mut reads, "t")?;
@@ -2436,7 +2535,7 @@ mod tests {
         let (t, address) = read_table(&mut reads, "t")?;
         let plan = LogicalPlanBuilder::from(t.clone())
             .aggregate(vec![col("t_a")], vec![sum(col("t_b")).alias("total")])?
-            .project(vec![col("t_a")])?
+            .project(vec![col("t_a"), col("total")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
         let plan = LogicalPlanBuilder::from(t.clone())
