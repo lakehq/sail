@@ -23,7 +23,8 @@ jobs:
           message: |
             ### Python Test Selection
 
-            The test suites will be available after the build finishes.
+            If the build runs Python test discovery, the test suite list will appear here when the build finishes.
+            Only builds that include Python tests publish the list.
 
       - name: Validate title
         if: ${{ !cancelled() }}
