@@ -192,7 +192,7 @@ def test_view_reads_a_table_whose_column_that_it_passes_on_but_does_not_read_cha
     using, properties = METADATA_FORMATS[fmt]
     table = tables(using, "a INT, b INT", properties)
     table.insert("(1, 10), (2, 20)")
-    view = table.create_view(kind, query.format(t=table.name))
+    view = table.create_view(kind, PASSED_ON_QUERIES[query].format(t=table.name))
     if change == "drop":
         table.recreate("a INT", "(3), (4)")
     elif change == "rename":
