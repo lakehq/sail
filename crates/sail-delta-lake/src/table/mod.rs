@@ -848,7 +848,8 @@ pub(crate) async fn load_delta_read_state(
 
     // The reads of a table in a statement read the version that the first of them read,
     // unless they travel in time or read changes. A table that was created again at the
-    // location has another ID, and the read reads its latest version.
+    // location has another ID, or may not have the version, and the read reads its latest
+    // version. A version that the same table cannot load is an error.
     let pins = pins.filter(|_| {
         options.version_as_of.is_none()
             && options.timestamp_as_of.is_none()
@@ -860,9 +861,12 @@ pub(crate) async fn load_delta_read_state(
         .flatten()
     {
         Some((table_id, version)) => {
-            deltalake_table.load_version(version).await?;
-            if deltalake_table.snapshot()?.metadata().id() != table_id {
+            let pinned = deltalake_table.load_version(version).await;
+            if pinned.is_err() || deltalake_table.snapshot()?.metadata().id() != table_id {
                 deltalake_table.load().await?;
+                if deltalake_table.snapshot()?.metadata().id() == table_id {
+                    pinned?;
+                }
             }
         }
         // Load the table state according to the provided time travel options.

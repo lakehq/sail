@@ -239,6 +239,34 @@ async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestR
 }
 
 #[tokio::test]
+async fn test_delta_table_created_again_without_the_version_is_read_at_its_latest_version()
+-> TestResult {
+    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
+    put(&store, commit(1, "first")).await?;
+    // The table is created again with only version 0 after the first read read version 1.
+    let log = Arc::clone(&store);
+    fixture
+        .catalog
+        .on_request
+        .lock()
+        .map_err(|e| e.to_string())?
+        .push((
+            "t".to_string(),
+            Box::pin(async move {
+                let _ = log.delete(&commit(1, "first").0).await;
+                let _ = put(&log, commit(0, "second")).await;
+            }),
+        ));
+    let plan = union_all(vec![
+        read_table(&["d"], &[]),
+        read_table(&["t"], &[]),
+        read_path("delta", LOCATION, &[]),
+    ])?;
+    assert_eq!(fixture.delta_versions(plan).await?, vec![1, 0]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delta_row_level_target_and_source_read_one_version() -> TestResult {
     for sql in [
         "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
