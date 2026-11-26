@@ -162,9 +162,9 @@ impl PlanResolver<'_> {
         // table sources that the definition was resolved with.
         let (input, resolves_at_each_read) = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
-        // A view that reads no table has a plan that always fits, and keeps no query, which
-        // can hold the rows of a local relation.
-        let definition = if reads.sources().next().is_some() {
+        // A view that reads no table and no persistent view has a plan that always fits, and
+        // keeps no query, which can hold the rows of a local relation.
+        let definition = if reads.sources().next().is_some() || resolves_at_each_read {
             Some(Arc::new(TemporaryViewDefinition {
                 query,
                 output_names,

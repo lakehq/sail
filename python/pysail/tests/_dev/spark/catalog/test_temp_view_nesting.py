@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark
-from pysail.tests._dev.spark.catalog.temp_view_utils import LAKE_FORMATS, rows
+from pysail.tests._dev.spark.catalog.temp_view_utils import LAKE_FORMATS, error, rows
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only: Spark rejects views that read their own names")
 
@@ -105,14 +105,20 @@ def test_view_keeps_the_inner_view_that_it_was_created_with(spark, names, kind):
     assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
 
 
-def test_view_keeps_the_persistent_view_that_it_was_created_with(spark, names):
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_over_a_persistent_view_without_tables_reads_its_current_definition(spark, names, kind):
     persistent, view = names("pv"), names()
     spark.sql(f"CREATE VIEW {persistent} AS SELECT 1 AS id")
-    spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {persistent}")
+    if kind == "sv":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {persistent}")
+    else:
+        spark.table(persistent).createOrReplaceTempView(view)
     spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 2 AS id")
-    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    assert rows(spark, f"SELECT * FROM {view}") == [(2,)]
+    # A request for the schema gets the columns of the view after the persistent view was dropped.
     spark.sql(f"DROP VIEW {persistent}")
-    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    assert "TABLE_OR_VIEW_NOT_FOUND" in error(spark, f"SELECT * FROM {view}")
+    assert spark.table(view).columns == ["id"]
 
 
 # The first view of a chain of views over `t (id BIGINT, b INT)` that reads the rows `(1, 1)`, the
