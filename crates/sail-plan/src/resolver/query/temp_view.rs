@@ -47,8 +47,6 @@ use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
-use sail_logical_plan::monotonic_id::MonotonicIdNode;
-use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
 use super::read::{CatalogTableRead, rename_source};
 use crate::config::PlanConfig;
@@ -1482,20 +1480,6 @@ impl ReadColumns<'_> {
                 }
             }
             LogicalPlan::Extension(extension) => {
-                // The column that a partition ID or a monotonically increasing ID node adds
-                // depends only on the partition and the position of each row, and the node
-                // passes the columns of its input on.
-                let node_any = extension.node.as_any();
-                if node_any.is::<MonotonicIdNode>() || node_any.is::<SparkPartitionIdNode>() {
-                    for input in node.inputs() {
-                        for (output, field) in
-                            node.schema().fields().iter().zip(input.schema().fields())
-                        {
-                            self.depend(output.name(), [field.name().clone()]);
-                        }
-                    }
-                    return Ok(());
-                }
                 for expr in node.expressions() {
                     self.expr(&expr, rows)?;
                 }
