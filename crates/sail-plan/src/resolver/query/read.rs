@@ -887,75 +887,71 @@ impl PlanResolver<'_> {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
-        let read_case_sensitive = self.config.case_sensitive;
-        let origin = self
+        let is_lake = self
             .ctx
             .extension::<DataSourceRegistry>()?
             .get_lake_source_if_supported(&format)?
-            .map(|_| {
-                TableOrigin::LakePath(LakePathOrigin {
-                    format: format.clone(),
-                    schema: schema.clone(),
-                    options: options.clone(),
-                    paths: paths.clone(),
-                    read_case_sensitive,
-                })
-            });
-        let table_source = self
-            .create_path_source(&format, schema, options, paths, read_case_sensitive, state)
-            .await?;
+            .is_some();
+        let origin = LakePathOrigin {
+            format,
+            schema,
+            options,
+            paths,
+            read_case_sensitive: self.config.case_sensitive,
+        };
+        let table_source = self.create_path_source(&origin, is_lake, state).await?;
         self.resolve_table_source_with_rename(
             table_source,
             UNNAMED_TABLE,
             None,
             vec![],
             None,
-            origin,
+            is_lake.then_some(TableOrigin::LakePath(origin)),
             state,
         )
     }
 
-    /// Returns the source that a read of the paths in the format scans. The reads of a
-    /// Delta Lake or Iceberg table with the same paths, options, and schema share one
-    /// source in a query, so that they read one version of the table.
+    /// Returns the source that a read of paths scans. The reads of a Delta Lake or Iceberg
+    /// table (`is_lake`) with the same paths, options, and schema share one source in a
+    /// query, so that they read one version of the table.
     pub(super) async fn create_path_source(
         &self,
-        format: &str,
-        schema: Option<Schema>,
-        options: Vec<(String, String)>,
-        paths: Vec<String>,
-        read_case_sensitive: bool,
+        read: &LakePathOrigin,
+        is_lake: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<Arc<dyn TableSource>> {
-        let registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let key = registry.get_lake_source_if_supported(format)?.map(|_| {
-            let mut sorted = options.clone();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let key = is_lake.then(|| {
+            let mut options = read.options.clone();
+            options.sort_by(|a, b| a.0.cmp(&b.0));
             LakePathSourceKey {
-                format: format.to_lowercase(),
-                paths: paths.clone(),
-                options: sorted,
-                schema: schema.clone(),
+                format: read.format.to_lowercase(),
+                paths: read.paths.clone(),
+                options,
+                schema: read.schema.clone(),
             }
         });
         if let Some(source) = key.as_ref().and_then(|x| state.get_lake_path_source(x)) {
             return Ok(source);
         }
         let info = SourceInfo {
-            paths,
+            paths: read.paths.clone(),
             lakehouse_table: None,
-            schema,
+            schema: read.schema.clone(),
             constraints: Default::default(),
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
             // TODO: detect duplicated keys in the set of options
-            options: vec![OptionLayer::OptionList { items: options }],
-            read_case_sensitive,
+            options: vec![OptionLayer::OptionList {
+                items: read.options.clone(),
+            }],
+            read_case_sensitive: read.read_case_sensitive,
             snapshot_pins: Some(state.lake_snapshot_pins()),
         };
-        let source = registry
-            .get_data_source(format)?
+        let source = self
+            .ctx
+            .extension::<DataSourceRegistry>()?
+            .get_data_source(&read.format)?
             .create_source(&self.ctx.state(), info)
             .await?;
         if let Some(key) = key

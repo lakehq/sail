@@ -61,7 +61,8 @@ pub(in crate::resolver) enum TableOrigin {
     LakePath(LakePathOrigin),
 }
 
-/// A read of a Delta Lake or Iceberg table by its path.
+/// A read of paths in a format. A temporary view stores it for a read of a Delta Lake or
+/// Iceberg table by its path.
 #[derive(Debug)]
 pub(in crate::resolver) struct LakePathOrigin {
     pub format: String,
@@ -803,15 +804,7 @@ impl PlanResolver<'_> {
                 origin.name.clone(),
             ),
             TableOrigin::LakePath(origin) => (
-                self.create_path_source(
-                    &origin.format,
-                    origin.schema.clone(),
-                    origin.options.clone(),
-                    origin.paths.clone(),
-                    origin.read_case_sensitive,
-                    state,
-                )
-                .await?,
+                self.create_path_source(origin, true, state).await?,
                 vec![origin.format.clone(), origin.paths.join(",")],
             ),
         };
