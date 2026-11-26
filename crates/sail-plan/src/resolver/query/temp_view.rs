@@ -1610,10 +1610,9 @@ fn struct_argument<'a>(expr: &'a Expr, name: &str) -> Option<&'a Expr> {
         return None;
     };
     if function.func.inner().is::<NamedStructFunc>() {
-        return function.args.chunks_exact(2).find_map(|pair| match pair {
-            [Expr::Literal(field, _), value] if field.try_as_str().flatten() == Some(name) => {
-                Some(value)
-            }
+        let (pairs, _) = function.args.as_chunks::<2>();
+        return pairs.iter().find_map(|[field, value]| match field {
+            Expr::Literal(field, _) if field.try_as_str().flatten() == Some(name) => Some(value),
             _ => None,
         });
     }
