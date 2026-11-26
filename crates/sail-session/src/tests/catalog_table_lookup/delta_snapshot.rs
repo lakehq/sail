@@ -259,6 +259,36 @@ async fn test_delta_table_created_again_after_a_read_without_files_is_read_at_it
 }
 
 #[tokio::test]
+async fn test_delta_table_created_again_with_fewer_versions_after_a_read_without_files()
+-> TestResult {
+    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
+    put(&store, commit(1, "first")).await?;
+    // The table is created again with only version 0 after the first read read version 1
+    // without its files.
+    let log = Arc::clone(&store);
+    fixture
+        .catalog
+        .on_request
+        .lock()
+        .map_err(|e| e.to_string())?
+        .push((
+            "t".to_string(),
+            Box::pin(async move {
+                let _ = log.delete(&commit(1, "first").0).await;
+                let _ = put(&log, commit(0, "second")).await;
+            }),
+        ));
+    let plan = union_all(vec![
+        read_path("delta", LOCATION, &[("metadataAsDataRead", "true")]),
+        read_table(&["t"], &[]),
+        read_table(&["d"], &[]),
+        read_path("delta", LOCATION, &[]),
+    ])?;
+    assert_eq!(fixture.delta_versions(plan).await?, vec![1, 0, 0]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delta_reads_do_not_load_the_log_again() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     put(&store, commit(1, "first")).await?;

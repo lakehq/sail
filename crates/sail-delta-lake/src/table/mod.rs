@@ -865,11 +865,16 @@ pub(crate) async fn load_delta_read_state(
         pinned => {
             match pinned {
                 Some(pinned) => {
-                    deltalake_table.load_version(pinned.version()).await?;
                     // A table that was created again at the location has another ID, and
-                    // the read reads its latest version.
-                    if deltalake_table.snapshot()?.metadata().id() != pinned.metadata().id() {
+                    // may not have the version, and the read reads its latest version. A
+                    // version that the same table cannot load is an error.
+                    let id = pinned.metadata().id();
+                    let loaded = deltalake_table.load_version(pinned.version()).await;
+                    if loaded.is_err() || deltalake_table.snapshot()?.metadata().id() != id {
                         deltalake_table.load().await?;
+                        if deltalake_table.snapshot()?.metadata().id() == id {
+                            loaded?;
+                        }
                     }
                 }
                 // Load the table state according to the provided time travel options.
