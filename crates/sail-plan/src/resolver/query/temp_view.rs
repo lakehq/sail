@@ -1933,6 +1933,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
     use datafusion::arrow::datatypes::{
         DataType, Field, Fields, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
     };
@@ -1955,7 +1956,7 @@ mod tests {
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
     use super::{
-        ColumnUse, Fit, Read, TableOrigin, ViewTableReference, required_columns,
+        ColumnUse, Fit, Read, TableOrigin, ViewTableReference, converts_exactly, required_columns,
         view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
@@ -2230,7 +2231,7 @@ mod tests {
         // An integer of a user-defined type keeps its type.
         let udt = |x: DataType| {
             field("c", x).with_metadata(HashMap::from([(
-                SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                sail_common::spec::SAIL_SPARK_UDT_METADATA_KEY.to_string(),
                 "{}".to_string(),
             )]))
         };
@@ -2586,12 +2587,12 @@ mod tests {
             DataType::Int32,
             DataType::Int64,
         ];
+        let operand = |schema: &Schema| ViewTableReference {
+            required: vec![Some(ColumnUse::Operand)],
+            ..reference(schema)
+        };
         for stored in &integers {
-            let table = Schema::new(vec![field("b", stored.clone())]);
-            let reference = ViewTableReference {
-                required: vec![Some(ColumnUse::Operand)],
-                ..reference(&table)
-            };
+            let reference = operand(&Schema::new(vec![field("b", stored.clone())]));
             for current in &integers {
                 let current = Schema::new(vec![field("b", current.clone())]);
                 assert_eq!(positions(&reference, &current, true), Ok(vec![Some(0)]));
@@ -2617,11 +2618,7 @@ mod tests {
             };
             let current = Schema::new(vec![extension(DataType::Int8)]);
             assert!(positions(&reference, &current, true).is_err(), "{current}");
-            let stored = Schema::new(vec![extension(stored.clone())]);
-            let reference = ViewTableReference {
-                required: vec![Some(ColumnUse::Operand)],
-                ..reference(&stored)
-            };
+            let reference = operand(&Schema::new(vec![extension(stored.clone())]));
             let current = Schema::new(vec![field("b", DataType::Int64)]);
             assert!(positions(&reference, &current, true).is_err(), "{current}");
         }
