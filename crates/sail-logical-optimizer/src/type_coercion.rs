@@ -1240,7 +1240,7 @@ fn coerce_frame_bound(target_type: &DataType, bound: WindowFrameBound) -> Result
 /// The type that RANGE frame offsets are coerced to for an ORDER BY column of
 /// `col_type`, or `None` if there is no offset type to coerce to (the column
 /// type has no arithmetic). `None` does not mean the type is unusable in a
-/// RANGE frame: a free frame has no offsets, see `supports_free_range_frame`.
+/// RANGE frame: a free frame has no offsets.
 fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
@@ -1268,50 +1268,6 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     }
 }
 
-/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
-/// run over an ORDER BY column of `col_type` even though the type has no
-/// arithmetic for finite offsets.
-///
-/// This fallback admits durations and intervals, including encoded values.
-/// Admission remains conservative: Arrow peer comparison also supports nested
-/// types, but admitting structs and maps requires separate validation.
-fn supports_free_range_frame(col_type: &DataType) -> bool {
-    match col_type {
-        DataType::Duration(_) | DataType::Interval(_) => true,
-        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
-        DataType::RunEndEncoded(_, value_type) => supports_free_range_frame(value_type.data_type()),
-        _ => false,
-    }
-}
-
-/// Whether `col_type` is a list, possibly behind dictionary or run-end
-/// encoding. Free-range fallback still excludes lists conservatively, although
-/// Arrow can now find peers for supported list keys.
-fn is_list_type(col_type: &DataType) -> bool {
-    match col_type {
-        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => true,
-        DataType::Dictionary(_, value_type) => is_list_type(value_type),
-        DataType::RunEndEncoded(_, value_type) => is_list_type(value_type.data_type()),
-        _ => false,
-    }
-}
-
-/// Errors if any ORDER BY expression has a type not supported in a free RANGE
-/// frame: a type with neither an offset target nor support in the free-range
-/// fallback, or a list (see `is_list_type`). These conservative admission rules
-/// can be relaxed separately from the nested peer-comparison fix.
-fn check_free_range_order_by_types(expressions: &[Sort], schema: &DFSchema) -> Result<()> {
-    for sort in expressions {
-        let t = sort.expr.get_type(schema)?;
-        let supported = supports_free_range_frame(&t)
-            || (extract_window_frame_target_type(&t).is_some() && !is_list_type(&t));
-        if !supported {
-            return plan_err!("RANGE window frames are not supported for ORDER BY type {t}");
-        }
-    }
-    Ok(())
-}
-
 // Coerces the given `window_frame` to use appropriate natural types.
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
@@ -1328,20 +1284,10 @@ fn coerce_window_frame(
                 .transpose()?;
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
-                    Some(target_type) => {
-                        if window_frame.free_range() {
-                            // The first key established the target type above, but
-                            // every later key also participates in peer comparison.
-                            check_free_range_order_by_types(&expressions[1..], schema)?;
-                        }
-                        target_type
-                    }
-                    // A free range frame has no offsets to coerce. Check whether
-                    // its ORDER BY types are supported by the free-range fallback.
-                    None if window_frame.free_range() => {
-                        check_free_range_order_by_types(expressions, schema)?;
-                        return Ok(window_frame);
-                    }
+                    Some(target_type) => target_type,
+                    // A free range frame has no offsets to coerce, and its peers
+                    // only need the ORDER BY keys to be comparable.
+                    None if window_frame.free_range() => return Ok(window_frame),
                     None => {
                         return plan_err!(
                             "RANGE window frames are not supported for ORDER BY type {col_type}"
