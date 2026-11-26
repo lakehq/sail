@@ -1676,7 +1676,9 @@ mod tests {
     use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
-    use super::{FieldMatch, Fit, Read, TableOrigin, ViewTableReference, read_columns};
+    use super::{
+        FieldMatch, Fit, Read, TableOrigin, ViewTableReference, has_new_fields, read_columns,
+    };
     use crate::resolver::PlanResolver;
     use crate::resolver::query::temp_view::CatalogTableOrigin;
     use crate::resolver::state::{ViewDefinitionReads, table_source_address};
