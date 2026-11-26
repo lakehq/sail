@@ -266,6 +266,35 @@ def test_sql_view_computes_on_a_struct_whose_fields_changed(spark, tables, kind,
     assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("where", ["", " WHERE ts > TIMESTAMP '1970-01-01 12:00:00'"])
+def test_view_reads_a_timestamp_whose_time_zone_changed(spark, tmp_path, kind, where):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    # Parquet files of the same instants, labeled with different time zones.
+    for zone in ["UTC", "America/New_York"]:
+        directory = tmp_path / zone.replace("/", "_")
+        directory.mkdir()
+        values = pa.array([0, 86_400_000_000], pa.timestamp("us", tz=zone))
+        pq.write_table(pa.table({"ts": values}), directory / "part-0.parquet")
+    name = f"t_{uuid.uuid4().hex}"
+    view = None
+    try:
+        spark.sql(f"CREATE TABLE {name} USING parquet LOCATION '{tmp_path / 'UTC'}'")
+        sql = f"SELECT ts FROM {name}{where}"
+        view = create_view(spark, kind, sql)
+        spark.sql(f"DROP TABLE {name}")
+        spark.sql(f"CREATE TABLE {name} USING parquet LOCATION '{tmp_path / 'America_New_York'}'")
+        # A SQL view resolves its query again, and a DataFrame view casts the instants to the
+        # time zone that it was created with: both read the instants of the query.
+        assert spark.sql(f"SELECT * FROM {view}").collect() == spark.sql(sql).collect()
+    finally:
+        if view is not None:
+            drop_view(spark, view)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 @pytest.mark.parametrize("kind", PLAN_KINDS)
 def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tables, kind):
     table = tables("delta")

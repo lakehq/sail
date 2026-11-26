@@ -361,6 +361,10 @@ fn converts_exactly(current: &Field, stored: &Field) -> bool {
         return false;
     }
     let (current, stored) = (current.data_type(), stored.data_type());
+    // A timestamp with a time zone stores instants, which the time zone only labels.
+    if let (Timestamp(unit, Some(_)), Timestamp(stored_unit, Some(_))) = (current, stored) {
+        return unit == stored_unit;
+    }
     if let Some((signed, bits, digits)) = integer(current) {
         if let Some((stored_signed, stored_bits, _)) = integer(stored) {
             return stored_bits > bits && (stored_signed || !signed);
@@ -710,11 +714,15 @@ impl<'a> Fit<'a> {
             }
             _ if same_values(stored, current) => Read::Cast,
             _ => {
+                let (mut from, mut to) = ((self.type_name)(stored), (self.type_name)(current));
+                // Types that have the same name in Spark are told apart by their Arrow types.
+                if from == to {
+                    from = format!("{from} ({stored})");
+                    to = format!("{to} ({current})");
+                }
                 self.changes.push(format!(
-                    "{} type has changed from {} to {}",
-                    quote_names(path),
-                    (self.type_name)(stored),
-                    (self.type_name)(current)
+                    "{} type has changed from {from} to {to}",
+                    quote_names(path)
                 ));
                 // The reads are not used once there are changes.
                 Read::Same
@@ -2492,6 +2500,18 @@ mod tests {
                 Timestamp(TimeUnit::Second, None),
                 Timestamp(TimeUnit::Millisecond, None),
             ),
+            (
+                Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+            (
+                Timestamp(TimeUnit::Microsecond, None),
+                Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+            (
+                Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                Timestamp(TimeUnit::Microsecond, None),
+            ),
         ];
         for (current, stored) in inexact {
             assert!(
@@ -2499,6 +2519,36 @@ mod tests {
                 "{current}"
             );
         }
+        // A timestamp with another time zone, which only labels the instants.
+        let zoned = |zone: &str| field("c", Timestamp(TimeUnit::Microsecond, Some(zone.into())));
+        for zone in ["+00:00", "America/New_York"] {
+            assert_eq!(
+                read_of(&zoned("UTC"), &zoned(zone)),
+                Ok(Read::Cast),
+                "{zone}"
+            );
+            assert_eq!(
+                read_of(&zoned(zone), &zoned("UTC")),
+                Ok(Read::Cast),
+                "{zone}"
+            );
+        }
+        // A change between types of the same name in Spark names the Arrow types.
+        let spark_name = |_: &DataType| "TIMESTAMP".to_string();
+        let mut fit = Fit::new(false, &spark_name);
+        let unit = |unit| field("c", Timestamp(unit, Some("UTC".into())));
+        fit.value(
+            &unit(TimeUnit::Microsecond),
+            &unit(TimeUnit::Nanosecond),
+            None,
+            &["c".to_string()],
+        );
+        let expected = format!(
+            "`c` type has changed from TIMESTAMP ({}) to TIMESTAMP ({})",
+            unit(TimeUnit::Microsecond).data_type(),
+            unit(TimeUnit::Nanosecond).data_type()
+        );
+        assert_eq!(fit.changes, vec![expected]);
         // Values inside lists and structs.
         let wrap = |x: DataType| list(field("s", DataType::Struct(vec![field("a", x)].into())));
         assert_eq!(
