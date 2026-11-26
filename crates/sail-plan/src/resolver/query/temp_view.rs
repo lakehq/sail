@@ -511,9 +511,7 @@ impl<'a> Fit<'a> {
     }
 
     /// Returns the position of the match of a stored column in the current columns and how
-    /// the column is read (see [`Fit::field`]). A struct that is read whole and gained
-    /// fields is read without them, as a table that gained a column, unless the cast to the
-    /// stored type cannot leave them out, such as a cast of a map.
+    /// the column is read (see [`Fit::field`]).
     fn column(
         &mut self,
         stored: &Field,
@@ -522,11 +520,24 @@ impl<'a> Fit<'a> {
         used: Option<&HashMap<String, ColumnUse>>,
     ) -> Option<(usize, Read)> {
         let read = self.field(stored, found, current, &[stored.name().clone()], used);
+        self.leave_out_added_fields(stored, current, &read);
+        read
+    }
+
+    /// Takes the fields that the structs of a value read whole gained. The value is read
+    /// without them, as a table that gained a column, unless the cast to the stored type
+    /// cannot leave them out, such as a cast of a map.
+    fn leave_out_added_fields(
+        &mut self,
+        stored: &Field,
+        current: &Fields,
+        read: &Option<(usize, Read)>,
+    ) {
         let added = std::mem::take(&mut self.added);
         if added.is_empty() {
-            return read;
+            return;
         }
-        let left_out = match &read {
+        let left_out = match read {
             Some((position, Read::Cast)) => casts_by_name(
                 current[*position].data_type(),
                 nullable_field(stored).data_type(),
@@ -542,7 +553,6 @@ impl<'a> Fit<'a> {
             self.changes
                 .extend(added.into_iter().map(|x| format!("{x} has been added")));
         }
-        read
     }
 
     /// Returns the position of the match of a stored field in the current fields and how
@@ -722,6 +732,10 @@ impl<'a> Fit<'a> {
                 &child_path(path, field.name()),
                 fields,
             );
+            // A struct that is built casts each field that it reads to its stored type.
+            if used.is_some() {
+                self.leave_out_added_fields(field, current, &read);
+            }
             if let Some((position, read)) = &read {
                 let renamed = current[*position].name() != field.name();
                 same &= *position == i && !renamed && read == &Read::Same;
@@ -2862,6 +2876,19 @@ mod tests {
                 assert_eq!(read, Some((0, expected)), "{names:?}");
             }
         }
+        // A struct that is built from the fields that the plan reads casts each of them.
+        let built = |x: DataType| field("c", DataType::Struct(vec![field("x", x)].into()));
+        let used = HashMap::from([("x".to_string(), ColumnUse::Whole)]);
+        let mut fit = Fit::new(false, &type_name);
+        let current = Fields::from(vec![built(fields(&["a", "b", "d"]))]);
+        let read = fit.column(
+            &built(fields(&["a", "b"])),
+            FieldMatch::Found(0),
+            &current,
+            Some(&used),
+        );
+        assert_eq!(fit.changes, Vec::<String>::new());
+        assert_eq!(read, Some((0, Read::Struct(vec![Some((0, Read::Cast))]))));
         // A cast of a map cannot leave out the fields that the structs of its values gained.
         let value = |names: &[&str]| {
             field(
