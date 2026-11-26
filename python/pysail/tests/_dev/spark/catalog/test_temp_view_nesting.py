@@ -74,18 +74,15 @@ def test_view_replaced_many_times_by_a_query_over_itself(spark, names, kind):
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_replaced_many_times_by_a_query_over_itself_reads_the_current_rows(spark, tmp_path, names, kind):
-    table = Table(spark, tmp_path, "delta")
-    try:
-        table.insert("(0)")
-        view = names()
-        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {table.name}")
-        for _ in range(150):
-            replace_with_query_over_itself(spark, kind, view)
-        table.insert("(1000)")
-        assert rows(spark, f"SELECT * FROM {view}") == [(150,), (1150,)]
-    finally:
-        table.drop()
+def test_view_replaced_many_times_by_a_query_over_itself_reads_the_current_rows(spark, tables, names, kind):
+    table = tables("delta")
+    table.insert("(0)")
+    view = names()
+    spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {table.name}")
+    for _ in range(150):
+        replace_with_query_over_itself(spark, kind, view)
+    table.insert("(1000)")
+    assert rows(spark, f"SELECT * FROM {view}") == [(150,), (1150,)]
 
 
 def test_views_that_read_each_other(spark, names):

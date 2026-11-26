@@ -22,7 +22,6 @@ from pysail.tests._dev.spark.catalog.temp_view_utils import (
     LAKE_FORMATS,
     NOT_FOUND,
     PLAN_KINDS,
-    Table,
     create_view,
     drop_view,
     error,
@@ -50,10 +49,16 @@ def observer(spark, remote):
 
 
 @pytest.fixture
-def table(spark, tmp_path, request):
-    table = Table(spark, tmp_path, request.param)
-    yield table
-    table.drop()
+def table(tables, request):
+    return tables(request.param)
+
+
+def assert_view_reads(spark, view, expected):
+    """Asserts that the view reads the rows, or that it must be created again if `expected` is `None`."""
+    if expected is None:
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+    else:
+        assert rows(spark, f"SELECT * FROM {view}") == expected
 
 
 @pytest.mark.parametrize("table", FORMATS, indirect=True)
@@ -122,30 +127,25 @@ def test_view_of_a_dropped_table_is_not_found(spark, table, kind):
 def test_view_reads_a_table_that_is_created_again_in_another_format(spark, table, kind):
     table.insert("(1)")
     view = table.create_view(kind)
-    spark.sql(f"DROP TABLE {table.name}")
-    table.create("id BIGINT", fmt="iceberg" if table.fmt == "delta" else "delta")
-    table.insert("(7)")
+    table.recreate("id BIGINT", "(7)", fmt="iceberg" if table.fmt == "delta" else "delta")
     assert rows(spark, f"SELECT * FROM {view}") == [(7,)]
     joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table.name} t ON v.id = t.id"
     assert rows(spark, joined) == [(7, 7)]
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "iceberg", "id BIGINT, extra STRING, other STRING")
-    try:
-        table.insert("(1, 'x', 'y')")
-        view = table.create_view(kind, f"SELECT id FROM {table.name}")
-        spark.sql(f"ALTER TABLE {table.name} DROP COLUMN extra")
-        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN other TO another")
-        table.insert("(2, 'z')")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
-        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN id TO key")
-        message = error(spark, f"SELECT * FROM {view}")
-        assert COLUMNS_CHANGED in message
-        assert "- `id` BIGINT has been removed" in message
-    finally:
-        table.drop()
+def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, tables, kind):
+    table = tables("iceberg", "id BIGINT, extra STRING, other STRING")
+    table.insert("(1, 'x', 'y')")
+    view = table.create_view(kind, f"SELECT id FROM {table.name}")
+    spark.sql(f"ALTER TABLE {table.name} DROP COLUMN extra")
+    spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN other TO another")
+    table.insert("(2, 'z')")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+    spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN id TO key")
+    message = error(spark, f"SELECT * FROM {view}")
+    assert COLUMNS_CHANGED in message
+    assert "- `id` BIGINT has been removed" in message
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
@@ -153,34 +153,29 @@ def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, 
 def test_view_reads_a_column_renamed_only_in_letter_case(spark, table, kind):
     table.insert("(1)")
     view = table.create_view(kind)
-    spark.sql(f"DROP TABLE {table.name}")
-    table.create("ID BIGINT")
-    table.insert("(2)")
+    table.recreate("ID BIGINT", "(2)")
     assert spark.sql(f"SELECT * FROM {view}").columns == ["id"]
     assert rows(spark, f"SELECT * FROM {view}") == [(2,)]
     assert rows(spark, f"SELECT id, count(*) FROM {view} WHERE id > 0 GROUP BY id") == [(2, 1)]
 
 
 @pytest.mark.parametrize("kind", PLAN_KINDS)
-def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta")
-    try:
-        write = spark.sql("SELECT 1L AS id")
-        write.select(col("id").alias("id", metadata={"tag": "old"})).write.mode("overwrite").option(
-            "overwriteSchema", "true"
-        ).saveAsTable(table.name)
-        view = table.create_view(kind)
-        assert spark.sql(f"SELECT * FROM {view}").schema["id"].metadata == {"tag": "old"}
-        write.select(col("id").alias("id", metadata={"tag": "new"})).write.mode("overwrite").option(
-            "overwriteSchema", "true"
-        ).saveAsTable(table.name)
-        assert spark.table(table.name).schema["id"].metadata == {"tag": "new"}
-        assert spark.sql(f"SELECT * FROM {view}").schema["id"].metadata == {"tag": "old"}
-        assert rows(spark, f"SELECT id, count(*) FROM {view} GROUP BY id") == [(1, 1)]
-        joined = f"SELECT v.id, t.id FROM {view} v JOIN {table.name} t ON v.id = t.id"
-        assert rows(spark, joined) == [(1, 1)]
-    finally:
-        table.drop()
+def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tables, kind):
+    table = tables("delta")
+    write = spark.sql("SELECT 1L AS id")
+    write.select(col("id").alias("id", metadata={"tag": "old"})).write.mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).saveAsTable(table.name)
+    view = table.create_view(kind)
+    assert spark.sql(f"SELECT * FROM {view}").schema["id"].metadata == {"tag": "old"}
+    write.select(col("id").alias("id", metadata={"tag": "new"})).write.mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).saveAsTable(table.name)
+    assert spark.table(table.name).schema["id"].metadata == {"tag": "new"}
+    assert spark.sql(f"SELECT * FROM {view}").schema["id"].metadata == {"tag": "old"}
+    assert rows(spark, f"SELECT id, count(*) FROM {view} GROUP BY id") == [(1, 1)]
+    joined = f"SELECT v.id, t.id FROM {view} v JOIN {table.name} t ON v.id = t.id"
+    assert rows(spark, joined) == [(1, 1)]
 
 
 # The cases of a table that is created again with other columns: its columns and rows,
@@ -480,21 +475,13 @@ def change_params(cases):
 
 
 @pytest.mark.parametrize(("case", "fmt", "kind"), change_params(COLUMN_CHANGES))
-def test_view_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
+def test_view_reads_a_table_whose_columns_changed(spark, tables, fmt, kind, case):
     columns, values, query, new_columns, new_values, expected = COLUMN_CHANGES[case]
-    table = Table(spark, tmp_path, fmt, columns)
-    try:
-        table.insert(values)
-        view = table.create_view(kind, query.format(t=table.name))
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create(new_columns)
-        table.insert(new_values)
-        if expected is None:
-            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-        else:
-            assert rows(spark, f"SELECT * FROM {view}") == expected
-    finally:
-        table.drop()
+    table = tables(fmt, columns)
+    table.insert(values)
+    view = table.create_view(kind, query.format(t=table.name))
+    table.recreate(new_columns, new_values)
+    assert_view_reads(spark, view, expected)
 
 
 # DataFrames of the distinct rows of a table `(a, b)` by both columns, which read only `a`.
@@ -506,22 +493,15 @@ DISTINCT_FRAMES = {
 
 @pytest.mark.parametrize("fmt", ["delta", "parquet"])
 @pytest.mark.parametrize("case", DISTINCT_FRAMES)
-def test_data_frame_view_of_distinct_rows_reads_a_table_whose_key_changed(spark, tmp_path, fmt, case):
-    table = Table(spark, tmp_path, fmt, "a INT, b INT")
-    try:
-        table.insert("(1, 10), (1, 20), (2, 30)")
-        view = table.create_view("dv", frame=DISTINCT_FRAMES[case](spark.table(table.name)))
-        # The current values of a column that tells rows apart tell them apart, of whatever type.
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create("a INT, b STRING")
-        table.insert("(1, 'z'), (1, 'y'), (2, 'y')")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (1,), (2,)]
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create("a INT")
-        table.insert("(1), (2)")
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-    finally:
-        table.drop()
+def test_data_frame_view_of_distinct_rows_reads_a_table_whose_key_changed(spark, tables, fmt, case):
+    table = tables(fmt, "a INT, b INT")
+    table.insert("(1, 10), (1, 20), (2, 30)")
+    view = table.create_view("dv", frame=DISTINCT_FRAMES[case](spark.table(table.name)))
+    # The current values of a column that tells rows apart tell them apart, of whatever type.
+    table.recreate("a INT, b STRING", "(1, 'z'), (1, 'y'), (2, 'y')")
+    assert_view_reads(spark, view, [(1,), (1,), (2,)])
+    table.recreate("a INT", "(1), (2)")
+    assert_view_reads(spark, view, None)
 
 
 # DataFrames of the distinct rows of a table `(k, a, b)`, which read only `a`, and whether `k`
@@ -536,29 +516,18 @@ DUPLICATE_FRAMES = {
 @pytest.mark.parametrize("nested", [False, True])
 @pytest.mark.parametrize("change", ["retyped", "dropped"])
 @pytest.mark.parametrize("case", DUPLICATE_FRAMES)
-def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_changed(
-    spark, tmp_path, case, change, nested
-):
+def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_changed(spark, tables, case, change, nested):
     query, key = DUPLICATE_FRAMES[case]
-    table = Table(spark, tmp_path, "parquet", "k INT, a INT, b INT")
-    try:
-        table.insert("(1, 1, 10), (2, 1, 20), (3, 2, 30)")
-        view = table.create_view("dv", frame=query(spark.table(table.name)))
-        if nested:
-            view = table.create_view("sv", f"SELECT a FROM {view}")
-        spark.sql(f"DROP TABLE {table.name}")
-        if change == "retyped":
-            table.create("k BIGINT, a INT, b INT")
-            table.insert("(1, 1, 10), (9, 5, 50)")
-        else:
-            table.create("a INT, b INT")
-            table.insert("(1, 10), (5, 50)")
-        if key and change == "dropped":
-            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-        else:
-            assert rows(spark, f"SELECT * FROM {view}") == [(1,), (5,)]
-    finally:
-        table.drop()
+    table = tables("parquet", "k INT, a INT, b INT")
+    table.insert("(1, 1, 10), (2, 1, 20), (3, 2, 30)")
+    view = table.create_view("dv", frame=query(spark.table(table.name)))
+    if nested:
+        view = table.create_view("sv", f"SELECT a FROM {view}")
+    if change == "retyped":
+        table.recreate("k BIGINT, a INT, b INT", "(1, 1, 10), (9, 5, 50)")
+    else:
+        table.recreate("a INT, b INT", "(1, 10), (5, 50)")
+    assert_view_reads(spark, view, None if key and change == "dropped" else [(1,), (5,)])
 
 
 # The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
@@ -592,23 +561,14 @@ UNION_CHANGES = {
 
 
 @pytest.mark.parametrize(("case", "fmt", "kind"), change_params(UNION_CHANGES))
-def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
+def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tables, fmt, kind, case):
     query, changed, columns, values, expected = UNION_CHANGES[case]
-    tables = {"t": Table(spark, tmp_path, fmt, "a INT, b INT"), "w": Table(spark, tmp_path, fmt, "a INT, b INT")}
-    try:
-        tables["t"].insert("(1, 10), (1, 20), (2, 30)")
-        tables["w"].insert("(1, 10), (3, 40)")
-        view = tables["t"].create_view(kind, query.format(t=tables["t"].name, w=tables["w"].name))
-        spark.sql(f"DROP TABLE {tables[changed].name}")
-        tables[changed].create(columns)
-        tables[changed].insert(values)
-        if expected is None:
-            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-        else:
-            assert rows(spark, f"SELECT * FROM {view}") == expected
-    finally:
-        for table in tables.values():
-            table.drop()
+    union = {"t": tables(fmt, "a INT, b INT"), "w": tables(fmt, "a INT, b INT")}
+    union["t"].insert("(1, 10), (1, 20), (2, 30)")
+    union["w"].insert("(1, 10), (3, 40)")
+    view = union["t"].create_view(kind, query.format(t=union["t"].name, w=union["w"].name))
+    union[changed].recreate(columns, values)
+    assert_view_reads(spark, view, expected)
 
 
 # Queries over `t (a INT, u INT)` whose column `a` had no nulls when a view of the query
@@ -630,34 +590,26 @@ NULLABLE_QUERIES = {
 @pytest.mark.parametrize("fmt", ["delta", "parquet"])
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("query", NULLABLE_QUERIES)
-def test_view_reads_a_column_that_has_nulls_now(spark, tmp_path, fmt, kind, query):
-    table = Table(spark, tmp_path, fmt, "a INT NOT NULL, u INT")
-    try:
-        table.insert("(1, 10)")
-        sql = NULLABLE_QUERIES[query].format(t=table.name)
-        view = table.create_view(kind, sql)
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create("a INT, u INT")
-        table.insert("(NULL, 20), (2, 30)")
-        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
-    finally:
-        table.drop()
+def test_view_reads_a_column_that_has_nulls_now(spark, tables, fmt, kind, query):
+    table = tables(fmt, "a INT NOT NULL, u INT")
+    table.insert("(1, 10)")
+    sql = NULLABLE_QUERIES[query].format(t=table.name)
+    view = table.create_view(kind, sql)
+    table.recreate("a INT, u INT", "(NULL, 20), (2, 30)")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_reports_the_nullability_of_its_columns(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT")
-    try:
-        view = table.create_view(kind, f"SELECT a, u FROM {table.name}")
-        expected = [("a", False), ("u", True)]
-        assert [(x.name, x.nullable) for x in spark.table(table.name).schema] == expected
-        assert [(x.name, x.nullable) for x in spark.table(view).schema] == expected
-        name = view.removeprefix("global_temp.")
-        database = "global_temp" if name != view else None
-        columns = spark.catalog.listColumns(name, database)
-        assert [(x.name, x.nullable) for x in columns] == expected
-    finally:
-        table.drop()
+def test_view_reports_the_nullability_of_its_columns(spark, tables, kind):
+    table = tables("delta", "a INT NOT NULL, u INT")
+    view = table.create_view(kind, f"SELECT a, u FROM {table.name}")
+    expected = [("a", False), ("u", True)]
+    assert [(x.name, x.nullable) for x in spark.table(table.name).schema] == expected
+    assert [(x.name, x.nullable) for x in spark.table(view).schema] == expected
+    name = view.removeprefix("global_temp.")
+    database = "global_temp" if name != view else None
+    columns = spark.catalog.listColumns(name, database)
+    assert [(x.name, x.nullable) for x in columns] == expected
 
 
 def struct_schema(fields, *, nullable=False, comment=None):
@@ -710,50 +662,39 @@ STRUCT_CHANGES = {
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("case", STRUCT_CHANGES)
-def test_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_path, kind, case):
+def test_view_reads_a_struct_whose_fields_had_no_nulls(spark, tables, kind, case):
     query, schema, values = STRUCT_CHANGES[case]
-    table = Table(spark, tmp_path, "delta")
-    try:
-        write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
-        sql = query.format(t=table.name)
-        view = table.create_view(kind, sql)
-        assert spark.table(view).schema == spark.sql(sql).schema
-        write_struct_table(spark, table, schema, values)
-        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
-    finally:
-        table.drop()
+    table = tables("delta")
+    write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
+    sql = query.format(t=table.name)
+    view = table.create_view(kind, sql)
+    assert spark.table(view).schema == spark.sql(sql).schema
+    write_struct_table(spark, table, schema, values)
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta")
-    try:
-        write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
-        inner = table.create_view("sv", f"SELECT a, s FROM {table.name}")
-        outer = table.create_view(kind, f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}")
-        write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
-        assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
-    finally:
-        table.drop()
+def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tables, kind):
+    table = tables("delta")
+    write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
+    inner = table.create_view("sv", f"SELECT a, s FROM {table.name}")
+    outer = table.create_view(kind, f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}")
+    write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
+    assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize(
     ("before", "after"), [("iceberg", "parquet"), ("parquet", "iceberg"), ("iceberg", "delta"), ("delta", "iceberg")]
 )
-def test_view_reads_a_table_created_again_with_the_same_columns_in_another_format(spark, tmp_path, kind, before, after):
+def test_view_reads_a_table_created_again_with_the_same_columns_in_another_format(spark, tables, kind, before, after):
     # The formats store strings, binary values and lists in Arrow types of other encodings.
     columns = "k INT, b BINARY, c STRING, s STRUCT<x: STRING, y: BINARY>, a ARRAY<STRING>, m MAP<STRING, BINARY>"
-    table = Table(spark, tmp_path, before, columns)
-    try:
-        table.insert("(1, X'0A', 'p', named_struct('x', 'q', 'y', X'0B'), array('r'), map('s', X'0C'))")
-        view = table.create_view(kind)
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create(columns, after)
-        table.insert("(2, X'FF', 'u', named_struct('x', 'v', 'y', X'EE'), array('w'), map('z', X'DD'))")
-        assert spark.table(view).collect() == spark.table(table.name).collect()
-    finally:
-        table.drop()
+    table = tables(before, columns)
+    table.insert("(1, X'0A', 'p', named_struct('x', 'q', 'y', X'0B'), array('r'), map('s', X'0C'))")
+    view = table.create_view(kind)
+    table.recreate(columns, "(2, X'FF', 'u', named_struct('x', 'v', 'y', X'EE'), array('w'), map('z', X'DD'))", after)
+    assert spark.table(view).collect() == spark.table(table.name).collect()
 
 
 # Queries over `t (k, s STRUCT<x, b>)` and `u (c0)` that read the field `x` of `s` only.
@@ -767,20 +708,16 @@ CORRELATED_FIELD_QUERIES = {
 @pytest.mark.parametrize("change", ["DROP COLUMN s.b", "ADD COLUMNS (s.g INT)"])
 @pytest.mark.parametrize("query", CORRELATED_FIELD_QUERIES)
 def test_view_reads_a_struct_whose_unread_field_changed_through_a_correlated_subquery(
-    spark, tmp_path, kind, change, query
+    spark, tables, kind, change, query
 ):
-    table = Table(spark, tmp_path, "iceberg", "k INT, s STRUCT<x: BIGINT, b: STRING>")
-    other = Table(spark, tmp_path, "parquet", "c0 BIGINT")
-    try:
-        table.insert("(1, named_struct('x', 1, 'b', 'p')), (2, named_struct('x', 5, 'b', 'q'))")
-        other.insert("(1), (2)")
-        sql = CORRELATED_FIELD_QUERIES[query].format(t=table.name, u=other.name)
-        view = table.create_view(kind, sql)
-        spark.sql(f"ALTER TABLE {table.name} {change}")
-        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
-    finally:
-        table.drop()
-        other.drop()
+    table = tables("iceberg", "k INT, s STRUCT<x: BIGINT, b: STRING>")
+    other = tables("parquet", "c0 BIGINT")
+    table.insert("(1, named_struct('x', 1, 'b', 'p')), (2, named_struct('x', 5, 'b', 'q'))")
+    other.insert("(1), (2)")
+    sql = CORRELATED_FIELD_QUERIES[query].format(t=table.name, u=other.name)
+    view = table.create_view(kind, sql)
+    spark.sql(f"ALTER TABLE {table.name} {change}")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 # Queries over `t (k, s STRUCT<a, b>)` that read the struct `s` whole and its field `a`.
@@ -795,24 +732,20 @@ STRUCT_AND_FIELD_QUERIES = [
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("fmt", ["iceberg", "parquet"])
 @pytest.mark.parametrize("query", STRUCT_AND_FIELD_QUERIES)
-def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, tmp_path, kind, fmt, query):
-    table = Table(spark, tmp_path, fmt, "k INT, s STRUCT<a: INT, b: INT>")
-    try:
-        table.insert("(1, named_struct('a', 1, 'b', 2))")
-        sql = query.format(t=table.name)
-        view = table.create_view(kind, sql)
-        schema = spark.table(view).schema
-        if fmt == "iceberg":
-            spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN s.a TO A")
-        else:
-            spark.sql(f"DROP TABLE {table.name}")
-            table.create("k INT, s STRUCT<A: INT, b: INT>")
-        table.insert("(2, named_struct('A', 3, 'b', 4))")
-        # The view keeps the names of the fields that it was created with.
-        assert sorted(spark.table(view).collect()) == sorted(spark.sql(sql).collect())
-        assert spark.table(view).schema.simpleString() == schema.simpleString()
-    finally:
-        table.drop()
+def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, tables, kind, fmt, query):
+    table = tables(fmt, "k INT, s STRUCT<a: INT, b: INT>")
+    table.insert("(1, named_struct('a', 1, 'b', 2))")
+    sql = query.format(t=table.name)
+    view = table.create_view(kind, sql)
+    schema = spark.table(view).schema
+    if fmt == "iceberg":
+        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN s.a TO A")
+    else:
+        table.recreate("k INT, s STRUCT<A: INT, b: INT>")
+    table.insert("(2, named_struct('A', 3, 'b', 4))")
+    # The view keeps the names of the fields that it was created with.
+    assert sorted(spark.table(view).collect()) == sorted(spark.sql(sql).collect())
+    assert spark.table(view).schema.simpleString() == schema.simpleString()
 
 
 # Queries that read a field of a struct inside an array or a map, over a table `(k, c)`, and the
@@ -833,24 +766,17 @@ NESTED_STRUCT_QUERIES = {
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("case", NESTED_STRUCT_QUERIES)
-def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(
-    spark, tmp_path, kind, case
-):
+def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
     # A known limit: the view reads the array or the map whole, and does not give the fields
     # of the structs in it the names of the view, so the access to the field fails.
     query, data_type, value = NESTED_STRUCT_QUERIES[case]
-    table = Table(spark, tmp_path, "parquet", f"k INT, c {data_type.format(a='a')}")
-    try:
-        table.insert(f"(1, {value.format(a='a')})")
-        view = table.create_view(kind, query.format(t=table.name))
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create(f"k INT, c {data_type.format(a='A')}")
-        table.insert(f"(2, {value.format(a='A')})")
-        with pytest.raises(Exception, match="not found"):
-            spark.sql(f"SELECT * FROM {view}").collect()
-    finally:
-        table.drop()
+    table = tables("parquet", f"k INT, c {data_type.format(a='a')}")
+    table.insert(f"(1, {value.format(a='a')})")
+    view = table.create_view(kind, query.format(t=table.name))
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    table.recreate(f"k INT, c {data_type.format(a='A')}", f"(2, {value.format(a='A')})")
+    with pytest.raises(Exception, match="not found"):
+        spark.sql(f"SELECT * FROM {view}").collect()
 
 
 # Queries over `t (a, b, s STRUCT<x, y>)` whose key `s.x` or `b` only tells rows apart, and the
@@ -863,23 +789,17 @@ KEY_QUERIES = {
 
 
 @pytest.mark.parametrize("case", KEY_QUERIES)
-def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tmp_path, case):
+def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tables, case):
     # A known limit: a struct field that only tells rows apart counts as read, while a
     # column that only tells rows apart may change its type.
     query, changed = KEY_QUERIES[case]
-    table = Table(spark, tmp_path, "iceberg", "a INT, b INT, s STRUCT<x: INT, y: INT>")
-    try:
-        table.insert("(1, 1, named_struct('x', 1, 'y', 1)), (1, 2, named_struct('x', 2, 'y', 1))")
-        sql = query.format(t=table.name)
-        view = table.create_view("sv", sql)
-        spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN {changed} TYPE BIGINT")
-        table.insert("(5, 5, named_struct('x', 9, 'y', 1))")
-        if changed == "s.x":
-            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-        else:
-            assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
-    finally:
-        table.drop()
+    table = tables("iceberg", "a INT, b INT, s STRUCT<x: INT, y: INT>")
+    table.insert("(1, 1, named_struct('x', 1, 'y', 1)), (1, 2, named_struct('x', 2, 'y', 1))")
+    sql = query.format(t=table.name)
+    view = table.create_view("sv", sql)
+    spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN {changed} TYPE BIGINT")
+    table.insert("(5, 5, named_struct('x', 9, 'y', 1))")
+    assert_view_reads(spark, view, None if changed == "s.x" else rows(spark, sql))
 
 
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
@@ -897,22 +817,17 @@ METADATA_FORMATS = {
     ("before", "after"),
     [("iceberg", "delta"), ("delta_cm", "iceberg"), ("delta_cm", "parquet"), ("delta", "delta_cm"), ("delta", None)],
 )
-def test_view_of_a_union_reads_a_table_whose_column_metadata_changed(spark, tmp_path, kind, before, after):
+def test_view_of_a_union_reads_a_table_whose_column_metadata_changed(spark, tables, kind, before, after):
     using, properties = METADATA_FORMATS[before]
-    table = Table(spark, tmp_path, using, "k INT, c STRING", properties)
-    try:
-        table.insert("(1, 'a'), (2, 'b')")
-        sql = f"SELECT c FROM {table.name} UNION SELECT 'z'"
-        view = table.create_view(kind, sql)
-        if after is None:
-            spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN c COMMENT 'the column'")
-        else:
-            spark.sql(f"DROP TABLE {table.name}")
-            table.create("k INT, c STRING", *METADATA_FORMATS[after])
-            table.insert("(1, 'a'), (2, 'b')")
-        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
-    finally:
-        table.drop()
+    table = tables(using, "k INT, c STRING", properties)
+    table.insert("(1, 'a'), (2, 'b')")
+    sql = f"SELECT c FROM {table.name} UNION SELECT 'z'"
+    view = table.create_view(kind, sql)
+    if after is None:
+        spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN c COMMENT 'the column'")
+    else:
+        table.recreate("k INT, c STRING", "(1, 'a'), (2, 'b')", *METADATA_FORMATS[after])
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 # Queries over `t (a INT NOT NULL, u INT NOT NULL)` whose outputs have no nulls.
@@ -928,47 +843,36 @@ NOT_NULL_QUERIES = {
 
 @pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
 @pytest.mark.parametrize("query", NOT_NULL_QUERIES)
-def test_view_reports_the_nullability_of_the_columns_that_it_computes(spark, tmp_path, kind, query):
-    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT NOT NULL")
-    try:
-        sql = NOT_NULL_QUERIES[query].format(t=table.name)
-        view = table.create_view(kind, sql)
-        assert spark.table(view).schema == spark.sql(sql).schema
-    finally:
-        table.drop()
+def test_view_reports_the_nullability_of_the_columns_that_it_computes(spark, tables, kind, query):
+    table = tables("delta", "a INT NOT NULL, u INT NOT NULL")
+    sql = NOT_NULL_QUERIES[query].format(t=table.name)
+    view = table.create_view(kind, sql)
+    assert spark.table(view).schema == spark.sql(sql).schema
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT NOT NULL")
-    try:
-        table.insert("(1, 2)")
-        sql = f"SELECT map(a, u) AS m FROM {table.name}"
-        view = table.create_view(kind, sql)
-        # The definition of a view is resolved as if its columns had nulls, which they can have
-        # when the view is read, and the type of a map records whether its values have nulls.
-        assert spark.sql(sql).schema["m"].dataType.valueContainsNull is False
-        assert spark.table(view).schema["m"].dataType.valueContainsNull is True
-        assert spark.table(view).collect() == spark.sql(sql).collect()
-    finally:
-        table.drop()
+def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tables, kind):
+    table = tables("delta", "a INT NOT NULL, u INT NOT NULL")
+    table.insert("(1, 2)")
+    sql = f"SELECT map(a, u) AS m FROM {table.name}"
+    view = table.create_view(kind, sql)
+    # The definition of a view is resolved as if its columns had nulls, which they can have
+    # when the view is read, and the type of a map records whether its values have nulls.
+    assert spark.sql(sql).schema["m"].dataType.valueContainsNull is False
+    assert spark.table(view).schema["m"].dataType.valueContainsNull is True
+    assert spark.table(view).collect() == spark.sql(sql).collect()
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("query", ["SELECT a, b FROM {t}", "SELECT a, typeof(b) AS tb FROM {t}"])
-def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tmp_path, kind, query):
-    table = Table(spark, tmp_path, "delta", "a INT, b INT")
-    try:
-        table.insert("(1, 10)")
-        inner = table.create_view("sv", query.format(t=table.name))
-        outer = table.create_view(kind, f"SELECT a FROM {inner}")
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create("a INT, b STRING")
-        table.insert("(5, 'x')")
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {inner}")
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {outer}")
-    finally:
-        table.drop()
+def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tables, kind, query):
+    table = tables("delta", "a INT, b INT")
+    table.insert("(1, 10)")
+    inner = table.create_view("sv", query.format(t=table.name))
+    outer = table.create_view(kind, f"SELECT a FROM {inner}")
+    table.recreate("a INT, b STRING", "(5, 'x')")
+    assert_view_reads(spark, inner, None)
+    assert_view_reads(spark, outer, None)
 
 
 # Views over views of a table: the columns and rows of the table, the query of each view
@@ -1068,20 +972,15 @@ VIEW_OVER_VIEW_CHANGES = {
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("case", VIEW_OVER_VIEW_CHANGES)
-def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, tmp_path, kind, case):
+def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, tables, kind, case):
     columns, values, queries, new_columns, new_values, expected = VIEW_OVER_VIEW_CHANGES[case]
-    table = Table(spark, tmp_path, "delta", columns)
-    try:
-        table.insert(values)
-        view = None
-        for i, query in enumerate(queries):
-            view = table.create_view(kind if i == len(queries) - 1 else "sv", query.format(t=table.name, v=view))
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create(new_columns)
-        table.insert(new_values)
-        assert rows(spark, f"SELECT * FROM {view}") == expected
-    finally:
-        table.drop()
+    table = tables("delta", columns)
+    table.insert(values)
+    view = None
+    for i, query in enumerate(queries):
+        view = table.create_view(kind if i == len(queries) - 1 else "sv", query.format(t=table.name, v=view))
+    table.recreate(new_columns, new_values)
+    assert rows(spark, f"SELECT * FROM {view}") == expected
 
 
 # DataFrames whose definitions run a query to find their columns, over a table `(id, s)` with the
@@ -1102,33 +1001,27 @@ QUERYING_FRAMES = {
 
 @pytest.mark.parametrize("kind", ["dv", "dgv"])
 @pytest.mark.parametrize("case", QUERYING_FRAMES)
-def test_data_frame_view_whose_definition_runs_a_query_reads_the_current_rows(spark, tmp_path, kind, case):
+def test_data_frame_view_whose_definition_runs_a_query_reads_the_current_rows(spark, tables, kind, case):
     query, before, after = QUERYING_FRAMES[case]
-    table = Table(spark, tmp_path, "delta", "id BIGINT, s STRING")
-    try:
-        table.insert("(1, 'a'), (2, 'b')")
-        frame = query(spark.table(table.name))
-        view = table.create_view(kind, frame=frame)
-        # The columns of the values are in no particular order.
-        sql = f"SELECT `{frame.columns[0]}`, `1`, `2` FROM {view}"
-        assert rows(spark, sql) == before
-        table.insert("(1, 'b')")
-        assert rows(spark, sql) == after
-    finally:
-        table.drop()
+    table = tables("delta", "id BIGINT, s STRING")
+    table.insert("(1, 'a'), (2, 'b')")
+    frame = query(spark.table(table.name))
+    view = table.create_view(kind, frame=frame)
+    # The columns of the values are in no particular order.
+    sql = f"SELECT `{frame.columns[0]}`, `1`, `2` FROM {view}"
+    assert rows(spark, sql) == before
+    table.insert("(1, 'b')")
+    assert rows(spark, sql) == after
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta", "id INT, extra INT")
-    try:
-        table.insert("(1, 2)")
-        view = table.create_view(kind, f"SELECT id FROM {table.name}")
-        write = spark.sql("SELECT 5 AS id, 'x' AS extra").write.mode("overwrite")
-        write.option("overwriteSchema", "true").saveAsTable(table.name)
-        assert rows(spark, f"SELECT * FROM {view}") == [(5,)]
-    finally:
-        table.drop()
+def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tables, kind):
+    table = tables("delta", "id INT, extra INT")
+    table.insert("(1, 2)")
+    view = table.create_view(kind, f"SELECT id FROM {table.name}")
+    write = spark.sql("SELECT 5 AS id, 'x' AS extra").write.mode("overwrite")
+    write.option("overwriteSchema", "true").saveAsTable(table.name)
+    assert rows(spark, f"SELECT * FROM {view}") == [(5,)]
 
 
 @pytest.mark.parametrize("fmt", ["delta", "parquet"])
@@ -1140,36 +1033,27 @@ def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tm
         "SELECT a, (SELECT max(k) FROM {u} WHERE {u}.k = {t}.b) AS m FROM {t}",
     ],
 )
-def test_view_rejects_a_table_without_a_column_of_an_outer_reference(spark, tmp_path, fmt, kind, query):
-    table = Table(spark, tmp_path, fmt, "a INT, b INT, x INT")
-    other = Table(spark, tmp_path, fmt, "k INT")
-    try:
-        table.insert("(1, 10, 100)")
-        other.insert("(10)")
-        view = table.create_view(kind, query.format(t=table.name, u=other.name))
-        spark.sql(f"DROP TABLE {table.name}")
-        table.create("a INT, x INT")
-        table.insert("(1, 100)")
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-    finally:
-        table.drop()
-        other.drop()
+def test_view_rejects_a_table_without_a_column_of_an_outer_reference(spark, tables, fmt, kind, query):
+    table = tables(fmt, "a INT, b INT, x INT")
+    other = tables(fmt, "k INT")
+    table.insert("(1, 10, 100)")
+    other.insert("(10)")
+    view = table.create_view(kind, query.format(t=table.name, u=other.name))
+    table.recreate("a INT, x INT", "(1, 100)")
+    assert_view_reads(spark, view, None)
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_reads_a_table_whose_column_comment_changed(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta")
-    try:
-        table.insert("(1)")
-        view = table.create_view(kind)
-        spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN id COMMENT 'the id'")
-        table.insert("(2)")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
-        assert rows(spark, f"SELECT id, count(*) FROM {view} GROUP BY id") == [(1, 1), (2, 1)]
-        joined = f"SELECT v.id, count(*) FROM {view} v JOIN {table.name} t ON v.id = t.id GROUP BY v.id"
-        assert rows(spark, joined) == [(1, 1), (2, 1)]
-    finally:
-        table.drop()
+def test_view_reads_a_table_whose_column_comment_changed(spark, tables, kind):
+    table = tables("delta")
+    table.insert("(1)")
+    view = table.create_view(kind)
+    spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN id COMMENT 'the id'")
+    table.insert("(2)")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+    assert rows(spark, f"SELECT id, count(*) FROM {view} GROUP BY id") == [(1, 1), (2, 1)]
+    joined = f"SELECT v.id, count(*) FROM {view} v JOIN {table.name} t ON v.id = t.id GROUP BY v.id"
+    assert rows(spark, joined) == [(1, 1), (2, 1)]
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
@@ -1185,36 +1069,30 @@ def test_plan_view_does_not_read_a_view_that_takes_the_name_of_its_table(spark, 
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_with_time_travel_reads_its_version(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "delta")
-    try:
-        table.insert("(1)")
-        view = table.create_view(kind, f"SELECT * FROM {table.name} VERSION AS OF 1")
-        table.insert("(2)")
-        for _ in range(2):
-            assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-        joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table.name} t ON v.id = t.id"
-        assert rows(spark, joined) == [(1, 1), (None, 2)]
-        spark.sql(f"DROP TABLE {table.name}")
-        assert NOT_FOUND in error(spark, f"SELECT * FROM {view}")
-        # The version of a Delta Lake table is not a version of an Iceberg table.
-        table.create("id BIGINT", fmt="iceberg")
-        assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
-    finally:
-        table.drop()
+def test_view_with_time_travel_reads_its_version(spark, tables, kind):
+    table = tables("delta")
+    table.insert("(1)")
+    view = table.create_view(kind, f"SELECT * FROM {table.name} VERSION AS OF 1")
+    table.insert("(2)")
+    for _ in range(2):
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table.name} t ON v.id = t.id"
+    assert rows(spark, joined) == [(1, 1), (None, 2)]
+    spark.sql(f"DROP TABLE {table.name}")
+    assert NOT_FOUND in error(spark, f"SELECT * FROM {view}")
+    # The version of a Delta Lake table is not a version of an Iceberg table.
+    table.create("id BIGINT", fmt="iceberg")
+    assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_over_an_iceberg_metadata_table_reads_the_current_snapshots(spark, tmp_path, kind):
-    table = Table(spark, tmp_path, "iceberg")
-    try:
-        table.insert("(1)")
-        view = table.create_view(kind, f"SELECT snapshot_id FROM {table.name}.snapshots")
-        assert len(rows(spark, f"SELECT * FROM {view}")) == 1
-        table.insert("(2)")
-        assert len(rows(spark, f"SELECT * FROM {view}")) == 2
-    finally:
-        table.drop()
+def test_view_over_an_iceberg_metadata_table_reads_the_current_snapshots(spark, tables, kind):
+    table = tables("iceberg")
+    table.insert("(1)")
+    view = table.create_view(kind, f"SELECT snapshot_id FROM {table.name}.snapshots")
+    assert len(rows(spark, f"SELECT * FROM {view}")) == 1
+    table.insert("(2)")
+    assert len(rows(spark, f"SELECT * FROM {view}")) == 2
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
@@ -1300,10 +1178,10 @@ def test_view_reads_after_the_session_configuration_changed(spark, table, kind):
         "spark.sql.session.timeZone": "Asia/Tokyo",
         "spark.sql.ansi.enabled": "false",
     }
-    spark.sql(f"DROP TABLE {table.name}")
-    table.create("id BIGINT, Ts TIMESTAMP, n TIMESTAMP_NTZ, s STRUCT<A: INT, b: ARRAY<STRING>>, d DECIMAL(10, 2)")
-    values = "(1, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP_NTZ '2024-01-01 00:00:00', named_struct('A', 1, 'b', array('x')), 1.5)"
-    table.insert(values)
+    table.recreate(
+        "id BIGINT, Ts TIMESTAMP, n TIMESTAMP_NTZ, s STRUCT<A: INT, b: ARRAY<STRING>>, d DECIMAL(10, 2)",
+        "(1, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP_NTZ '2024-01-01 00:00:00', named_struct('A', 1, 'b', array('x')), 1.5)",
+    )
     view = table.create_view(kind)
     expected = rows(spark, f"SELECT id, unix_timestamp(Ts), CAST(n AS STRING), s.A, s.b[0], d FROM {table.name}")
     previous = {key: spark.conf.get(key) for key in options}
@@ -1320,8 +1198,8 @@ def test_view_reads_after_the_session_configuration_changed(spark, table, kind):
             spark.conf.set(key, value)
 
 
-def test_global_view_reads_the_table_of_the_session_that_created_it(spark, observer, tmp_path):
-    table = Table(spark, tmp_path, "delta")
+def test_global_view_reads_the_table_of_the_session_that_created_it(spark, observer, tables, tmp_path):
+    table = tables("delta")
     local = f"loc_{uuid.uuid4().hex}"
     function = f"fn_{uuid.uuid4().hex}"
     try:
@@ -1349,7 +1227,6 @@ def test_global_view_reads_the_table_of_the_session_that_created_it(spark, obser
     finally:
         observer.sql(f"DROP TABLE IF EXISTS {table.name}")
         spark.catalog.dropTempView(local)
-        table.drop()
 
 
 def test_views_without_catalog_tables_are_unchanged(spark, tmp_path):

@@ -68,6 +68,13 @@ class Table:
             f"CREATE TABLE {self.name} ({columns}) USING {fmt or self.fmt} LOCATION '{location}'{properties}"
         )
 
+    def recreate(self, columns, values=None, fmt=None, properties=""):
+        """Drops the table and creates it again at a new location, with the rows if given."""
+        self.spark.sql(f"DROP TABLE {self.name}")
+        self.create(columns, fmt, properties)
+        if values is not None:
+            self.insert(values)
+
     def insert(self, values):
         self.spark.sql(f"INSERT INTO {self.name} VALUES {values}")
 
