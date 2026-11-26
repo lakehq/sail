@@ -1040,6 +1040,12 @@ PASSING_QUERIES = {
     "posexplode": "SELECT id, posexplode(array(k)) FROM {t}",
     "inline": "SELECT inline(array(named_struct('a', k))) FROM {t}",
     "unpivot in SQL": "SELECT id, n, v FROM {t} UNPIVOT (v FOR n IN (k))",
+    "window over a sorted query": (
+        "SELECT q.id, dense_rank() OVER (PARTITION BY q.k ORDER BY q.id) AS r FROM (SELECT * FROM {t} ORDER BY k) q"
+    ),
+    "window over a sorted query with a limit": (
+        "SELECT q.id, count(*) OVER (PARTITION BY q.k) AS n FROM (SELECT * FROM {t} ORDER BY k LIMIT 100) q"
+    ),
 }
 
 
