@@ -491,10 +491,20 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
         fixture.resolve(sql).await?.expect(1, 1, sql);
         fixture.execute(sql).await?;
     }
-    // The view is defined by a SQL query, which no longer resolves.
+    // The view is defined by a SQL query, which no longer resolves, so the view fails with the
+    // error of the column that it no longer has.
     let resolution = fixture.resolve("SELECT * FROM wide").await?;
     let error = resolution.error.ok_or("missing error")?;
-    assert!(error.contains(r#"Identifier("w")"#), "{error}");
+    assert!(
+        error.contains(
+            "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View `wide` plan \
+            references table `sail`.`default`.`t` whose data columns changed since the view \
+            plan was initially captured.\nColumn changes:\n- `w` BIGINT has been removed\n\
+            This indicates the table has evolved and the view based on the plan must be \
+            recreated."
+        ),
+        "{error}"
+    );
     Ok(())
 }
 

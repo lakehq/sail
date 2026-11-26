@@ -233,24 +233,23 @@ def test_view_computes_on_the_types_of_the_columns_that_its_definition_resolves_
 
 
 @pytest.mark.parametrize("kind", SQL_KINDS)
-def test_sql_view_fails_as_its_query_on_the_values_of_a_narrowed_column(spark, tables, kind):
+def test_sql_view_computes_as_its_query_on_the_values_of_a_narrowed_column(spark, tables, kind):
     table = tables("delta", "id INT, b BIGINT")
     table.insert("(1, 7)")
     sql = f"SELECT b * 2 AS v FROM {table.name}"
     view = table.create_view(kind, sql)
     table.recreate("id INT, b INT", "(2, 2000000000)")
-    # The product of the current type overflows, as in the query.
-    assert "ARITHMETIC_OVERFLOW" in error(spark, sql)
-    assert "ARITHMETIC_OVERFLOW" in error(spark, f"SELECT * FROM {view}")
+    # The product is computed on the current type, as in the query.
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 @pytest.mark.parametrize("kind", SQL_KINDS)
 @pytest.mark.parametrize(
     ("current", "value"),
     [
-        ("s STRUCT<y: INT, x: INT>", "struct(3, 4)"),
-        ("s STRUCT<X: INT, y: INT>", "struct(3, 4)"),
-        ("s STRUCT<x: INT, y: INT, z: INT>", "struct(3, 4, 5)"),
+        ("s STRUCT<y: INT, x: INT>", "named_struct('y', 3, 'x', 4)"),
+        ("s STRUCT<X: INT, y: INT>", "named_struct('X', 3, 'y', 4)"),
+        ("s STRUCT<x: INT, y: INT, z: INT>", "named_struct('x', 3, 'y', 4, 'z', 5)"),
     ],
 )
 @pytest.mark.parametrize(
@@ -259,7 +258,7 @@ def test_sql_view_fails_as_its_query_on_the_values_of_a_narrowed_column(spark, t
 )
 def test_sql_view_computes_on_a_struct_whose_fields_changed(spark, tables, kind, current, value, query):
     table = tables("delta", "id INT, s STRUCT<x: INT, y: INT>")
-    table.insert("(1, struct(1, 2))")
+    table.insert("(1, named_struct('x', 1, 'y', 2))")
     sql = query.format(t=table.name)
     view = table.create_view(kind, sql)
     table.recreate(f"id INT, {current}", f"(2, {value})")
@@ -1033,9 +1032,11 @@ def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, table
     else:
         table.recreate("k INT, s STRUCT<A: INT, b: INT>")
     table.insert("(2, named_struct('A', 3, 'b', 4))")
-    # The view keeps the names of the fields that it was created with.
     assert sorted(spark.table(view).collect()) == sorted(spark.sql(sql).collect())
-    assert spark.table(view).schema.simpleString() == schema.simpleString()
+    # A DataFrame view keeps the names of the fields that it was created with, and a SQL view
+    # resolves its query again, which reads the struct with the names that it has now.
+    expected = schema if kind == "dv" else spark.sql(sql).schema
+    assert spark.table(view).schema.simpleString() == expected.simpleString()
 
 
 # Queries that read a field of a struct inside an array or a map, over a table `(k, c)` or a
@@ -1109,7 +1110,10 @@ def test_view_computes_with_an_array_of_structs_whose_field_was_renamed_in_lette
     table.insert("(array(named_struct('x', 1, 'y', 2)))")
     view = table.create_view(kind, query.format(t=table.name))
     table.recreate("c ARRAY<STRUCT<X: INT, y: INT>>", "(array(named_struct('X', 7, 'y', 8)))")
-    assert sorted(plain(spark.table(view).collect()), key=str) == expected
+    if kind == "sv":
+        # A SQL view resolves its query again and computes as the query does.
+        expected = plain(spark.sql(query.format(t=table.name)).collect())
+    assert sorted(plain(spark.table(view).collect()), key=str) == sorted(expected, key=str)
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
@@ -1120,6 +1124,11 @@ def test_view_reads_a_struct_whose_fields_changed_order_in_the_order_of_the_view
     view = table.create_view(kind, f"SELECT s FROM {table.name}")
     schema = spark.table(view).schema
     table.recreate("s STRUCT<y: STRING, x: INT>", "(named_struct('y', 'b', 'x', 2))")
+    if kind == "sv":
+        # A SQL view resolves its query again, which reads the struct in the order that it has now.
+        assert spark.table(view).schema.simpleString() == spark.table(table.name).schema.simpleString()
+        assert rows(spark, f"SELECT s.x, s.y FROM {view}") == [(2, "b")]
+        return
     assert spark.table(view).schema.simpleString() == schema.simpleString()
     assert rows(spark, f"SELECT s.x, s.y, s = named_struct('x', 2, 'y', 'b') FROM {view}") == [(2, "b", True)]
 
@@ -1299,24 +1308,35 @@ STRUCT_GAINS = {
 @pytest.mark.parametrize("fmt", ["delta", "parquet"])
 @pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
 @pytest.mark.parametrize("case", STRUCT_GAINS)
-def test_view_reads_a_struct_without_the_fields_that_it_gained(spark, tables, fmt, kind, case):
+def test_view_reads_a_struct_that_gained_fields(spark, tables, fmt, kind, case):
     columns, value, new_columns, new_value, expected = STRUCT_GAINS[case]
     table = tables(fmt, f"id INT, {columns}")
     table.insert(f"(1, {value})")
     view = table.create_view(kind)
     schema = spark.table(view).schema
     table.recreate(f"id INT, {new_columns}", f"(2, {new_value})")
+    if kind in SQL_KINDS:
+        # A SQL view resolves its query again, which reads the struct with the fields that it has now.
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, f"SELECT * FROM {table.name}")
+        return
+    # A DataFrame view reads the struct without the fields that it gained.
     assert spark.table(view).schema == schema
     assert rows(spark, f"SELECT * FROM {view}") == [(2, expected)]
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_of_a_map_whose_key_structs_gained_a_field_must_be_created_again(spark, tables, kind):
+def test_view_of_a_map_whose_key_structs_gained_a_field(spark, tables, kind):
     table = tables("parquet", "id INT, m MAP<STRUCT<a: INT>, INT>")
     table.insert("(1, map(named_struct('a', 10), 1))")
     view = table.create_view(kind)
     table.recreate("id INT, m MAP<STRUCT<a: INT, c: INT>, INT>", "(2, map(named_struct('a', 11, 'c', 31), 2))")
-    assert_view_reads(spark, view, None)
+    if kind == "sv":
+        # A SQL view resolves its query again, which reads the map as it is now.
+        assert spark.table(view).collect() == spark.table(table.name).collect()
+    else:
+        # A DataFrame view must be created again, since a cast of the keys of a map cannot
+        # leave out the fields that they gained.
+        assert_view_reads(spark, view, None)
 
 
 # Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The
