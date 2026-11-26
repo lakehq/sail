@@ -864,6 +864,31 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     }
 }
 
+/// Microseconds since midnight of a TIME value.
+fn time_to_micros(expr: Expr) -> Expr {
+    cast(expr, DataType::Int64)
+}
+
+/// Seconds since midnight of a TIME value, as `DECIMAL(14, 6)` like Spark.
+fn time_to_seconds(expr: Expr) -> Expr {
+    cast(
+        cast(time_to_micros(expr), DataType::Float64) / lit(1_000_000.0_f64),
+        DataType::Decimal128(14, 6),
+    )
+}
+
+fn time_from_micros(micros: Expr) -> Expr {
+    cast(micros, DataType::Time64(TimeUnit::Microsecond))
+}
+
+/// Seconds (possibly fractional) since midnight to a TIME value.
+fn time_from_seconds(expr: Expr) -> Expr {
+    time_from_micros(cast(
+        expr_fn::round(vec![cast(expr, DataType::Float64) * lit(1_000_000.0_f64)]),
+        DataType::Int64,
+    ))
+}
+
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
     timestamp_with_try(input, timestamp_ntz, true)
 }
@@ -1661,12 +1686,21 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("session_window", F::unknown("session_window")),
         ("time_bucket", F::unknown("time_bucket")),
-        ("time_from_micros", F::unknown("time_from_micros")),
-        ("time_from_millis", F::unknown("time_from_millis")),
-        ("time_from_seconds", F::unknown("time_from_seconds")),
-        ("time_to_micros", F::unknown("time_to_micros")),
-        ("time_to_millis", F::unknown("time_to_millis")),
-        ("time_to_seconds", F::unknown("time_to_seconds")),
+        (
+            "time_from_micros",
+            F::unary(|arg| time_from_micros(cast(arg, DataType::Int64))),
+        ),
+        (
+            "time_from_millis",
+            F::unary(|arg| time_from_micros(cast(arg, DataType::Int64) * lit(1_000_i64))),
+        ),
+        ("time_from_seconds", F::unary(time_from_seconds)),
+        ("time_to_micros", F::unary(time_to_micros)),
+        (
+            "time_to_millis",
+            F::unary(|arg| time_to_micros(arg) / lit(1_000_i64)),
+        ),
+        ("time_to_seconds", F::unary(time_to_seconds)),
         (
             "timestamp_micros",
             F::cast(DataType::Timestamp(
