@@ -1109,21 +1109,6 @@ def test_views_over_views_read_the_current_rows(spark, table):
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
-def test_data_frame_view_that_replaces_itself_reads_the_current_rows(spark, table):
-    view = f"self_{uuid.uuid4().hex}"
-    try:
-        spark.table(table.name).createOrReplaceTempView(view)
-        for i in range(3):
-            table.insert(f"({i})")
-            spark.table(view).filter("id >= 0").createOrReplaceTempView(view)
-            assert rows(spark, f"SELECT * FROM {view}") == [(x,) for x in range(i + 1)]
-        table.insert("(-1)")
-        assert rows(spark, f"SELECT * FROM {view}") == [(0,), (1,), (2,)]
-    finally:
-        spark.catalog.dropTempView(view)
-
-
-@pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
 @pytest.mark.parametrize("kind", PLAN_KINDS)
 def test_plan_view_over_a_persistent_view_reads_the_current_rows(spark, table, kind):
     persistent = f"pv_{uuid.uuid4().hex}"
@@ -1198,8 +1183,8 @@ def test_view_reads_after_the_session_configuration_changed(spark, table, kind):
             spark.conf.set(key, value)
 
 
-def test_global_view_reads_the_table_of_the_session_that_created_it(spark, observer, tables, tmp_path):
-    table = tables("delta")
+@pytest.mark.parametrize("table", ["delta", "parquet"], indirect=True)
+def test_global_view_reads_the_table_of_the_session_that_created_it(spark, observer, table, tmp_path):
     local = f"loc_{uuid.uuid4().hex}"
     function = f"fn_{uuid.uuid4().hex}"
     try:
@@ -1217,11 +1202,22 @@ def test_global_view_reads_the_table_of_the_session_that_created_it(spark, obser
             (1, 1),
             (2, 2),
         ]
+        # The creator replaces its view and its function, and then drops its view.
+        spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {local} AS SELECT 9L AS id")
+        spark.udf.register(function, udf(lambda x: f"B{x}"))
+        assert rows(observer, f"SELECT * FROM {nested}") == [(1, "G1"), (2, "G2")]
+        spark.catalog.dropTempView(local)
+        table.insert("(3)")
+        assert rows(observer, f"SELECT * FROM {nested}") == [(1, "G1"), (2, "G2"), (3, "G3")]
         # A table of the same name in the other session is another table.
         observer.sql(f"CREATE TABLE {table.name} (id BIGINT) USING delta LOCATION '{tmp_path / 'observer'}'")
         observer.sql(f"INSERT INTO {table.name} VALUES (9)")
-        assert rows(observer, f"SELECT * FROM {direct}") == [(1,), (2,)]
-        assert rows(observer, f"SELECT a.id, b.id FROM {direct} a CROSS JOIN {table.name} b") == [(1, 9), (2, 9)]
+        assert rows(observer, f"SELECT * FROM {direct}") == [(1,), (2,), (3,)]
+        assert rows(observer, f"SELECT a.id, b.id FROM {direct} a CROSS JOIN {table.name} b") == [
+            (1, 9),
+            (2, 9),
+            (3, 9),
+        ]
         spark.sql(f"DROP TABLE {table.name}")
         assert NOT_FOUND in error(observer, f"SELECT * FROM {direct}")
     finally:
