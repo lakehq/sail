@@ -273,12 +273,12 @@ def test_view_reads_the_current_database_of_its_creation(spark, tmp_path, kind):
     spark.sql(f"CREATE DATABASE {a}")
     spark.sql(f"CREATE DATABASE {b}")
     try:
-        spark.sql(f"USE {a}")
+        spark.catalog.setCurrentDatabase(a)
         spark.sql(f"CREATE TABLE {table} (x INT, y INT) USING delta LOCATION '{tmp_path / suffix}_0'")
         spark.sql(f"INSERT INTO {table} VALUES (1, 10), (2, 20)")
         views.append(create_view(spark, kind, "SELECT current_database() AS d, current_catalog() AS c, x FROM t"))
         views.append(create_view(spark, kind, f"SELECT x FROM t WHERE current_database() = '{a}'"))
-        spark.sql(f"USE {b}")
+        spark.catalog.setCurrentDatabase(b)
         # The views read the table as it is, after a change of a column that they read, which makes
         # them resolve their queries again, and after the change is undone.
         for i, columns in enumerate([None, "x BIGINT, y INT", "x INT, y INT"]):
