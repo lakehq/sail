@@ -103,7 +103,8 @@ impl JobSession {
 ///   options that differ from the defaults on its own host.
 /// * `datafusion.execution.spill_compression`, which encodes the worker's temporary files.
 /// * The settings that cluster execution requires (see [`apply_cluster_constraints`]), which are
-///   enforced even if the driver session changes them.
+///   reapplied so that the options read during execution keep their cluster values. The options
+///   that the driver reads when it plans the job are not affected.
 ///
 /// Every other option follows the driver session, including options that DataFusion adds later.
 pub(crate) fn create_job_context(worker: &TaskContext, mut options: ConfigOptions) -> TaskContext {
