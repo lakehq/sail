@@ -781,23 +781,13 @@ impl PlanResolver<'_> {
         // plan would read what the query read when the view was created. A request for the
         // schema gets the columns of the stored plan if the query no longer resolves.
         if let Some(definition) = definition.as_ref().filter(|x| x.resolves_at_each_read) {
-            match Box::pin(self.resolve_view_definition(plan, view, definition, state)).await {
-                Ok(Some(plan)) => return Ok(plan),
+            match self
+                .resolve_view_definition_at_read(plan, view, definition, state)
+                .await
+            {
+                Ok(plan) => return Ok(plan),
                 Err(error) if !self.schema_only => return Err(error),
-                Ok(None) if !self.schema_only => {
-                    let columns = definition
-                        .output_names
-                        .iter()
-                        .map(|x| quote_names(std::slice::from_ref(x)))
-                        .collect::<Vec<_>>();
-                    return Err(PlanError::AnalysisError(format!(
-                        "[INCOMPATIBLE_VIEW_SCHEMA_CHANGE] The query of view {} no longer has \
-                        the columns of the view: {}. Create the view again.",
-                        view_name(view),
-                        columns.join(", "),
-                    )));
-                }
-                _ => {}
+                Err(_) => {}
             }
         }
         let plan = plan.clone();
@@ -817,7 +807,7 @@ impl PlanResolver<'_> {
                 continue;
             }
             let error = match self.bind_view_table_scan(scan, view, state).await {
-                Ok(Ok((bound, gained))) => {
+                Ok(Ok(Some((bound, gained)))) => {
                     gained_columns |= gained;
                     recompute_schemas |= bound.schema() != &scan.projected_schema;
                     scans.insert(address, bound);
@@ -827,6 +817,24 @@ impl PlanResolver<'_> {
                 // format, does not make the view resolve its query again, which would read
                 // the table in another way.
                 Err(error) => error,
+                // The partitions of the table are now read in several scans, which the
+                // stored plan cannot read, so the read resolves the query of the view again,
+                // as a read of a view created over several scans does.
+                Ok(Ok(None)) => {
+                    state.replace_view_definition(recorded.take());
+                    let Some(definition) = &definition else {
+                        return Err(PlanError::internal(
+                            "temporary view without a definition reads a catalog table",
+                        ));
+                    };
+                    match self
+                        .resolve_view_definition_at_read(&plan, view, definition, state)
+                        .await
+                    {
+                        Ok(plan) => return Ok(plan),
+                        Err(error) => error,
+                    }
+                }
                 Ok(Err(error)) => {
                     // A view that the query creates does not read the scans bound so far.
                     state.replace_view_definition(recorded.take());
@@ -893,6 +901,34 @@ impl PlanResolver<'_> {
             return None;
         };
         Some(Arc::clone(definition))
+    }
+
+    /// Returns the plan of a read of a temporary view that resolves its definition at the read
+    /// (see [`Self::resolve_view_definition`]), or the error of the query, or the error that
+    /// the query no longer has the outputs of the view.
+    async fn resolve_view_definition_at_read(
+        &self,
+        plan: &LogicalPlan,
+        view: &TableStatus,
+        definition: &Arc<TemporaryViewDefinition>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if let Some(plan) =
+            Box::pin(self.resolve_view_definition(plan, view, definition, state)).await?
+        {
+            return Ok(plan);
+        }
+        let columns = definition
+            .output_names
+            .iter()
+            .map(|x| quote_names(std::slice::from_ref(x)))
+            .collect::<Vec<_>>();
+        Err(PlanError::AnalysisError(format!(
+            "[INCOMPATIBLE_VIEW_SCHEMA_CHANGE] The query of view {} no longer has the columns \
+            of the view: {}. Create the view again.",
+            view_name(view),
+            columns.join(", "),
+        )))
     }
 
     /// Returns the plan of a read of a temporary view for its definition resolved again (see
@@ -980,13 +1016,14 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
-    /// whether the table gained columns, or the error of the columns that changed.
+    /// whether the table gained columns, or `None` if the table is now read in several scans,
+    /// or the error of the columns that changed.
     async fn bind_view_table_scan(
         &self,
         scan: &TableScan,
         view: &TableStatus,
         state: &mut PlanResolverState,
-    ) -> PlanResult<PlanResult<(LogicalPlan, bool)>> {
+    ) -> PlanResult<PlanResult<Option<(LogicalPlan, bool)>>> {
         let Some(reference) = ViewTableReference::try_from_scan(scan) else {
             return Err(PlanError::internal("scan without a view table reference"));
         };
@@ -996,7 +1033,8 @@ impl PlanResolver<'_> {
                     .resolve_view_catalog_table_source(origin, view, state)
                     .await?
                 {
-                    Ok(source) => (source, origin.name.clone()),
+                    Ok(Some(source)) => (source, origin.name.clone()),
+                    Ok(None) => return Ok(Ok(None)),
                     Err(error) => return Ok(Err(error)),
                 }
             }
@@ -1105,20 +1143,23 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        Ok(Ok((reference.with_stored_output(bound, &reads)?, gained)))
+        Ok(Ok(Some((
+            reference.with_stored_output(bound, &reads)?,
+            gained,
+        ))))
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
-    /// over, with the catalog table lookups and the table sources of the query, or the error
-    /// that the table is not found, that its name is now the name of a view, or that its
-    /// partitions are now read in several scans, after which the read resolves the query of
-    /// the view again.
+    /// over, with the catalog table lookups and the table sources of the query, or `None` if
+    /// the partitions of the table are now read in several scans, or the error that the table
+    /// is not found or that its name is now the name of a view, after which the read resolves
+    /// the query of the view again.
     async fn resolve_view_catalog_table_source(
         &self,
         origin: &CatalogTableOrigin,
         view: &TableStatus,
         state: &mut PlanResolverState,
-    ) -> PlanResult<PlanResult<Arc<dyn TableSource>>> {
+    ) -> PlanResult<PlanResult<Option<Arc<dyn TableSource>>>> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         // A table in a catalog of the session that created the view, which is not this
         // session, is read in that catalog. Any other table is read in the catalog of that
@@ -1201,15 +1242,7 @@ impl PlanResolver<'_> {
             .await?;
         // The stored plan reads the table in one scan, and the query of the view resolved
         // again reads a table in several scans of its partitions.
-        match <[_; 1]>::try_from(sources) {
-            Ok([source]) => Ok(Ok(source)),
-            Err(_) => Ok(Err(PlanError::AnalysisError(format!(
-                "the temporary view {} reads {} in one scan, and the partitions of the table \
-                are now read in several scans. Create the temporary view again.",
-                view_name(view),
-                quote_names(&origin.name),
-            )))),
-        }
+        Ok(Ok(<[_; 1]>::try_from(sources).ok().map(|[source]| source)))
     }
 
     /// Looks up the table `name` in the catalog of another session, reusing an earlier

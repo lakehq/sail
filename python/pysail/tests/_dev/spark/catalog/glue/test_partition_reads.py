@@ -503,3 +503,67 @@ def test_views_cast_partition_values_with_their_creation_config(spark, moto_endp
         spark.conf.set(ansi, previous)
         spark.sql("DROP VIEW IF EXISTS lenient_partitions")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_view_over_one_scan_resolves_its_query_when_the_table_is_read_in_several_scans(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_view_rescan"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT, b INT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'"
+    )
+    queries = {
+        "rescan_plain": f"SELECT id, p FROM {table}",  # noqa: S608
+        "rescan_filter": f"SELECT id, p FROM {table} WHERE b > 0",  # noqa: S608
+        "rescan_star": f"SELECT * FROM {table}",  # noqa: S608
+    }
+    try:
+        path = tmp_path / "parquet-1"
+        path.mkdir()
+        pq.write_table(pa.table({"id": [1], "b": [10]}), path / "data.parquet")
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={"Values": ["1"], "StorageDescriptor": {"Location": str(path)}},
+        )
+        for view, query in queries.items():
+            spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
+        # The JSON partition is read in another scan, so each view now resolves its query.
+        path = tmp_path / "json-2"
+        path.mkdir()
+        (path / "data.json").write_text(json.dumps({"id": 2, "b": 20}))
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={
+                "Values": ["2"],
+                "StorageDescriptor": {
+                    "Location": f"file:{path}",
+                    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                    "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+                },
+            },
+        )
+        stored = glue.get_table(DatabaseName="test_db", Name=name)["Table"]
+        table_input = {
+            key: stored[key] for key in ["Name", "StorageDescriptor", "PartitionKeys", "TableType", "Parameters"]
+        }
+        columns = table_input["StorageDescriptor"]["Columns"]
+        table_input["StorageDescriptor"]["Columns"] = [column for column in columns if column["Name"] != "b"]
+        glue.update_table(DatabaseName="test_db", TableInput=table_input)
+
+        assert sorted(spark.table("rescan_plain").collect()) == [(1, 1), (2, 2)]
+        # The view fails as its query does.
+        with pytest.raises(Exception, match="resolve") as direct:
+            spark.sql(queries["rescan_filter"]).collect()
+        with pytest.raises(type(direct.value)) as viewed:
+            spark.table("rescan_filter").collect()
+        assert str(viewed.value).splitlines()[0] == str(direct.value).splitlines()[0]
+        with pytest.raises(Exception, match="INCOMPATIBLE_VIEW_SCHEMA_CHANGE"):
+            spark.table("rescan_star").collect()
+    finally:
+        for view in queries:
+            spark.sql(f"DROP VIEW IF EXISTS {view}")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
