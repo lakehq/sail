@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::array::{Array, RecordBatch};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema};
 use datafusion::catalog::Session;
 use datafusion::common::{Result, not_impl_err, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -24,12 +24,14 @@ use super::maintenance::{
 use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
+use crate::conversion::ScalarExt;
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
     DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions, delta_action_schema,
     encode_actions, prepare_delta_write_context,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
     Action, Add, CommitAction, DeltaError, DeltaOperation, RemoveOptions, TableFeature,
@@ -122,28 +124,7 @@ pub(crate) async fn plan(
             })
         });
         if add.size < min_size || dv_rewrite {
-            let mut key = add
-                .partition_values
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<BTreeMap<_, _>>();
-            // Normalize null encodings without changing nonempty partition spellings or Add actions.
-            for column in &partition_columns {
-                let Some(value) = key.get_mut(&column.physical_name) else {
-                    continue;
-                };
-                if value.as_deref() == Some("") {
-                    let field = snapshot.schema().field_with_name(&column.logical_name)?;
-                    if crate::conversion::parse_optional_partition_value(
-                        value.as_deref(),
-                        field.data_type(),
-                    )?
-                    .is_null()
-                    {
-                        *value = None;
-                    }
-                }
-            }
+            let key = bin_key(&snapshot, &partition_columns, &add)?;
             partitions.entry(key).or_default().push(add);
         }
     }
@@ -374,6 +355,47 @@ pub(super) async fn finish(
         .map_err(|e| DeltaError::generic_err(e).into())
 }
 
+/// Returns the partition of a file for grouping files into bins, without changing the `Add`.
+///
+/// Null encodings are normalized, and so are timestamp values, which are written as UTC with an
+/// offset now but without one by earlier versions, so that files of one partition share a bin.
+fn bin_key(
+    snapshot: &DeltaSnapshot,
+    partition_columns: &[PhysicalPartitionColumn],
+    add: &Add,
+) -> Result<BTreeMap<String, Option<String>>> {
+    let mut key = add
+        .partition_values
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for column in partition_columns {
+        let Some(value) = key.get_mut(&column.physical_name) else {
+            continue;
+        };
+        let field = snapshot.schema().field_with_name(&column.logical_name)?;
+        if value.as_deref() == Some("") {
+            if crate::conversion::parse_optional_partition_value(
+                value.as_deref(),
+                field.data_type(),
+            )?
+            .is_null()
+            {
+                *value = None;
+            }
+        } else if matches!(field.data_type(), ArrowDataType::Timestamp(_, Some(_)))
+            && let Ok(scalar) = crate::conversion::parse_optional_partition_value(
+                value.as_deref(),
+                field.data_type(),
+            )
+            && !scalar.is_null()
+        {
+            *value = Some(scalar.serialize().into_owned());
+        }
+    }
+    Ok(key)
+}
+
 fn retain_bin(bins: &mut Vec<Vec<Add>>, bin: Vec<Add>) {
     if bin.len() > 1
         || bin
@@ -579,6 +601,68 @@ mod tests {
             None,
         )
         .await?)
+    }
+
+    #[tokio::test]
+    async fn bin_key_groups_timestamp_partition_values_of_both_formats() -> Result<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let url = url::Url::parse("memory:///").unwrap();
+        let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("value", DataType::LONG),
+                StructField::nullable("ts", DataType::TIMESTAMP),
+            ])?,
+            vec!["ts".into()],
+            0,
+            HashMap::new(),
+        )?;
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: url.to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let snapshot = DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig::default(),
+            None,
+            None,
+        )
+        .await?;
+        let columns = snapshot.physical_partition_columns();
+        let key = |value: &str| {
+            let add = Add {
+                path: format!("{value}.parquet"),
+                partition_values: HashMap::from([("ts".to_string(), Some(value.to_string()))]),
+                ..Default::default()
+            };
+            bin_key(&snapshot, &columns, &add)
+        };
+
+        // A file written without an offset shares the bin of a file written with one.
+        let old = key("2024-01-01 09:00:00.000000")?;
+        let new = key("2024-01-01T09:00:00.000000Z")?;
+        assert_eq!(old, new);
+        assert_eq!(
+            new.get("ts"),
+            Some(&Some("2024-01-01T09:00:00.000000Z".to_string()))
+        );
+        assert_ne!(new, key("2024-01-01T10:00:00.000000Z")?);
+        Ok(())
     }
 
     #[tokio::test]
