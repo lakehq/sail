@@ -350,7 +350,8 @@ fn encode_partition_value(value: &str) -> String {
 pub trait ScalarExt: Sized {
     /// Serialize to a partition value string (Delta log format).
     fn serialize(&self) -> Cow<'_, str>;
-    /// Serialize with percent-encoding for use in Hive partition paths.
+    /// Serialize with percent-encoding for use in Hive partition paths; timestamps with a time
+    /// zone keep their UTC wall clock without an offset, unlike the log value.
     fn serialize_encoded(&self) -> String;
     /// Extract a scalar from an Arrow array at the given index.
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
@@ -401,9 +402,9 @@ impl ScalarExt for ScalarValue {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
         match self {
-            // The directory keeps the wall clock in UTC without an offset, which is the format
-            // of the log value before it named the offset. The log value is what readers use.
-            ScalarValue::TimestampMicrosecond(Some(ts), _) => {
+            // The directory keeps the format without an offset, which the log value had before it
+            // named the offset. Readers use the log value.
+            ScalarValue::TimestampMicrosecond(Some(ts), Some(_)) => {
                 encode_partition_value(&format_timestamp(*ts))
             }
             _ => encode_partition_value(self.serialize().as_ref()),
@@ -476,21 +477,22 @@ impl ScalarExt for ScalarValue {
     }
 }
 
-fn format_timestamp(value: i64) -> String {
+fn format_micros(value: i64, format: &str) -> String {
     Utc.timestamp_micros(value)
         .single()
-        .map(|ts| ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+        .map(|ts| ts.format(format).to_string())
         .unwrap_or_else(|| value.to_string())
+}
+
+fn format_timestamp(value: i64) -> String {
+    format_micros(value, "%Y-%m-%d %H:%M:%S%.6f")
 }
 
 /// Formats a timestamp partition value as UTC with an explicit offset, as Delta writes it with
 /// `spark.databricks.delta.write.utcTimestampPartitionValues` (the default), so that every reader
 /// gets the same instant whatever its session time zone.
 fn format_utc_timestamp(value: i64) -> String {
-    Utc.timestamp_micros(value)
-        .single()
-        .map(|ts| ts.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string())
-        .unwrap_or_else(|| value.to_string())
+    format_micros(value, "%Y-%m-%dT%H:%M:%S%.6fZ")
 }
 
 fn format_date(days: i32) -> String {
@@ -619,6 +621,28 @@ mod tests {
             timestamp(-2_083_172_400_000_000, Some("UTC")).serialize(),
             "1903-12-28T05:00:00.000000Z"
         );
+        assert_eq!(
+            timestamp(-1, Some("UTC")).serialize(),
+            "1969-12-31T23:59:59.999999Z"
+        );
+    }
+
+    /// Years outside 0000-9999 are signed, as Delta-Spark's `uuuu` pattern writes them.
+    #[test]
+    fn timestamp_partition_values_of_extreme_years() {
+        for (year, expected) in [
+            (0, "0000-01-01T00:00:00.000000Z"),
+            (-1, "-0001-01-01T00:00:00.000000Z"),
+            (10000, "+10000-01-01T00:00:00.000000Z"),
+        ] {
+            let micros = chrono::NaiveDate::from_ymd_opt(year, 1, 1)
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .map(|datetime| datetime.and_utc().timestamp_micros());
+            assert_eq!(
+                micros.map(|micros| timestamp(micros, Some("UTC")).serialize().into_owned()),
+                Some(expected.to_string())
+            );
+        }
     }
 
     #[test]
