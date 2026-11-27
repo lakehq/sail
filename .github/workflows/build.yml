@@ -176,6 +176,9 @@ jobs:
     name: Spark Tests
     if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_spark_tests == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
+    permissions:
+      contents: read
+      actions: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
@@ -192,6 +195,9 @@ jobs:
     name: Ibis Tests
     if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_ibis_tests == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
+    permissions:
+      contents: read
+      actions: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
