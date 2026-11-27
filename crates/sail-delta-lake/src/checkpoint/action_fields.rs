@@ -149,8 +149,9 @@ impl AddAugmentationConfig {
                 partition_schema,
                 "partitionValues",
                 self.column_mapping_mode,
-                // Checkpoints are written without a session. Sail reads partition values from
-                // the strings, so this only matters to other readers of the checkpoint.
+                // Delta-Spark parses these in the session time zone, but checkpoints are written
+                // without a session. Neither Sail nor Delta-Spark reads them back; both parse the
+                // partition value strings.
                 "UTC",
             )?;
             add_fields.push(Arc::new(Field::new(
