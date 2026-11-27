@@ -31,8 +31,7 @@ struct GroupColumn<'a> {
     logical_name: &'a str,
     physical_name: &'a str,
     field: &'a Field,
-    /// The parser of a partition column.
-    partition: Option<PartitionValueParser>,
+    partition_parser: Option<PartitionValueParser>,
 }
 
 enum FileContribution {
@@ -76,7 +75,7 @@ impl DeltaSnapshot {
             .iter()
             .map(|name| {
                 let field = self.schema().field_with_name(name).ok()?;
-                let partition = if partition_columns.contains(name) {
+                let partition_parser = if partition_columns.contains(name) {
                     Some(
                         PartitionValueParser::try_new(
                             field.data_type(),
@@ -93,7 +92,7 @@ impl DeltaSnapshot {
                     logical_name: name,
                     physical_name: arrow_field_physical_name(field, mapping_mode),
                     field,
-                    partition,
+                    partition_parser,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -200,7 +199,7 @@ fn constant_group_value(
     physical_rows: u64,
     logical_rows: i64,
 ) -> Option<ScalarValue> {
-    if let Some(parser) = &column.partition {
+    if let Some(parser) = &column.partition_parser {
         let raw = add
             .partition_values
             .get(column.physical_name)
