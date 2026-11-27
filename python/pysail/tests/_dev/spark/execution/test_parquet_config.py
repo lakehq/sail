@@ -220,21 +220,44 @@ def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadat
             catalog.drop_table("default.int96")
 
 
-def test_delta_scan_uses_session_metadata_size_hint(remote, tmp_path, http_ranges):
+# Every Parquet footer read uses the session hint: the data files of each scan path and the Delta log checkpoint.
+@pytest.mark.parametrize("source", ["parquet", "delta", "delta-metadata-as-data", "delta-checkpoint-metadata-as-data"])
+def test_scans_use_session_metadata_size_hint(remote, tmp_path, http_ranges, source):
     url, ranges = http_ranges
     table = tmp_path / "table"
+    checkpoint = source.startswith("delta-checkpoint")
+    metadata_as_data = source.endswith("metadata-as-data")
     with spark_session_factory(remote) as sessions:
         spark = sessions.create()
-        # Random doubles keep each file larger than the startup hint.
-        spark.range(0, 8192, 1, 2).selectExpr("id", "rand(0) AS v").write.format("delta").save(str(table))
-        sizes = {f"table/{file.name}": file.stat().st_size for file in table.glob("*.parquet")}
-        assert sizes
-        assert min(sizes.values()) > STARTUP_METADATA_SIZE_HINT
+        # Random doubles keep each data file larger than the startup hint.
+        frame = spark.range(0, 8192, 1, 2).selectExpr("id", "rand(0) AS v")
+        if source == "parquet":
+            frame.write.parquet(str(table))
+        else:
+            interval = "1" if checkpoint else "10"
+            frame.write.format("delta").option("delta.checkpointInterval", interval).save(str(table))
+        if checkpoint:
+            # Many commits keep the checkpoint larger than the startup hint.
+            for _ in range(25):
+                append = spark.range(0, 16, 1, 8).selectExpr("id", "rand(1) AS v")
+                append.write.format("delta").mode("append").save(str(table))
+        files = [*table.glob("*.parquet"), *(table / "_delta_log").glob("*.checkpoint.parquet")]
+        sizes = {file.relative_to(tmp_path).as_posix(): file.stat().st_size for file in files}
+        assert checkpoint or min(sizes.values()) > STARTUP_METADATA_SIZE_HINT
         spark.sql("SET datafusion.execution.parquet.metadata_size_hint = 128").collect()
-        query = spark.read.format("delta").option("metadataAsDataRead", "true").load(f"{url}/table")
-        assert "DeltaScanByAddsExec" in query._explain_string()  # noqa: SLF001
+        if source == "parquet":
+            query = spark.read.parquet(f"{url}/table")
+        else:
+            reader = spark.read.format("delta").option("metadataAsDataRead", str(metadata_as_data).lower())
+            query = reader.load(f"{url}/table")
+            if metadata_as_data:
+                assert "DeltaScanByAddsExec" in query._explain_string()  # noqa: SLF001
         # The sum needs the data, which statistics cannot answer.
-        assert query.selectExpr("sum(id) AS s").collect()[0].s == 8191 * 8192 // 2
+        expected = 8191 * 8192 // 2 + (25 * (15 * 16 // 2) if checkpoint else 0)
+        assert query.selectExpr("sum(id) AS s").collect()[0].s == expected
     # The footer is the only read that ends at the end of a file.
     footers = {(name, end - start) for name, start, end in ranges if end == sizes.get(name)}
-    assert footers == {(name, 128) for name in sizes}
+    assert footers == {(name, 128) for name, _ in footers}
+    assert {name for name in sizes if ".checkpoint" not in name} <= {name for name, _ in footers}
+    if checkpoint:
+        assert max(name for name in sizes if ".checkpoint" in name) in {name for name, _ in footers}
