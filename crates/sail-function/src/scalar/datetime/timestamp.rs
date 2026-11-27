@@ -172,13 +172,13 @@ pub fn parse_unformatted_timestamp(value: &str, session_zone: Option<&SparkZone>
         .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
 
     let parsed_zone = timezone.as_deref().map(SparkZone::parse).transpose()?;
-    let effective_zone = parsed_zone.as_ref().or(session_zone);
+    // A zone in the string wins over the session zone. Without a session zone, the result is a
+    // wall clock.
+    let zone = session_zone.map(|session_zone| parsed_zone.as_ref().unwrap_or(session_zone));
 
     let (year, month, day) = if just_time {
-        match session_zone {
-            Some(_) => effective_zone
-                .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-                .current_date(),
+        match zone {
+            Some(zone) => zone.current_date(),
             None => {
                 return exec_err!("time-only input is not a TIMESTAMP_NTZ");
             }
@@ -203,10 +203,10 @@ pub fn parse_unformatted_timestamp(value: &str, session_zone: Option<&SparkZone>
     let local_micros = local_timestamp_micros(year, month, day, hour, minute, second, micros)
         .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
 
-    match session_zone {
-        Some(_) => effective_zone
-            .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-            .to_utc_micros(year, month, day, hour, minute, second, micros, local_micros),
+    match zone {
+        Some(zone) => {
+            zone.to_utc_micros(year, month, day, hour, minute, second, micros, local_micros)
+        }
         None => i64::try_from(local_micros)
             .map_err(|_| exec_datafusion_err!("timestamp is outside the microsecond range")),
     }
