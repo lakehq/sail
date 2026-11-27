@@ -44,7 +44,8 @@ message JobSession {
   // The `datafusion.execution.parquet` options as an encoded `datafusion_common.ParquetOptions`
   // message, which represents unset options exactly.
   bytes parquet = 2;
-  // The Spark session time zone with full offset precision, if the session has one.
+  // The session time zone, if the session has one: the Spark session time zone with full
+  // offset precision, or else the DataFusion time zone.
   optional string spark_time_zone = 3;
 }
 

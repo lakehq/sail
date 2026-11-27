@@ -45,21 +45,17 @@ pub fn set_spark_session_time_zone(options: &mut ConfigOptions, time_zone: &str)
     Ok(())
 }
 
-/// Read the Spark session time zone set by [`set_spark_session_time_zone`], if any.
-pub fn spark_session_time_zone(options: &ConfigOptions) -> Option<&str> {
+/// Read the session time zone with full Spark offset precision when available.
+pub fn session_time_zone(options: &ConfigOptions) -> Option<&str> {
     options
         .extensions
         .get::<SparkSessionTimeZone>()
         .map(|zone| zone.0.as_str())
-}
-
-/// Read the session time zone with full Spark offset precision when available.
-pub fn session_time_zone(options: &ConfigOptions) -> Option<&str> {
-    spark_session_time_zone(options).or_else(|| {
-        options
-            .execution
-            .time_zone
-            .as_ref()
-            .map(|zone| zone.as_str())
-    })
+        .or_else(|| {
+            options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|zone| zone.as_str())
+        })
 }
