@@ -396,3 +396,52 @@ def test_registered_partition_supplies_format(spark, moto_endpoint, tmp_path):
         assert spark.table(f"test_db.{name}").where("p > 1.0").collect() == [(42, 1.0 + 2**-23)]
     finally:
         glue.delete_table(DatabaseName="test_db", Name=name)
+
+
+def test_temporary_views_read_the_current_registered_partitions(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_views"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
+
+    def add_partition(value, descriptor):
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
+        )
+
+    def add_parquet_partition(value):
+        path = tmp_path / f"parquet-{value}"
+        path.mkdir()
+        pq.write_table(pa.table({"id": [int(value)]}), path / "data.parquet")
+        add_partition(value, {"Location": str(path)})
+
+    try:
+        add_parquet_partition("1")
+        spark.sql(f"CREATE TEMPORARY VIEW one_scan AS SELECT id, p FROM {table}")
+        assert sorted(spark.table("one_scan").collect()) == [(1, 1)]
+        # The JSON partition is read in another scan than the Parquet partitions.
+        path = tmp_path / "json-2"
+        path.mkdir()
+        (path / "data.json").write_text(json.dumps({"id": 2}))
+        add_partition(
+            "2",
+            {
+                "Location": f"file:{path}",
+                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+            },
+        )
+        assert sorted(spark.table("one_scan").collect()) == [(1, 1), (2, 2)]
+        spark.sql(f"CREATE TEMPORARY VIEW two_scans AS SELECT id, p FROM {table}")
+        assert sorted(spark.table("two_scans").collect()) == [(1, 1), (2, 2)]
+        add_parquet_partition("3")
+        for view in ["one_scan", "two_scans"]:
+            assert sorted(spark.table(view).collect()) == [(1, 1), (2, 2), (3, 3)]
+    finally:
+        spark.sql("DROP VIEW IF EXISTS one_scan")
+        spark.sql("DROP VIEW IF EXISTS two_scans")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
