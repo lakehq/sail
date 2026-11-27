@@ -22,7 +22,7 @@ use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::{PartitionValueParser, ScalarConverter, parse_optional_partition_value};
+use crate::conversion::{PartitionValueParser, ScalarConverter};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, ColumnMappingMode};
@@ -443,15 +443,20 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
     }
 
+    fn partition_value_parser(&self, column: &Column) -> Option<PartitionValueParser> {
+        let field = self.field_for(column)?;
+        PartitionValueParser::try_new(field.data_type(), self.time_zone).ok()
+    }
+
     fn scalar_from_partition_value(
-        &self,
+        parser: Option<&PartitionValueParser>,
         dt: &datafusion::arrow::datatypes::DataType,
         v: &Option<String>,
     ) -> ScalarValue {
-        parse_optional_partition_value(v.as_deref(), dt, self.time_zone).unwrap_or_else(|_| {
+        parser
+            .and_then(|parser| parser.parse(v.as_deref()).ok())
             // If we can't parse the partition value into the target type, treat it as unknown.
-            Self::null_scalar(dt)
-        })
+            .unwrap_or_else(|| Self::null_scalar(dt))
     }
 
     fn build_array(
@@ -518,9 +523,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
 
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_array(column, false, |a, s, dt| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                return self.scalar_from_partition_value(dt, pv);
+                return Self::scalar_from_partition_value(parser.as_ref(), dt, pv);
             }
             if let Some(s) = s
                 && let Some(v) = s.min_values.get(&storage_name)
@@ -545,9 +551,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
 
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_array(column, false, |a, s, dt| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                return self.scalar_from_partition_value(dt, pv);
+                return Self::scalar_from_partition_value(parser.as_ref(), dt, pv);
             }
             if let Some(s) = s
                 && let Some(v) = s.max_values.get(&storage_name)
