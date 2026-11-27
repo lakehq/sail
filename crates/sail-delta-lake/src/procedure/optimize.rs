@@ -24,7 +24,7 @@ use super::maintenance::{
 use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
-use crate::conversion::ScalarExt;
+use crate::conversion::{ScalarExt, parse_optional_partition_value};
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
@@ -110,7 +110,7 @@ pub(crate) async fn plan(
     }
     let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
-    let partition_columns = snapshot.physical_partition_columns();
+    let partition_columns = bin_key_columns(&snapshot);
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
     for add in candidates {
         let dv_rewrite = add.deletion_vector.as_ref().is_some_and(|dv| {
@@ -355,13 +355,31 @@ pub(super) async fn finish(
         .map_err(|e| DeltaError::generic_err(e).into())
 }
 
+/// Resolves the partition column types once for the bin keys of all files.
+fn bin_key_columns(
+    snapshot: &DeltaSnapshot,
+) -> Vec<(PhysicalPartitionColumn, Option<ArrowDataType>)> {
+    snapshot
+        .physical_partition_columns()
+        .into_iter()
+        .map(|column| {
+            let data_type = snapshot
+                .schema()
+                .field_with_name(&column.logical_name)
+                .ok()
+                .map(|field| field.data_type().clone());
+            (column, data_type)
+        })
+        .collect()
+}
+
 /// Returns the partition of a file for grouping files into bins, without changing the `Add`.
 ///
 /// Null encodings are normalized, and so are timestamp values, which are written as UTC with an
 /// offset now but without one by earlier versions, so that files of one partition share a bin.
 fn bin_key(
     snapshot: &DeltaSnapshot,
-    partition_columns: &[PhysicalPartitionColumn],
+    partition_columns: &[(PhysicalPartitionColumn, Option<ArrowDataType>)],
     add: &Add,
 ) -> Result<BTreeMap<String, Option<String>>> {
     let mut key = add
@@ -369,25 +387,24 @@ fn bin_key(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<BTreeMap<_, _>>();
-    for column in partition_columns {
+    for (column, data_type) in partition_columns {
         let Some(value) = key.get_mut(&column.physical_name) else {
             continue;
         };
-        let field = snapshot.schema().field_with_name(&column.logical_name)?;
         if value.as_deref() == Some("") {
-            if crate::conversion::parse_optional_partition_value(
-                value.as_deref(),
-                field.data_type(),
-            )?
-            .is_null()
-            {
+            let data_type = match data_type {
+                Some(data_type) => data_type,
+                None => snapshot
+                    .schema()
+                    .field_with_name(&column.logical_name)?
+                    .data_type(),
+            };
+            if parse_optional_partition_value(value.as_deref(), data_type)?.is_null() {
                 *value = None;
             }
-        } else if matches!(field.data_type(), ArrowDataType::Timestamp(_, Some(_)))
-            && let Ok(scalar) = crate::conversion::parse_optional_partition_value(
-                value.as_deref(),
-                field.data_type(),
-            )
+        } else if let Some(data_type @ ArrowDataType::Timestamp(_, Some(_))) = data_type
+            // A timestamp value that does not parse keeps its spelling, as before.
+            && let Ok(scalar) = parse_optional_partition_value(value.as_deref(), data_type)
             && !scalar.is_null()
         {
             *value = Some(scalar.serialize().into_owned());
@@ -481,7 +498,7 @@ fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<R
             .adds()
             .iter()
             .map(|add| {
-                crate::conversion::parse_optional_partition_value(
+                parse_optional_partition_value(
                     add.partition_values
                         .get(physical)
                         .and_then(Option::as_deref),
@@ -534,30 +551,20 @@ mod tests {
     use crate::spec::inspection::DeltaCommandType;
     use crate::spec::{DataType, Metadata, Protocol, SaveMode, StructField, StructType};
 
-    async fn predicate_snapshot(
-        data_columns: usize,
-        partitioned: bool,
-        num_files: usize,
+    async fn snapshot_with(
+        fields: impl IntoIterator<Item = StructField>,
+        partition_columns: Vec<String>,
+        adds: impl IntoIterator<Item = Add>,
     ) -> Result<DeltaSnapshot> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let url = url::Url::parse("memory:///").unwrap();
         let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
         let protocol = Protocol::new(1, 2, None, None);
-        let fields = (0..data_columns)
-            .map(|i| StructField::not_null(format!("value{i}"), DataType::LONG))
-            .chain([
-                StructField::not_null("p", DataType::LONG),
-                StructField::not_null("q", DataType::LONG),
-            ]);
         let metadata = Metadata::try_new(
             None,
             None,
             StructType::try_new(fields)?,
-            if partitioned {
-                vec!["p".into(), "q".into()]
-            } else {
-                vec![]
-            },
+            partition_columns,
             0,
             HashMap::new(),
         )?;
@@ -565,22 +572,7 @@ mod tests {
             CommitAction::Protocol(protocol.clone()),
             CommitAction::Metadata(metadata.clone()),
         ];
-        actions.extend((0..num_files).map(|i| {
-            CommitAction::Add(Add {
-                path: format!("{i}.parquet"),
-                partition_values: if partitioned {
-                    HashMap::from([
-                        ("p".into(), Some((i + 1).to_string())),
-                        ("q".into(), Some("10".into())),
-                    ])
-                } else {
-                    HashMap::new()
-                },
-                size: 10,
-                data_change: true,
-                ..Default::default()
-            })
-        }));
+        actions.extend(adds.into_iter().map(CommitAction::Add));
         CommitBuilder::default()
             .with_actions(actions)
             .build(
@@ -603,47 +595,51 @@ mod tests {
         .await?)
     }
 
+    async fn predicate_snapshot(
+        data_columns: usize,
+        partitioned: bool,
+        num_files: usize,
+    ) -> Result<DeltaSnapshot> {
+        let fields = (0..data_columns)
+            .map(|i| StructField::not_null(format!("value{i}"), DataType::LONG))
+            .chain([
+                StructField::not_null("p", DataType::LONG),
+                StructField::not_null("q", DataType::LONG),
+            ]);
+        let partition_columns = if partitioned {
+            vec!["p".into(), "q".into()]
+        } else {
+            vec![]
+        };
+        let adds = (0..num_files).map(|i| Add {
+            path: format!("{i}.parquet"),
+            partition_values: if partitioned {
+                HashMap::from([
+                    ("p".into(), Some((i + 1).to_string())),
+                    ("q".into(), Some("10".into())),
+                ])
+            } else {
+                HashMap::new()
+            },
+            size: 10,
+            data_change: true,
+            ..Default::default()
+        });
+        snapshot_with(fields, partition_columns, adds).await
+    }
+
     #[tokio::test]
     async fn bin_key_groups_timestamp_partition_values_of_both_formats() -> Result<()> {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let url = url::Url::parse("memory:///").unwrap();
-        let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
-        let protocol = Protocol::new(1, 2, None, None);
-        let metadata = Metadata::try_new(
-            None,
-            None,
-            StructType::try_new([
+        let snapshot = snapshot_with(
+            [
                 StructField::not_null("value", DataType::LONG),
                 StructField::nullable("ts", DataType::TIMESTAMP),
-            ])?,
+            ],
             vec!["ts".into()],
-            0,
-            HashMap::new(),
-        )?;
-        CommitBuilder::default()
-            .with_actions(vec![
-                CommitAction::Protocol(protocol.clone()),
-                CommitAction::Metadata(metadata.clone()),
-            ])
-            .build(
-                None,
-                log_store.clone(),
-                DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: url.to_string(),
-                    protocol: Box::new(protocol),
-                    metadata: Box::new(metadata),
-                },
-            )
-            .await?;
-        let snapshot = DeltaSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaSnapshotConfig::default(),
-            None,
-            None,
+            [],
         )
         .await?;
-        let columns = snapshot.physical_partition_columns();
+        let columns = bin_key_columns(&snapshot);
         let key = |value: &str| {
             let add = Add {
                 path: format!("{value}.parquet"),

@@ -1648,6 +1648,9 @@ mod tests {
         ];
         // An instant written to a column without a time zone keeps its UTC wall clock. This is
         // existing behavior, unlike Spark, which uses the session wall clock.
+        // TODO: This is the known limitation of `validate_and_adapt_batch` for TIMESTAMP to
+        //   TIMESTAMP_NTZ writes. Update these values when that cast follows the session time
+        //   zone, rather than treating the change as a regression.
         let to_timestamp_ntz_from_instant = [
             ("2024-01-01 09:00:00.000000", "2024-01-01 09:00:00.000000"),
             ("1969-12-31 23:59:59.000000", "1969-12-31 23:59:59.000000"),
