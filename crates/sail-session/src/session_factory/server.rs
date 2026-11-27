@@ -110,6 +110,10 @@ impl ServerSessionFactory {
         let Some(job_runner) = info.job_runner.take() else {
             return internal_err!("job runner is missing from server session information");
         };
+        let cluster = matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        );
         let mut config = SessionConfig::new()
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
@@ -131,10 +135,7 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(
                 SharedCteConfig::new(self.config.optimizer.share_cte_definitions)
-                    .with_spills_kept_rows(!matches!(
-                        self.config.mode,
-                        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-                    )),
+                    .with_spills_kept_rows(!cluster),
             ))
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
@@ -147,10 +148,7 @@ impl ServerSessionFactory {
             &self.config.parquet,
         )?;
         self.apply_optimizer_config(&mut config)?;
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
+        if cluster {
             apply_cluster_constraints(config.options_mut());
         }
         let config = self.mutator.mutate_config(config, info)?;
