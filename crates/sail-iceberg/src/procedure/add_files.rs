@@ -204,7 +204,7 @@ impl AddFiles {
                     })?;
                     sources.push((
                         location,
-                        partition.format,
+                        partition.format.resolve(&format),
                         (!names.is_empty()).then_some(values),
                     ));
                 }

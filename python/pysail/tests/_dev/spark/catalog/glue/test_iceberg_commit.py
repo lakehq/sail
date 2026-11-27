@@ -481,21 +481,19 @@ def test_add_files_uses_registered_glue_partitions(spark, moto_endpoint, tmp_pat
         for value, row_id in [("a", 1), ("b", 2), ("orc", 3)]:
             location = tmp_path / f"part%20{value}"
             location.mkdir()
+            descriptor = {"Location": location.as_uri().replace("%2520", "%20")}
             if value != "orc":
                 pq.write_table(pa.table({"id": [row_id]}), location / "part.parquet")
+            if value == "b":
+                descriptor["InputFormat"] = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+            elif value == "orc":
+                descriptor["InputFormat"] = "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat"
             client.create_partition(
                 DatabaseName=database,
                 TableName=source,
                 PartitionInput={
                     "Values": ["zone", value],
-                    "StorageDescriptor": {
-                        "Location": location.as_uri().replace("%2520", "%20"),
-                        "InputFormat": (
-                            "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat"
-                            if value == "orc"
-                            else "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
-                        ),
-                    },
+                    "StorageDescriptor": descriptor,
                 },
             )
         with pytest.raises(Exception, match="Unsupported add_files partition format: orc"):

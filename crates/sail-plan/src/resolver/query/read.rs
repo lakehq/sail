@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
@@ -48,10 +49,32 @@ use crate::resolver::state::{
 };
 
 impl PlanResolver<'_> {
+    // Box the read future so every level of a nested query can poll the resolver
+    // without reserving stack space for catalog lookup and partition planning.
+    #[async_recursion]
+    pub(super) async fn resolve_query_read(
+        &self,
+        read_type: spec::ReadType,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        match read_type {
+            spec::ReadType::NamedTable(table) => {
+                self.resolve_query_read_named_table(*table, state).await
+            }
+            spec::ReadType::Udtf(udtf) => self.resolve_query_read_udtf(*udtf, state).await,
+            spec::ReadType::DataSource(source) => {
+                self.resolve_query_read_data_source(*source, state).await
+            }
+            spec::ReadType::DynamicTable(table) => {
+                self.resolve_query_read_dynamic_table(*table, state).await
+            }
+        }
+    }
+
     /// Resolves a named table or view reference into a logical plan node.
     /// Looks up the name in the catalog and produces the appropriate plan
     /// depending on whether it's a table, view, or temporary view.
-    pub(super) async fn resolve_query_read_named_table(
+    async fn resolve_query_read_named_table(
         &self,
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
@@ -370,7 +393,7 @@ impl PlanResolver<'_> {
                 };
                 // The source has a large future, which the future of every read would
                 // otherwise hold, also in the recursion of the query resolver.
-                let table_source = Box::pin(self.resolve_catalog_table_source(
+                let sources = Box::pin(self.resolve_catalog_table_sources(
                     CatalogTableRead {
                         status,
                         resolved,
@@ -381,13 +404,10 @@ impl PlanResolver<'_> {
                     state,
                 ))
                 .await?;
-                self.resolve_table_source_with_rename(
-                    table_source,
+                self.resolve_catalog_table_scans(
+                    sources,
                     table_reference,
-                    None,
-                    vec![],
-                    None,
-                    Some(TableOrigin::CatalogTable(origin)),
+                    TableOrigin::CatalogTable(origin),
                     state,
                 )?
             }
@@ -430,12 +450,13 @@ impl PlanResolver<'_> {
         }
     }
 
-    /// Returns the source that a read of a catalog table scans.
-    pub(super) async fn resolve_catalog_table_source(
+    /// Returns the sources that a read of a catalog table scans: one source, or one source
+    /// for each group of the registered partitions of a file table that the catalog lists.
+    pub(super) async fn resolve_catalog_table_sources(
         &self,
         read: CatalogTableRead<'_>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Arc<dyn TableSource>> {
+    ) -> PlanResult<Vec<Arc<dyn TableSource>>> {
         let CatalogTableRead {
             status,
             resolved,
@@ -464,7 +485,6 @@ impl PlanResolver<'_> {
         // so that they can share scalar subqueries. Delta Lake and Iceberg sources
         // also pin one table snapshot, while file tables still list files for each scan.
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let data_source = data_source_registry.get_data_source(&format)?;
         // Delta Lake and Iceberg sources read their columns by the metadata of the table,
         // whatever the letter case of column names is matched by.
         let is_lake_source = data_source_registry
@@ -488,11 +508,11 @@ impl PlanResolver<'_> {
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
-        if let Some(table_source) = source_key
+        if let Some(sources) = source_key
             .as_ref()
-            .and_then(|key| state.get_table_source(key))
+            .and_then(|key| state.get_table_sources(key))
         {
-            return Ok(table_source);
+            return Ok(sources);
         }
         let access_purpose = match lake_relation.as_ref() {
             Some((_, relation)) => lake_relation_access_purpose(relation.access()),
@@ -529,23 +549,34 @@ impl PlanResolver<'_> {
             read_case_sensitive: origin.read_case_sensitive,
             snapshot_pins: lake_relation.is_none().then(|| state.lake_snapshot_pins()),
         };
-        let table_source = match lake_relation {
-            Some((relation_provider, relation)) => {
+        let sources = match lake_relation {
+            Some((relation_provider, relation)) => vec![
                 relation_provider
                     .create_relation(&self.ctx.state(), info, relation)
-                    .await?
+                    .await?,
+            ],
+            None => {
+                let manager = self.ctx.extension::<CatalogManager>()?;
+                self.create_catalog_table_sources(
+                    &manager,
+                    &data_source_registry,
+                    &origin.name,
+                    &format,
+                    resolved.registered_file_table,
+                    info,
+                )
+                .await?
             }
-            None => data_source.create_source(&self.ctx.state(), info).await?,
         };
         if let Some(key) = source_key
-            && is_reusable_source(&table_source)
+            && sources.iter().all(is_reusable_source)
         {
-            state.insert_table_source(key, Arc::clone(&table_source));
+            state.insert_table_sources(key, sources.clone());
         }
-        Ok(table_source)
+        Ok(sources)
     }
 
-    pub(super) async fn resolve_query_read_dynamic_table(
+    async fn resolve_query_read_dynamic_table(
         &self,
         table: spec::ReadDynamicTable,
         state: &mut PlanResolverState,
@@ -582,7 +613,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         if let Some(reads) = state.view_definition_mut() {
-            reads.reads_persistent_view = true;
+            reads.resolves_at_each_read = true;
         }
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
@@ -680,7 +711,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_query_read_udtf(
+    async fn resolve_query_read_udtf(
         &self,
         udtf: spec::ReadUdtf,
         state: &mut PlanResolverState,
@@ -818,7 +849,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_query_read_data_source(
+    async fn resolve_query_read_data_source(
         &self,
         mut source: spec::ReadDataSource,
         state: &mut PlanResolverState,

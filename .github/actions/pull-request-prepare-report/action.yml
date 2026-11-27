@@ -1,0 +1,41 @@
+name: Prepare pull request report
+description: Attach workflow metadata to a Markdown report and upload it
+inputs:
+  report_name:
+    description: The name that identifies the report
+    required: true
+  report_path:
+    description: The path to report.md
+    required: true
+  retention_days:
+    description: The artifact retention period in days
+    default: "1"
+runs:
+  using: composite
+  steps:
+    - name: Prepend report metadata
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v9
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+        REPORT_PATH: ${{ inputs.report_path }}
+        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
+      with:
+        script: |
+          const { prepareReport } = require(process.env.REPORT_SCRIPT);
+          await prepareReport({
+            github,
+            context,
+            reportName: process.env.REPORT_NAME,
+            reportPath: process.env.REPORT_PATH,
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+          });
+
+    - name: Upload report
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.report_name }}-report
+        path: ${{ inputs.report_path }}
+        retention-days: ${{ inputs.retention_days }}
+        if-no-files-found: error
+        overwrite: true

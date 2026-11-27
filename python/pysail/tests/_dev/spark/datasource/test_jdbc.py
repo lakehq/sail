@@ -415,22 +415,48 @@ def test_special_chars_table(spark, jdbc_opts):
 
 
 def test_lower_bound_gt_upper_bound(spark, jdbc_opts):
-    with pytest.raises(Exception, match=r"lowerbound|lowerBound"):
+    with pytest.raises(Exception, match=r"lower bound of partitioning column is larger than the upper bound"):
         spark.read.format("jdbc").option("dbtable", "users").option("partitionColumn", "id").option(
             "lowerBound", "100"
         ).option("upperBound", "10").option("numPartitions", "2").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
-# lowerBound == upperBound raises ValueError
+# lowerBound == upperBound reads a single partition
 # ---------------------------------------------------------------------------
 
 
 def test_lower_bound_eq_upper_bound(spark, jdbc_opts):
-    with pytest.raises(Exception, match=r"lowerbound|lowerBound"):
-        spark.read.format("jdbc").option("dbtable", "users").option("partitionColumn", "id").option(
-            "lowerBound", "10"
-        ).option("upperBound", "10").option("numPartitions", "2").options(**jdbc_opts).load().collect()
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("partitionColumn", "id")
+        .option("lowerBound", "10")
+        .option("upperBound", "10")
+        .option("numPartitions", "2")
+        .options(**jdbc_opts)
+        .load()
+    )
+    assert df.count() == 15
+
+
+# ---------------------------------------------------------------------------
+# numPartitions=1 with partitioning options reads a single partition
+# ---------------------------------------------------------------------------
+
+
+def test_num_partitions_one_with_bounds(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("partitionColumn", "id")
+        .option("lowerBound", "1")
+        .option("upperBound", "15")
+        .option("numPartitions", "1")
+        .options(**jdbc_opts)
+        .load()
+    )
+    assert df.count() == 15
 
 
 # ---------------------------------------------------------------------------
@@ -651,3 +677,124 @@ def test_quote_identifier_unit():
     assert _quote_identifier("my col") == '"my col"'
     assert _quote_identifier('col"name') == '"col""name"'
     assert _quote_identifier("") == '""'
+
+
+def _partition_reader(*, num_partitions, lower_bound, upper_bound):
+    from pysail.spark.datasource.jdbc import JdbcDataSourceReader
+
+    return JdbcDataSourceReader(
+        conn_str="postgresql://localhost:5432/db",
+        dbtable="t",
+        query=None,
+        num_partitions=num_partitions,
+        partition_column="id",
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        push_down_predicate=True,
+    )
+
+
+def _partition_queries(*, num_partitions, lower_bound, upper_bound):
+    reader = _partition_reader(
+        num_partitions=num_partitions,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+    )
+    return [p.query for p in reader.partitions()]
+
+
+def test_partitions_equal_bounds_unit():
+    assert _partition_queries(num_partitions=40, lower_bound=7, upper_bound=7) == ["SELECT * FROM t"]
+
+
+def test_partitions_pushed_filter_equal_bounds_unit():
+    from pyspark.sql.datasource import EqualTo
+
+    reader = _partition_reader(num_partitions=40, lower_bound=7, upper_bound=7)
+    assert list(reader.pushFilters([EqualTo(("name",), "x")])) == []
+    assert [p.query for p in reader.partitions()] == ["SELECT * FROM t WHERE \"name\" = 'x'"]
+
+
+def test_partitions_num_partitions_one_unit():
+    assert _partition_queries(num_partitions=1, lower_bound=1, upper_bound=100) == ["SELECT * FROM t"]
+
+
+def test_partitions_num_partitions_zero_unit():
+    assert _partition_queries(num_partitions=0, lower_bound=1, upper_bound=100) == ["SELECT * FROM t"]
+
+
+def test_partitions_negative_bounds_unit():
+    assert _partition_queries(num_partitions=4, lower_bound=-100, upper_bound=100) == [
+        'SELECT * FROM t WHERE ("id" < -50 OR "id" IS NULL)',
+        'SELECT * FROM t WHERE "id" >= -50 AND "id" < 0',
+        'SELECT * FROM t WHERE "id" >= 0 AND "id" < 50',
+        'SELECT * FROM t WHERE "id" >= 50',
+    ]
+
+
+def test_partitions_capped_by_bound_range_unit(caplog):
+    assert _partition_queries(num_partitions=10, lower_bound=0, upper_bound=3) == [
+        'SELECT * FROM t WHERE ("id" < 1 OR "id" IS NULL)',
+        'SELECT * FROM t WHERE "id" >= 1 AND "id" < 2',
+        'SELECT * FROM t WHERE "id" >= 2',
+    ]
+    assert "Updated number of partitions: 3" in caplog.text
+
+
+def test_partitions_capped_to_one_unit(caplog):
+    assert _partition_queries(num_partitions=10, lower_bound=0, upper_bound=1) == ["SELECT * FROM t"]
+    assert "Updated number of partitions: 1" in caplog.text
+
+
+def test_partitions_exact_stride_unit(caplog):
+    assert _partition_queries(num_partitions=4, lower_bound=0, upper_bound=4) == [
+        'SELECT * FROM t WHERE ("id" < 1 OR "id" IS NULL)',
+        'SELECT * FROM t WHERE "id" >= 1 AND "id" < 2',
+        'SELECT * FROM t WHERE "id" >= 2 AND "id" < 3',
+        'SELECT * FROM t WHERE "id" >= 3',
+    ]
+    assert "Updated number of partitions" not in caplog.text
+
+
+def test_partitions_range_stride_unit():
+    assert _partition_queries(num_partitions=4, lower_bound=1, upper_bound=100) == [
+        'SELECT * FROM t WHERE ("id" < 25 OR "id" IS NULL)',
+        'SELECT * FROM t WHERE "id" >= 25 AND "id" < 50',
+        'SELECT * FROM t WHERE "id" >= 50 AND "id" < 75',
+        'SELECT * FROM t WHERE "id" >= 75',
+    ]
+
+
+@pytest.mark.parametrize(
+    ("num_partitions", "lower_bound", "upper_bound"),
+    [("40", "7", "7"), ("1", "1", "100"), ("1", "100", "1")],
+)
+def test_resolve_options_single_partition_bounds_unit(num_partitions, lower_bound, upper_bound):
+    from pysail.spark.datasource.jdbc import JdbcDataSource
+
+    options = {
+        "url": "jdbc:postgresql://localhost:5432/db",
+        "dbtable": "t",
+        "partitionColumn": "id",
+        "lowerBound": lower_bound,
+        "upperBound": upper_bound,
+        "numPartitions": num_partitions,
+    }
+    resolved = JdbcDataSource(options=options)._resolve_options()  # noqa: SLF001
+    assert resolved["lower_bound"] == int(lower_bound)
+    assert resolved["upper_bound"] == int(upper_bound)
+
+
+def test_resolve_options_lower_bound_gt_upper_bound_unit():
+    from pysail.spark.datasource.jdbc import JdbcDataSource
+
+    options = {
+        "url": "jdbc:postgresql://localhost:5432/db",
+        "dbtable": "t",
+        "partitionColumn": "id",
+        "lowerBound": "100",
+        "upperBound": "10",
+        "numPartitions": "2",
+    }
+    with pytest.raises(ValueError, match=r"Lower bound: 100; Upper bound: 10"):
+        JdbcDataSource(options=options)._resolve_options()  # noqa: SLF001

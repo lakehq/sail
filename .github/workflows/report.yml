@@ -24,47 +24,27 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Build'
-        # Python test setup may have been skipped or failed before generating the selection report.
-        continue-on-error: true
+      - uses: $/.github/actions/pull-request-publish-report
+        if: github.event.workflow_run.name == 'Build' && !cancelled()
         with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: python-test-selection-report
           report_name: python-test-selection
 
-      # The Spark tests are not always run,
-      # so we ignore the error if the artifact is not found.
-
-      - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Build'
-        continue-on-error: true
+      - uses: $/.github/actions/pull-request-publish-report
+        if: github.event.workflow_run.name == 'Build' && !cancelled()
         with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: spark-3.5.9-test-report
           report_name: spark-3.5.9-test
 
-      - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Build'
-        continue-on-error: true
+      - uses: $/.github/actions/pull-request-publish-report
+        if: github.event.workflow_run.name == 'Build' && !cancelled()
         with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: spark-4.3.0-test-report
           report_name: spark-4.3.0-test
 
-      - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Build'
-        continue-on-error: true
+      - uses: $/.github/actions/pull-request-publish-report
+        if: github.event.workflow_run.name == 'Build' && !cancelled()
         with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: ibis-test-report
           report_name: ibis-test
 
-      - uses: ./.github/actions/pull-request-report
+      - uses: $/.github/actions/pull-request-publish-report
         if: github.event.workflow_run.name == 'Gold Data' && github.event.workflow_run.conclusion == 'success'
         with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: gold-data-report
           report_name: gold-data

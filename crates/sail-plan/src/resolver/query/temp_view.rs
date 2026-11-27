@@ -724,8 +724,9 @@ impl PlanResolver<'_> {
     /// it reads in the place of the source, in the plan, in its subqueries, and in the
     /// CTE definitions that the plan refers to. A plan without such a scan is stored as
     /// it is. Also returns whether the view resolves its query at each read: the definition
-    /// read a persistent view, or a table that the plan does not scan, such as the table of
-    /// a scalar subquery that `typeof` folded into a value.
+    /// read a persistent view, a catalog table in several scans of its partitions, or a
+    /// table that the plan does not scan, such as the table of a scalar subquery that
+    /// `typeof` folded into a value.
     pub(in crate::resolver) fn store_view_plan(
         plan: LogicalPlan,
         reads: &ViewDefinitionReads,
@@ -737,7 +738,7 @@ impl PlanResolver<'_> {
             Ok(())
         })?;
         let resolves_at_each_read =
-            reads.reads_persistent_view || reads.sources().any(|x| !scanned.contains(&x));
+            reads.resolves_at_each_read || reads.sources().any(|x| !scanned.contains(&x));
         // The stored plan has its own CTE definitions.
         let plan = replace_scans(
             plan,
@@ -1106,7 +1107,9 @@ impl PlanResolver<'_> {
 
     /// Returns the source of a read of a catalog table that a temporary view was created
     /// over, with the catalog table lookups and the table sources of the query, or the error
-    /// that the table is not found or that its name is now the name of a view.
+    /// that the table is not found, that its name is now the name of a view, or that its
+    /// partitions are now read in several scans, after which the read resolves the query of
+    /// the view again.
     async fn resolve_view_catalog_table_source(
         &self,
         origin: &CatalogTableOrigin,
@@ -1181,18 +1184,29 @@ impl PlanResolver<'_> {
             }
             None => None,
         };
-        self.resolve_catalog_table_source(
-            CatalogTableRead {
-                status,
-                resolved,
-                origin,
-                session_table,
-                lake_relation,
-            },
-            state,
-        )
-        .await
-        .map(Ok)
+        let sources = self
+            .resolve_catalog_table_sources(
+                CatalogTableRead {
+                    status,
+                    resolved,
+                    origin,
+                    session_table,
+                    lake_relation,
+                },
+                state,
+            )
+            .await?;
+        // The stored plan reads the table in one scan, and the query of the view resolved
+        // again reads a table in several scans of its partitions.
+        match <[_; 1]>::try_from(sources) {
+            Ok([source]) => Ok(Ok(source)),
+            Err(_) => Ok(Err(PlanError::AnalysisError(format!(
+                "the temporary view {} reads {} in one scan, and the partitions of the table \
+                are now read in several scans. Create the temporary view again.",
+                view_name(view),
+                quote_names(&origin.name),
+            )))),
+        }
     }
 
     /// Looks up the table `name` in the catalog of another session, reusing an earlier

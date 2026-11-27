@@ -175,7 +175,7 @@ pub(super) struct PlanResolverState {
     windows: std::collections::HashMap<String, spec::Window>,
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
-    table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    table_sources: HashMap<TableSourceKey, Vec<SharedTableSource>>,
     /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
     /// reads of a path in the query read one version of the table.
     lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
@@ -221,8 +221,11 @@ pub(super) struct ViewDefinitionReads {
     /// The columns that the temporary views that the definition reads read of their tables,
     /// by the address of the source and the positions of the columns in the source.
     pub view_reads: HashMap<usize, HashSet<usize>>,
-    /// Whether the definition reads a persistent view, which can be defined again.
-    pub reads_persistent_view: bool,
+    /// Whether the view resolves its query at each read, since the definition reads what
+    /// its stored plan cannot read again: a persistent view, which can be defined again, or
+    /// a catalog table in several scans of its partitions, which can be grouped in other
+    /// scans.
+    pub resolves_at_each_read: bool,
 }
 
 impl ViewDefinitionReads {
@@ -592,14 +595,19 @@ impl PlanResolverState {
         self.ctes.values()
     }
 
-    pub fn get_table_source(&self, key: &TableSourceKey) -> Option<Arc<dyn TableSource>> {
+    pub fn get_table_sources(&self, key: &TableSourceKey) -> Option<Vec<Arc<dyn TableSource>>> {
         self.table_sources
             .get(key)
-            .map(|source| Arc::clone(&source.0))
+            .map(|sources| sources.iter().map(|source| Arc::clone(&source.0)).collect())
     }
 
-    pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
-        self.table_sources.insert(key, SharedTableSource(source));
+    pub fn insert_table_sources(
+        &mut self,
+        key: TableSourceKey,
+        sources: Vec<Arc<dyn TableSource>>,
+    ) {
+        self.table_sources
+            .insert(key, sources.into_iter().map(SharedTableSource).collect());
     }
 
     pub fn get_lake_path_source(&self, key: &LakePathSourceKey) -> Option<Arc<dyn TableSource>> {
