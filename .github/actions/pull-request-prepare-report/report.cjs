@@ -23,7 +23,7 @@ async function prepareReport({
   const body = fs.readFileSync(reportPath, "utf8");
   fs.writeFileSync(
     reportPath,
-    `<!-- sail-pull-request-report:v1 ${JSON.stringify(metadata)} -->\n${body}`,
+    `<!-- sail-pull-request-report:v1 ${JSON.stringify(metadata)} -->\n\n${body}`,
   );
 }
 

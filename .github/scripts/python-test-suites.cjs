@@ -65,7 +65,7 @@ async function readSuiteChoices({ github, context }) {
   const comment = comments.find(
     ({ body, user }) =>
       user?.login === "github-actions[bot]" &&
-      body?.split(/\r?\n/, 2).includes(CHECKLIST_MARKER),
+      body?.split(/\r?\n/, 3).includes(CHECKLIST_MARKER),
   );
   return comment ? parseSuiteChoices(comment.body) : {};
 }
