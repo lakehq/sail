@@ -1064,11 +1064,13 @@ fn compute_delete_mask(
 mod tests {
     #![expect(clippy::unwrap_used)]
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
     use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::physical_plan::FileScanConfigBuilder;
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::physical_plan::collect;
@@ -1082,6 +1084,7 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
 
     use super::*;
+    use crate::io::test_store::TestStore;
 
     #[tokio::test]
     async fn unsupported_delete_formats_are_rejected_before_file_io() -> Result<()> {
@@ -1145,10 +1148,6 @@ mod tests {
 
     #[tokio::test]
     async fn delete_files_use_the_session_metadata_size_hint() -> Result<()> {
-        use datafusion::datasource::memory::MemorySourceConfig;
-
-        use crate::io::test_store::TestStore;
-
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new(POS_DELETE_FILE_PATH_COL, DataType::Utf8, false),
             Field::new(POS_DELETE_POS_COL, DataType::Int64, false),
@@ -1209,16 +1208,12 @@ mod tests {
                     .downcast_ref::<Int64Array>()
                     .unwrap()
                     .values()
-                    .to_vec()
+                    .iter()
+                    .copied()
             })
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![0, 2, 4]);
-        assert_eq!(
-            store
-                .largest_read
-                .load(std::sync::atomic::Ordering::Relaxed),
-            size as usize
-        );
+        assert_eq!(store.largest_read.load(Ordering::Relaxed), size as usize);
         Ok(())
     }
 
