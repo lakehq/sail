@@ -19,25 +19,17 @@ runs:
       env:
         REPORT_NAME: ${{ inputs.report_name }}
         REPORT_PATH: ${{ inputs.report_path }}
+        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
       with:
         script: |
-          const fs = require('node:fs');
-          const { data: run } = await github.rest.actions.getWorkflowRun({
-            ...context.repo,
-            run_id: context.runId,
-            exclude_pull_requests: true,
+          const { prepareReport } = require(process.env.REPORT_SCRIPT);
+          await prepareReport({
+            github,
+            context,
+            reportName: process.env.REPORT_NAME,
+            reportPath: process.env.REPORT_PATH,
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
           });
-          const metadata = {
-            report: process.env.REPORT_NAME,
-            pr: context.payload.pull_request.number,
-            workflow_id: run.workflow_id,
-            run_id: context.runId,
-            run_number: context.runNumber,
-            attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
-          };
-          const path = process.env.REPORT_PATH;
-          const body = fs.readFileSync(path, 'utf8');
-          fs.writeFileSync(path, `<!-- sail-pull-request-report:v1 ${JSON.stringify(metadata)} -->\n${body}`);
 
     - name: Upload report
       uses: actions/upload-artifact@v7
