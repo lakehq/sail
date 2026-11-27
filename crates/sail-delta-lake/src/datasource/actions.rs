@@ -22,6 +22,7 @@ pub fn partitioned_file_from_action(
     location: object_store::path::Path,
     partition_columns: &[PhysicalPartitionColumn],
     schema: &ArrowSchema,
+    time_zone: &str,
 ) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
@@ -35,8 +36,12 @@ pub fn partitioned_file_from_action(
                 .partition_values
                 .get(&column.physical_name)
                 .and_then(|value| value.as_ref())
-                .map(|value| parse_optional_partition_value(Some(value), field.data_type()))
-                .unwrap_or_else(|| parse_optional_partition_value(None, field.data_type()))
+                .map(|value| {
+                    parse_optional_partition_value(Some(value), field.data_type(), time_zone)
+                })
+                .unwrap_or_else(|| {
+                    parse_optional_partition_value(None, field.data_type(), time_zone)
+                })
                 .unwrap_or(ScalarValue::Null)
         })
         .collect::<Vec<_>>();
@@ -120,6 +125,7 @@ mod tests {
             object_store::path::Path::from(action.path.as_str()),
             &partition_columns,
             &schema,
+            "UTC",
         )
         .expect("partition values should parse");
 

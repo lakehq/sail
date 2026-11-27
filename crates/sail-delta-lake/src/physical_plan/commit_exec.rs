@@ -936,6 +936,8 @@ impl ExecutionPlan for DeltaCommitExec {
                         Ok((column.physical_name, field.data_type().clone()))
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let time_zone =
+                    crate::snapshot::partition_time_zone(context.session_config().options());
                 let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
                     partition_fields
                         .iter()
@@ -945,6 +947,7 @@ impl ExecutionPlan for DeltaCommitExec {
                                     .get(name)
                                     .and_then(|value| value.as_deref()),
                                 data_type,
+                                &time_zone,
                             )
                             // ScalarValue compares float bits, while Spark equates signed zeros.
                             .map(|value| match value {

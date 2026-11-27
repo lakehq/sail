@@ -53,11 +53,11 @@ pub(crate) mod materialize;
 mod metadata_aggregate;
 mod stats;
 
-pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
     catalog_managed_commit_path,
 };
+pub use config::{DeltaSnapshotConfig, partition_time_zone};
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
 pub struct DeltaSnapshot {
@@ -396,6 +396,10 @@ impl DeltaSnapshot {
 
     pub fn load_config(&self) -> &DeltaSnapshotConfig {
         &self.config
+    }
+
+    pub fn partition_time_zone(&self) -> &str {
+        &self.config.partition_time_zone
     }
 
     pub fn table_properties(&self) -> &TableProperties {

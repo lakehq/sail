@@ -186,9 +186,11 @@ impl ScalarConverter {
         }
     }
 
+    /// Parses partition values as [`parse_partition_value`] does.
     pub fn string_values_to_array(
         values: &[Option<&str>],
         field_dt: &ArrowDataType,
+        time_zone: &str,
     ) -> DataFusionResult<ArrayRef> {
         let utf8_array: ArrayRef = Arc::new(StringArray::from(
             values
@@ -205,7 +207,10 @@ impl ScalarConverter {
                     .map(|value| value.map(ToOwned::to_owned))
                     .collect::<Vec<_>>(),
             ))),
-            _ => Ok(cast(&utf8_array, field_dt)?),
+            _ => match partition_parse_type(field_dt, time_zone) {
+                Some(parse_type) => Ok(cast(&cast(&utf8_array, &parse_type)?, field_dt)?),
+                None => Ok(cast(&utf8_array, field_dt)?),
+            },
         }
     }
 
@@ -549,22 +554,48 @@ fn number_from_f64(value: f64) -> Value {
 /// Parse a partition value string into a `ScalarValue` for the given Arrow data type.
 ///
 /// This implements Delta-specific parsing rules for partition values stored in the log.
-pub fn parse_partition_value(raw: &str, field_dt: &ArrowDataType) -> DeltaResultLocal<ScalarValue> {
+/// A TIMESTAMP value without an offset is a wall clock in `time_zone`, the session time zone,
+/// as Delta-Spark reads it.
+pub fn parse_partition_value(
+    raw: &str,
+    field_dt: &ArrowDataType,
+    time_zone: &str,
+) -> DeltaResultLocal<ScalarValue> {
     // The log uses empty strings for NULL; directory markers remain literal values.
     if raw.is_empty() {
         return ScalarValue::try_new_null(field_dt)
             .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
     }
-    ScalarConverter::string_to_arrow_scalar_value(raw, field_dt)
-        .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
+    match partition_parse_type(field_dt, time_zone) {
+        Some(parse_type) => ScalarConverter::string_to_arrow_scalar_value(raw, &parse_type)
+            .and_then(|value| value.cast_to(field_dt)),
+        None => ScalarConverter::string_to_arrow_scalar_value(raw, field_dt),
+    }
+    .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
+}
+
+/// Returns the type to parse a TIMESTAMP partition value in, before it takes the time zone label
+/// of `field_dt`, since the label need not be the session time zone (Delta TIMESTAMP columns are
+/// labelled UTC, catalog columns keep the zone they were declared in).
+pub(crate) fn partition_parse_type(
+    field_dt: &ArrowDataType,
+    time_zone: &str,
+) -> Option<ArrowDataType> {
+    match field_dt {
+        ArrowDataType::Timestamp(unit, Some(label)) if label.as_ref() != time_zone => {
+            Some(ArrowDataType::Timestamp(*unit, Some(time_zone.into())))
+        }
+        _ => None,
+    }
 }
 
 pub fn parse_optional_partition_value(
     raw: Option<&str>,
     field_dt: &ArrowDataType,
+    time_zone: &str,
 ) -> DeltaResultLocal<ScalarValue> {
     match raw {
-        Some(raw) => parse_partition_value(raw, field_dt),
+        Some(raw) => parse_partition_value(raw, field_dt, time_zone),
         None => ScalarValue::try_new_null(field_dt)
             .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}"))),
     }
@@ -596,16 +627,12 @@ mod tests {
     use datafusion::common::ScalarValue;
 
     use super::{
-        NULL_PARTITION_VALUE_DATA_PATH, ScalarExt, parse_optional_partition_value,
+        NULL_PARTITION_VALUE_DATA_PATH, ScalarConverter, ScalarExt, parse_optional_partition_value,
         parse_partition_value,
     };
 
     fn timestamp(micros: i64, time_zone: Option<&str>) -> ScalarValue {
         ScalarValue::TimestampMicrosecond(Some(micros), time_zone.map(Into::into))
-    }
-
-    fn timestamp_type(time_zone: &str) -> ArrowDataType {
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(time_zone.into()))
     }
 
     #[test]
@@ -662,21 +689,63 @@ mod tests {
         );
     }
 
+    /// A value without an offset is a wall clock in the session time zone, whatever the time zone
+    /// label of the type, and a value with an offset is that instant. TIMESTAMP_NTZ values are wall
+    /// clocks. The scalar and the array parse agree.
     #[test]
-    fn timestamp_partition_values_parse_as_the_same_instant()
+    fn timestamp_partition_values_parse_in_the_session_time_zone()
     -> Result<(), Box<dyn std::error::Error>> {
-        for time_zone in ["UTC", "America/Los_Angeles"] {
-            let data_type = timestamp_type(time_zone);
-            assert_eq!(
-                parse_partition_value("2024-01-01T09:00:00.000000Z", &data_type)?,
-                timestamp(1_704_099_600_000_000, Some(time_zone))
-            );
+        // 2024-01-01 09:00:00 as a wall clock in each session time zone, in seconds since the epoch.
+        let sessions = [
+            ("UTC", 1_704_099_600),
+            ("America/Los_Angeles", 1_704_128_400),
+            ("+05:30", 1_704_079_800),
+        ];
+        let units = [
+            (TimeUnit::Second, 1),
+            (TimeUnit::Millisecond, 1_000),
+            (TimeUnit::Microsecond, 1_000_000),
+            (TimeUnit::Nanosecond, 1_000_000_000),
+        ];
+        let raw = ["2024-01-01 09:00:00.000000", "2024-01-01T09:00:00.000000Z"];
+        for (session, zone_less) in sessions {
+            for (unit, per_second) in units {
+                for label in [None, Some("UTC"), Some("America/Los_Angeles")] {
+                    let data_type = ArrowDataType::Timestamp(unit, label.map(Into::into));
+                    let expected = [
+                        if label.is_some() {
+                            zone_less
+                        } else {
+                            1_704_099_600
+                        },
+                        1_704_099_600,
+                    ]
+                    .map(|seconds| {
+                        ScalarValue::Int64(Some(seconds * per_second)).cast_to(&data_type)
+                    });
+                    let array = ScalarConverter::string_values_to_array(
+                        &raw.map(Some),
+                        &data_type,
+                        session,
+                    )?;
+                    assert_eq!(array.data_type(), &data_type);
+                    for (index, (raw, expected)) in raw.into_iter().zip(expected).enumerate() {
+                        let expected = expected?;
+                        let case = format!("{raw} as {data_type} in {session}");
+                        assert_eq!(
+                            parse_partition_value(raw, &data_type, session)?,
+                            expected,
+                            "{case}"
+                        );
+                        assert_eq!(
+                            ScalarValue::try_from_array(&array, index)?,
+                            expected,
+                            "{case}"
+                        );
+                    }
+                }
+            }
         }
-        // Values written without an offset parse as before.
-        assert_eq!(
-            parse_partition_value("2024-01-01 09:00:00.000000", &timestamp_type("UTC"))?,
-            timestamp(1_704_099_600_000_000, Some("UTC"))
-        );
         Ok(())
     }
 
@@ -700,8 +769,9 @@ mod tests {
     #[test]
     fn test_parse_partition_value_preserves_hive_default_partition_string() {
         #[expect(clippy::expect_used)]
-        let value = parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8)
-            .expect("partition value should parse");
+        let value =
+            parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8, "UTC")
+                .expect("partition value should parse");
 
         assert_eq!(
             value,
@@ -712,7 +782,7 @@ mod tests {
     #[test]
     fn test_parse_optional_partition_value_none_returns_typed_null() {
         #[expect(clippy::expect_used)]
-        let value = parse_optional_partition_value(None, &ArrowDataType::Utf8)
+        let value = parse_optional_partition_value(None, &ArrowDataType::Utf8, "UTC")
             .expect("partition value should parse");
 
         assert_eq!(value, ScalarValue::Utf8(None));

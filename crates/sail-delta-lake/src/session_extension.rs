@@ -9,7 +9,7 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
 use crate::delta_log::{LogStoreRef, StorageConfig};
-use crate::snapshot::DeltaSnapshotConfig;
+use crate::snapshot::{DeltaSnapshotConfig, partition_time_zone};
 use crate::table::{
     DeltaSnapshot, DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
     load_catalog_managed_commits_for_snapshot,
@@ -22,6 +22,7 @@ pub(crate) struct TableCacheKey {
     pub(crate) table_url: String,
     pub(crate) version: i64,
     pub(crate) lakehouse_table: Option<LakehouseExecutionContext>,
+    pub(crate) partition_time_zone: Arc<str>,
 }
 
 impl TableCacheKey {
@@ -29,11 +30,13 @@ impl TableCacheKey {
         table_url: &Url,
         version: i64,
         lakehouse_table: Option<&LakehouseExecutionContext>,
+        partition_time_zone: Arc<str>,
     ) -> Self {
         Self {
             table_url: table_url.to_string(),
             version,
             lakehouse_table: lakehouse_table.cloned(),
+            partition_time_zone,
         }
     }
 }
@@ -61,7 +64,12 @@ impl DeltaTableCache {
         lakehouse_table: Option<&LakehouseExecutionContext>,
     ) -> Result<Arc<CachedTable>> {
         let lakehouse_table = catalog_managed_commit_context(lakehouse_table);
-        let key = TableCacheKey::new(table_url, version, lakehouse_table);
+        let key = TableCacheKey::new(
+            table_url,
+            version,
+            lakehouse_table,
+            partition_time_zone(context.session_config().options()),
+        );
         let table_url = table_url.clone();
         let lakehouse_table = lakehouse_table.cloned();
         self.cache
@@ -102,7 +110,8 @@ pub(crate) async fn load_table_uncached(
     let mut table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
-    };
+    }
+    .with_partition_time_zone(context.session_config().options());
     if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             context,
@@ -194,12 +203,22 @@ mod tests {
     }
 
     #[test]
+    fn table_cache_key_separates_partition_time_zones() {
+        let url = Url::parse("file:///tmp/table").unwrap();
+
+        assert_ne!(
+            TableCacheKey::new(&url, 7, None, "UTC".into()),
+            TableCacheKey::new(&url, 7, None, "America/Los_Angeles".into())
+        );
+    }
+
+    #[test]
     fn table_cache_key_is_stable_without_lakehouse_context() {
         let url = Url::parse("file:///tmp/table").unwrap();
 
         assert_eq!(
-            TableCacheKey::new(&url, 7, None),
-            TableCacheKey::new(&url, 7, None)
+            TableCacheKey::new(&url, 7, None, "UTC".into()),
+            TableCacheKey::new(&url, 7, None, "UTC".into())
         );
     }
 
@@ -210,8 +229,8 @@ mod tests {
         let session_b = lakehouse_context("session-b");
 
         assert_ne!(
-            TableCacheKey::new(&url, 7, Some(&session_a)),
-            TableCacheKey::new(&url, 7, Some(&session_b))
+            TableCacheKey::new(&url, 7, Some(&session_a), "UTC".into()),
+            TableCacheKey::new(&url, 7, Some(&session_b), "UTC".into())
         );
     }
 }

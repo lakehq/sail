@@ -32,6 +32,7 @@ struct GroupColumn<'a> {
     physical_name: &'a str,
     field: &'a Field,
     partition: bool,
+    time_zone: &'a str,
 }
 
 enum FileContribution {
@@ -84,6 +85,7 @@ impl DeltaSnapshot {
                     physical_name: arrow_field_physical_name(field, mapping_mode),
                     field,
                     partition,
+                    time_zone: self.partition_time_zone(),
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -196,7 +198,8 @@ fn constant_group_value(
             .get(column.physical_name)
             .or_else(|| add.partition_values.get(column.logical_name))
             .and_then(Option::as_deref);
-        return parse_optional_partition_value(raw, column.field.data_type()).ok();
+        return parse_optional_partition_value(raw, column.field.data_type(), column.time_zone)
+            .ok();
     }
 
     let physical_nulls = u64::try_from(stats.null_count_value(column.physical_name)?).ok()?;

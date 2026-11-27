@@ -17,6 +17,7 @@ use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
+use crate::conversion::partition_parse_type;
 use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
 use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
@@ -71,7 +72,12 @@ pub(crate) fn build_metadata_filter(
     } else {
         (input, predicate)
     };
-    let predicate = type_partition_columns(predicate, &partition_columns, logical_schema)?;
+    let predicate = type_partition_columns(
+        predicate,
+        &partition_columns,
+        logical_schema,
+        snapshot.partition_time_zone(),
+    )?;
     let df_schema = input.schema().to_dfschema()?;
     let physical_expr = simplify_expr(session, &df_schema, predicate)?;
     Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))
@@ -81,6 +87,7 @@ fn type_partition_columns(
     predicate: Expr,
     partition_columns: &[String],
     logical_schema: &ArrowSchema,
+    time_zone: &str,
 ) -> Result<Expr> {
     // Replay carries raw strings for Add decoding; only predicate inputs use logical types.
     predicate
@@ -95,7 +102,11 @@ fn type_partition_columns(
                 .field_with_name(&column.name)?
                 .data_type()
                 .clone();
-            let value = nullif(expr, lit(""));
+            let mut value = nullif(expr, lit(""));
+            // Parse as `parse_partition_value` does.
+            if let Some(parse_type) = partition_parse_type(&data_type, time_zone) {
+                value = Expr::Cast(Cast::new(Box::new(value), parse_type));
+            }
             Ok(Transformed::yes(Expr::Cast(Cast::new(
                 Box::new(value),
                 data_type,
@@ -685,7 +696,8 @@ mod tests {
             ]);
             let predicate = Expr::Column(LogicalColumn::new_unqualified("p"))
                 .gt(Expr::Column(LogicalColumn::new_unqualified("q")));
-            let predicate = type_partition_columns(predicate, &partition_columns, &logical_schema)?;
+            let predicate =
+                type_partition_columns(predicate, &partition_columns, &logical_schema, "UTC")?;
             let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
             let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
             assert_eq!(

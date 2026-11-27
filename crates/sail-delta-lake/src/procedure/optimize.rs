@@ -399,12 +399,22 @@ fn bin_key(
                     .field_with_name(&column.logical_name)?
                     .data_type(),
             };
-            if parse_optional_partition_value(value.as_deref(), data_type)?.is_null() {
+            if parse_optional_partition_value(
+                value.as_deref(),
+                data_type,
+                snapshot.partition_time_zone(),
+            )?
+            .is_null()
+            {
                 *value = None;
             }
         } else if let Some(data_type @ ArrowDataType::Timestamp(_, Some(_))) = data_type
             // A timestamp value that does not parse keeps its spelling, as before.
-            && let Ok(scalar) = parse_optional_partition_value(value.as_deref(), data_type)
+            && let Ok(scalar) = parse_optional_partition_value(
+                value.as_deref(),
+                data_type,
+                snapshot.partition_time_zone(),
+            )
             && !scalar.is_null()
         {
             *value = Some(scalar.serialize().into_owned());
@@ -503,6 +513,7 @@ fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<R
                         .get(physical)
                         .and_then(Option::as_deref),
                     field.data_type(),
+                    snapshot.partition_time_zone(),
                 )
             })
             .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
@@ -649,7 +660,8 @@ mod tests {
             bin_key(&snapshot, &columns, &add)
         };
 
-        // A file written without an offset shares the bin of a file written with one.
+        // In a UTC session, a file written without an offset shares the bin of a file written
+        // with one.
         let old = key("2024-01-01 09:00:00.000000")?;
         let new = key("2024-01-01T09:00:00.000000Z")?;
         assert_eq!(old, new);

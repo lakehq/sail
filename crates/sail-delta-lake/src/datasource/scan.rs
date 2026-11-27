@@ -263,6 +263,7 @@ pub async fn build_file_scan_config(
             location,
             &partition_columns_mapped,
             &complete_schema,
+            snapshot.partition_time_zone(),
         )?;
         let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {

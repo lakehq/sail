@@ -5,7 +5,12 @@
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
+use std::sync::Arc;
+
+use datafusion::common::config::ConfigOptions;
 use object_store::path::Path;
+use sail_common_datafusion::session::time_zone::session_time_zone;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use serde::{Deserialize, Serialize};
 
 /// Configuration options for loading Delta table snapshots.
@@ -63,6 +68,26 @@ pub struct DeltaSnapshotConfig {
     pub log_batch_size: usize,
     /// Catalog-ratified commits for a catalog-managed Delta snapshot.
     pub catalog_managed_commits: Option<CatalogManagedCommitSet>,
+    /// The time zone of TIMESTAMP partition values without an offset (see
+    /// [`partition_time_zone`]).
+    pub partition_time_zone: Arc<str>,
+}
+
+impl DeltaSnapshotConfig {
+    pub fn with_partition_time_zone(self, options: &ConfigOptions) -> Self {
+        Self {
+            partition_time_zone: partition_time_zone(options),
+            ..self
+        }
+    }
+}
+
+/// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
+/// session time zone, as Delta-Spark reads it.
+pub fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
+    session_time_zone(options)
+        .map(|time_zone| arrow_timezone_label(time_zone).into())
+        .unwrap_or_else(|| "UTC".into())
 }
 
 impl Default for DeltaSnapshotConfig {
@@ -73,6 +98,7 @@ impl Default for DeltaSnapshotConfig {
             log_buffer_size: default_parallelism() * 4,
             log_batch_size: 1024,
             catalog_managed_commits: None,
+            partition_time_zone: "UTC".into(),
         }
     }
 }

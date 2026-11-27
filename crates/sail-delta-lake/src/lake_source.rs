@@ -324,7 +324,8 @@ impl LakeSource for DeltaLakeSource {
             DeltaSnapshotConfig {
                 require_files: replace,
                 ..Default::default()
-            },
+            }
+            .with_partition_time_zone(config.options()),
         )
         .await
         {
@@ -1033,7 +1034,8 @@ async fn open_delta_write_planning_table(
         require_files: false,
         require_transactions,
         ..Default::default()
-    };
+    }
+    .with_partition_time_zone(ctx.config().options());
 
     if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         let log_store = create_logstore_with_object_store(

@@ -207,6 +207,7 @@ pub(crate) async fn plan_delta_scan(
                     Arc::clone(&logical_schema),
                     Arc::clone(predicate),
                     kmode,
+                    snapshot.partition_time_zone(),
                 )?;
                 let pruned_files = match Arc::try_unwrap(files) {
                     Ok(files) => files

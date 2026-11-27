@@ -149,6 +149,9 @@ impl AddAugmentationConfig {
                 partition_schema,
                 "partitionValues",
                 self.column_mapping_mode,
+                // Checkpoints are written without a session. Sail reads partition values from
+                // the strings, so this only matters to other readers of the checkpoint.
+                "UTC",
             )?;
             add_fields.push(Arc::new(Field::new(
                 FIELD_NAME_PARTITION_VALUES_PARSED,
