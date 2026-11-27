@@ -153,56 +153,62 @@ impl TimestampParser {
     }
 
     pub fn parse_unformatted(&self, value: &str) -> Result<i64> {
-        let ParsedTimestamp {
-            segments,
-            timezone,
-            just_time,
-        } = parse_timestamp_string(value)
-            .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
-
-        let parsed_zone = timezone.as_deref().map(SparkZone::parse).transpose()?;
         let session_zone = match self {
             TimestampParser::Ltz { default_timezone } => Some(SparkZone::parse(default_timezone)?),
             TimestampParser::Ntz => None,
         };
-        let effective_zone = parsed_zone.as_ref().or(session_zone.as_ref());
+        parse_unformatted_timestamp(value, session_zone.as_ref())
+    }
+}
 
-        let (year, month, day) = if just_time {
-            match self {
-                TimestampParser::Ltz { .. } => effective_zone
-                    .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-                    .current_date(),
-                TimestampParser::Ntz => {
-                    return exec_err!("time-only input is not a TIMESTAMP_NTZ");
-                }
-            }
-        } else {
-            (
-                segments[0],
-                u32::try_from(segments[1])
-                    .map_err(|_| exec_datafusion_err!("invalid timestamp month"))?,
-                u32::try_from(segments[2])
-                    .map_err(|_| exec_datafusion_err!("invalid timestamp day"))?,
-            )
-        };
-        let hour = u32::try_from(segments[3])
-            .map_err(|_| exec_datafusion_err!("invalid timestamp hour"))?;
-        let minute = u32::try_from(segments[4])
-            .map_err(|_| exec_datafusion_err!("invalid timestamp minute"))?;
-        let second = u32::try_from(segments[5])
-            .map_err(|_| exec_datafusion_err!("invalid timestamp second"))?;
-        let micros = u32::try_from(segments[6])
-            .map_err(|_| exec_datafusion_err!("invalid timestamp fraction"))?;
-        let local_micros = local_timestamp_micros(year, month, day, hour, minute, second, micros)
-            .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
+/// Parses `value` as `CAST(value AS TIMESTAMP)` does in a session with time zone `session_zone`,
+/// or as `CAST(value AS TIMESTAMP_NTZ)` when it is `None`, into microseconds.
+pub fn parse_unformatted_timestamp(value: &str, session_zone: Option<&SparkZone>) -> Result<i64> {
+    let ParsedTimestamp {
+        segments,
+        timezone,
+        just_time,
+    } = parse_timestamp_string(value)
+        .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
 
-        match self {
-            TimestampParser::Ltz { .. } => effective_zone
+    let parsed_zone = timezone.as_deref().map(SparkZone::parse).transpose()?;
+    let effective_zone = parsed_zone.as_ref().or(session_zone);
+
+    let (year, month, day) = if just_time {
+        match session_zone {
+            Some(_) => effective_zone
                 .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-                .to_utc_micros(year, month, day, hour, minute, second, micros, local_micros),
-            TimestampParser::Ntz => i64::try_from(local_micros)
-                .map_err(|_| exec_datafusion_err!("timestamp is outside the microsecond range")),
+                .current_date(),
+            None => {
+                return exec_err!("time-only input is not a TIMESTAMP_NTZ");
+            }
         }
+    } else {
+        (
+            segments[0],
+            u32::try_from(segments[1])
+                .map_err(|_| exec_datafusion_err!("invalid timestamp month"))?,
+            u32::try_from(segments[2])
+                .map_err(|_| exec_datafusion_err!("invalid timestamp day"))?,
+        )
+    };
+    let hour =
+        u32::try_from(segments[3]).map_err(|_| exec_datafusion_err!("invalid timestamp hour"))?;
+    let minute =
+        u32::try_from(segments[4]).map_err(|_| exec_datafusion_err!("invalid timestamp minute"))?;
+    let second =
+        u32::try_from(segments[5]).map_err(|_| exec_datafusion_err!("invalid timestamp second"))?;
+    let micros = u32::try_from(segments[6])
+        .map_err(|_| exec_datafusion_err!("invalid timestamp fraction"))?;
+    let local_micros = local_timestamp_micros(year, month, day, hour, minute, second, micros)
+        .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
+
+    match session_zone {
+        Some(_) => effective_zone
+            .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
+            .to_utc_micros(year, month, day, hour, minute, second, micros, local_micros),
+        None => i64::try_from(local_micros)
+            .map_err(|_| exec_datafusion_err!("timestamp is outside the microsecond range")),
     }
 }
 
