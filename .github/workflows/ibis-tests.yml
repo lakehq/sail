@@ -124,15 +124,18 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      actions: read
     needs:
       - test
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/commit-baseline
+      - uses: $/.github/actions/commit-baseline
         id: baseline
 
-      - uses: ./.github/actions/commit-workflow
+      - uses: $/.github/actions/commit-workflow
         id: baseline-workflow
         with:
           sha: ${{ steps.baseline.outputs.sha }}
@@ -172,16 +175,7 @@ jobs:
           scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save Pull Request Number
-        if: github.event_name == 'pull_request'
-        env:
-          NUMBER: ${{ github.event.number }}
-        run: |
-          echo "$NUMBER" > /tmp/report/pull-request.txt
-
-      - name: Upload Test Report
-        uses: actions/upload-artifact@v7
+      - uses: $/.github/actions/pull-request-prepare-report
         with:
-          name: ibis-test-report
-          path: /tmp/report
-          retention-days: 1
+          report_name: ibis-test
+          report_path: /tmp/report/report.md

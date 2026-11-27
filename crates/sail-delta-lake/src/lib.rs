@@ -19,6 +19,7 @@ pub mod physical;
 pub mod physical_plan;
 mod procedure;
 pub mod schema;
+mod schema_coercion;
 pub mod session_extension;
 mod snapshot;
 pub mod spec;

@@ -177,9 +177,7 @@ jobs:
 
       - name: Install protoc
         id: protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: $/.github/actions/setup-protoc
 
       - uses: $/.github/actions/adjust-swap-space
         if: runner.os == 'Linux'
@@ -220,7 +218,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version}/protoc-${protoc_version}-${protoc_target}.zip"
             unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
             rm /tmp/protoc.zip
             protoc --version
@@ -280,9 +278,7 @@ jobs:
           rustup default stable
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: $/.github/actions/setup-protoc
 
       - uses: $/.github/actions/adjust-swap-space
         if: runner.os == 'Linux'

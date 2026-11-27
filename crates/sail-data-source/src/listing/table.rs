@@ -14,7 +14,7 @@ use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::partition::BasePathPartitions;
 use crate::listing::source::ReadFormat;
-use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::utils::{SchemaSampling, can_be_evaluated_for_partition_pruning};
 use crate::url::PathGlobFilter;
 
 #[derive(Clone, Debug)]
@@ -22,7 +22,7 @@ pub struct ListingTableSourceConfig {
     /// File scan indices in public column order when physical columns overlap partitions.
     pub output_projection: Option<Vec<usize>>,
     pub base_path: Option<Arc<BasePathPartitions>>,
-    pub table_paths: Vec<ListingTableUrl>,
+    pub table_paths: Vec<(ListingTableUrl, Option<Vec<datafusion_common::ScalarValue>>)>,
     pub recursive_file_lookup: bool,
     pub schema: TableSchema,
     pub constraints: Constraints,
@@ -35,6 +35,22 @@ pub struct ListingTableSourceConfig {
     pub compression: CompressionTypeVariant,
 }
 
+impl ListingTableSourceConfig {
+    pub(super) fn direct_files_only(&self) -> bool {
+        self.table_paths
+            .first()
+            .is_some_and(|(_, values)| values.is_some())
+            || (self.base_path.is_some() && self.schema.table_partition_cols().is_empty())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RegisteredReadOptions {
+    pub sampling: SchemaSampling,
+    pub format: &'static str,
+    pub case_sensitive: bool,
+}
+
 /// A [`TableSource`] that represents reading one or more files via listing.
 ///
 /// This is a logical representation of the listing files data source,
@@ -43,6 +59,7 @@ pub struct ListingTableSourceConfig {
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
     output_schema: SchemaRef,
+    pub(super) registered_read: Option<RegisteredReadOptions>,
 }
 
 impl ListingTableSource {
@@ -55,7 +72,13 @@ impl ListingTableSource {
         Ok(Self {
             config,
             output_schema,
+            registered_read: None,
         })
+    }
+
+    pub(super) fn with_registered_read(mut self, options: RegisteredReadOptions) -> Self {
+        self.registered_read = Some(options);
+        self
     }
 
     pub(super) fn scan_projection(&self, projection: Option<&[usize]>) -> Option<Vec<usize>> {
@@ -66,6 +89,13 @@ impl ListingTableSource {
             (Some(indices), None) => Some(indices.clone()),
             (None, projection) => projection.map(<[_]>::to_vec),
         }
+    }
+
+    pub(super) fn split_partition_filters(&self, filters: Vec<Expr>) -> (Vec<Expr>, Vec<Expr>) {
+        let names = partition_column_names(&self.config.schema);
+        filters
+            .into_iter()
+            .partition(|filter| can_be_evaluated_for_partition_pruning(&names, filter))
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
@@ -90,24 +120,31 @@ impl TableSource for ListingTableSource {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // Expressions can be used for partition pruning if they can be evaluated
-        // using only the partition columns and there are partition columns.
-        let partition_column_names = self
-            .config
-            .schema
-            .table_partition_cols()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-
-        filters
-            .iter()
-            .map(|filter| {
-                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter) {
-                    return Ok(TableProviderFilterPushDown::Exact);
-                }
-                Ok(TableProviderFilterPushDown::Inexact)
-            })
-            .collect()
+        Ok(listing_filter_pushdown(&self.config.schema, filters))
     }
+}
+
+pub(super) fn partition_column_names(schema: &TableSchema) -> Vec<&str> {
+    schema
+        .table_partition_cols()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect()
+}
+
+pub(super) fn listing_filter_pushdown(
+    schema: &TableSchema,
+    filters: &[&Expr],
+) -> Vec<TableProviderFilterPushDown> {
+    let names = partition_column_names(schema);
+    filters
+        .iter()
+        .map(|filter| {
+            if can_be_evaluated_for_partition_pruning(&names, filter) {
+                TableProviderFilterPushDown::Exact
+            } else {
+                TableProviderFilterPushDown::Inexact
+            }
+        })
+        .collect()
 }
