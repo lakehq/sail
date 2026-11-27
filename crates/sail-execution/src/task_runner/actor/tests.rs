@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::common::config::ConfigOptions;
 use datafusion::execution::TaskContext;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use futures::StreamExt;
 use sail_common::actor::{Actor, ActorContext, ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, SystemCatalogStore};
 use sail_common::runtime::RuntimeHandle;
-use sail_common_datafusion::session::job_context::JobContextFactory;
 use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::event_reporter;
@@ -367,25 +365,9 @@ async fn reader_that_joins_a_released_stream_gets_a_creation_timeout_of_its_own(
 #[tokio::test]
 async fn job_context_is_created_once_per_job_and_dropped_when_the_job_closes()
 -> Result<(), TestError> {
-    static CREATED: AtomicUsize = AtomicUsize::new(0);
-
-    fn create(
-        worker: &TaskContext,
-        options: ConfigOptions,
-    ) -> datafusion::common::Result<TaskContext> {
-        CREATED.fetch_add(1, Ordering::SeqCst);
-        let mut config = worker.session_config().clone();
-        *config.options_mut() = options;
-        Ok(TaskContext::default()
-            .with_session_config(config)
-            .with_runtime(worker.runtime_env()))
-    }
-
     let mut system = ActorSystem::new();
     let mut runner = TaskRunnerActor::new(components(&mut system, "job-context")?);
-    let worker = TaskContext::default().with_session_config(
-        SessionConfig::new().with_extension(Arc::new(JobContextFactory::new(create))),
-    );
+    let worker = TaskContext::default();
     let mut driver = ConfigOptions::default();
     driver.execution.parquet.metadata_size_hint = Some(128);
     let session = JobSession::capture(&driver)?;
@@ -394,7 +376,6 @@ async fn job_context_is_created_once_per_job_and_dropped_when_the_job_closes()
     let first = runner.job_context(job_id, &worker, &session)?;
     let second = runner.job_context(job_id, &worker, &session)?;
     assert!(Arc::ptr_eq(&first, &second));
-    assert_eq!(CREATED.load(Ordering::SeqCst), 1);
     assert_eq!(
         first
             .session_config()
@@ -436,19 +417,5 @@ async fn job_context_is_created_once_per_job_and_dropped_when_the_job_closes()
     );
     assert!(output.is_err());
     assert!(runner.job_contexts.is_empty());
-    assert_eq!(CREATED.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn job_context_requires_the_worker_session_factory() -> Result<(), TestError> {
-    let mut system = ActorSystem::new();
-    let mut runner = TaskRunnerActor::new(components(&mut system, "job-context-missing")?);
-    let session = JobSession::capture(&ConfigOptions::default())?;
-    assert!(
-        runner
-            .job_context(JobId::from(1), &TaskContext::default(), &session)
-            .is_err()
-    );
     Ok(())
 }

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -116,6 +117,19 @@ impl JobRunner for LocalJobRunner {
     async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
+}
+
+/// Applies the settings that cluster execution requires, on the driver that plans for the
+/// cluster and on workers.
+///
+/// Each task of a stage decodes its own copy of the plan, so the partitions of a stage cannot
+/// share state within a process. DataFusion's coordinated nested loop join fallback and its
+/// hash join dynamic filter both assume that every partition of the plan reports to
+/// process-local state, so both are disabled. Task-local TopK and aggregate dynamic filters
+/// remain enabled.
+pub fn apply_cluster_constraints(options: &mut ConfigOptions) {
+    options.execution.enable_nlj_coordinated_fallback = false;
+    options.optimizer.enable_join_dynamic_filter_pushdown = false;
 }
 
 pub struct ClusterJobRunner {

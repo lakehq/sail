@@ -19,3 +19,4 @@ pub(crate) mod r#gen {
 pub(crate) use actor::{WorkerActor, WorkerLocation, WorkerMessage, WorkerOptions};
 pub(crate) use client::WorkerClientSet;
 pub(crate) use r#gen::worker_service_client::WorkerServiceClient;
+pub(crate) use session::create_job_context;

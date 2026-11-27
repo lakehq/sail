@@ -7,7 +7,7 @@ mod worker;
 use std::str::FromStr;
 
 use datafusion::common::Result;
-use datafusion::common::config::{ConfigOptions, MaxRowGroupBytes, ParquetOptions};
+use datafusion::common::config::{MaxRowGroupBytes, ParquetOptions};
 use datafusion::common::parquet_config::{DFParquetWriterVersion, DFTimeUnit};
 use datafusion::prelude::SessionContext;
 pub use job_runner::{
@@ -26,19 +26,6 @@ pub trait SessionFactory<I>: Send {
     fn create(&mut self, info: I) -> Result<SessionContext>;
 }
 
-/// Applies the settings that cluster execution requires, on the driver that plans for the
-/// cluster and on workers.
-///
-/// Each task of a stage decodes its own copy of the plan, so the partitions of a stage cannot
-/// share state within a process. DataFusion's coordinated nested loop join fallback and its
-/// hash join dynamic filter both assume that every partition of the plan reports to
-/// process-local state, so both are disabled. Task-local TopK and aggregate dynamic filters
-/// remain enabled.
-fn apply_cluster_constraints(options: &mut ConfigOptions) {
-    options.execution.enable_nlj_coordinated_fallback = false;
-    options.optimizer.enable_join_dynamic_filter_pushdown = false;
-}
-
 fn temporary_file_compression(
     compression: TemporaryFileCompression,
 ) -> datafusion::common::config::SpillCompression {
@@ -51,7 +38,8 @@ fn temporary_file_compression(
     }
 }
 
-// Workers run tasks with these settings from the server session (see `worker.rs`).
+// Workers run tasks with these settings from the server session (see `create_job_context` in
+// `sail-execution`).
 fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) -> Result<()> {
     parquet.created_by = SAIL_PARQUET_CREATED_BY.to_string();
     parquet.enable_page_index = config.enable_page_index;

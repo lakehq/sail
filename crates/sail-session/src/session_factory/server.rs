@@ -21,6 +21,7 @@ use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
+use sail_execution::job_runner::apply_cluster_constraints;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
 
@@ -150,7 +151,7 @@ impl ServerSessionFactory {
             self.config.mode,
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
         ) {
-            super::apply_cluster_constraints(config.options_mut());
+            apply_cluster_constraints(config.options_mut());
         }
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)

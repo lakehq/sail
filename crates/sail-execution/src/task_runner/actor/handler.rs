@@ -10,8 +10,6 @@ use log::{error, warn};
 use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job_context::JobContextFactory;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
@@ -24,7 +22,7 @@ use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::preparation::TaskPreparation;
 use crate::task_runner::{TaskBatchContext, TaskRunnerActor, TaskRunnerPlacement};
 use crate::worker::r#gen::JobSession;
-use crate::worker::{WorkerLocation, WorkerMessage};
+use crate::worker::{WorkerLocation, WorkerMessage, create_job_context};
 
 impl TaskRunnerActor {
     pub(super) fn handle_run_task_batch(
@@ -115,8 +113,7 @@ impl TaskRunnerActor {
         if let Some(context) = self.job_contexts.get(&job_id) {
             return Ok(context.clone());
         }
-        let factory = worker.extension::<JobContextFactory>()?;
-        let context = Arc::new(factory.create(worker, session.config_options()?)?);
+        let context = Arc::new(create_job_context(worker, session.config_options()?)?);
         self.job_contexts.insert(job_id, context.clone());
         Ok(context)
     }
