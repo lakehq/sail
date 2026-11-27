@@ -29,15 +29,10 @@ impl Debug for RunTaskBatchRequest {
 
 impl Debug for JobSession {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let JobSession {
-            options,
-            parquet,
-            spark_time_zone,
-        } = self;
+        let JobSession { options, parquet } = self;
         f.debug_struct("JobSession")
             .field("options", options)
             .field("parquet", &DebugBinary::from(parquet))
-            .field("spark_time_zone", spark_time_zone)
             .finish()
     }
 }
