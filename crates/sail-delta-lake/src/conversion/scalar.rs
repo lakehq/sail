@@ -531,7 +531,8 @@ fn number_from_f64(value: f64) -> Value {
 ///
 /// A TIMESTAMP value (a type with a time zone) is parsed as `CAST(value AS TIMESTAMP)` in the
 /// session time zone, as Delta-Spark reads partition values: a value without an offset is a wall
-/// clock in that zone, whatever the label of the type. Other values are parsed by Arrow.
+/// clock in that zone, whatever the label of the type. TIMESTAMP_NTZ and other values are parsed
+/// by Arrow.
 #[derive(Debug)]
 pub struct PartitionValueParser {
     field_dt: ArrowDataType,
