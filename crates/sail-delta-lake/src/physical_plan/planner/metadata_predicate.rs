@@ -106,7 +106,7 @@ fn type_partition_columns(
             // Parse a TIMESTAMP value as `PartitionValueParser` does, in the session time zone.
             if let ArrowDataType::Timestamp(_, Some(_)) = data_type {
                 let parse = Timestamp::try_new(Some(Arc::from(time_zone)), true, false)?;
-                value = ScalarUDF::new_from_impl(parse).call(vec![value]);
+                value = ScalarUDF::from(parse).call(vec![value]);
             }
             Ok(Transformed::yes(Expr::Cast(Cast::new(
                 Box::new(value),
