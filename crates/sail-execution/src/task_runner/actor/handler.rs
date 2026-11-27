@@ -113,7 +113,7 @@ impl TaskRunnerActor {
         if let Some(context) = self.job_contexts.get(&job_id) {
             return Ok(context.clone());
         }
-        let context = Arc::new(create_job_context(worker, session.config_options()?)?);
+        let context = Arc::new(create_job_context(worker, session.config_options()?));
         self.job_contexts.insert(job_id, context.clone());
         Ok(context)
     }

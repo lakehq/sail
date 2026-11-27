@@ -106,10 +106,7 @@ impl JobSession {
 ///   enforced even if the driver session changes them.
 ///
 /// Every other option follows the driver session, including options that DataFusion adds later.
-pub(crate) fn create_job_context(
-    worker: &TaskContext,
-    mut options: ConfigOptions,
-) -> Result<TaskContext> {
+pub(crate) fn create_job_context(worker: &TaskContext, mut options: ConfigOptions) -> TaskContext {
     let local = worker.session_config().options();
     options.execution.target_partitions = local.execution.target_partitions;
     options.execution.planning_concurrency = local.execution.planning_concurrency;
@@ -117,7 +114,7 @@ pub(crate) fn create_job_context(
     apply_cluster_constraints(&mut options);
     let mut config = worker.session_config().clone();
     *config.options_mut() = options;
-    Ok(TaskContext::new(
+    TaskContext::new(
         None,
         worker.session_id(),
         config,
@@ -126,7 +123,7 @@ pub(crate) fn create_job_context(
         worker.aggregate_functions().clone(),
         worker.window_functions().clone(),
         worker.runtime_env(),
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -336,7 +333,7 @@ mod tests {
         driver.execution.parquet.metadata_size_hint = Some(128);
         set_spark_session_time_zone(&mut driver, "America/Los_Angeles")?;
 
-        let job = create_job_context(&worker, driver)?;
+        let job = create_job_context(&worker, driver);
         let options = job.session_config().options();
         let local = worker.session_config().options();
         assert_eq!(options.execution.batch_size.get(), 7);
