@@ -36,11 +36,11 @@ pub(super) struct CatalogTableLookupKey {
     pub required_format: Option<String>,
 }
 
-struct SharedTableSource(Arc<dyn TableSource>);
+struct SharedTableSources(Vec<Arc<dyn TableSource>>);
 
-impl std::fmt::Debug for SharedTableSource {
+impl std::fmt::Debug for SharedTableSources {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SharedTableSource").finish_non_exhaustive()
+        f.debug_tuple("SharedTableSources").finish_non_exhaustive()
     }
 }
 
@@ -161,7 +161,7 @@ pub(super) struct PlanResolverState {
     windows: std::collections::HashMap<String, spec::Window>,
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
-    table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    table_sources: HashMap<TableSourceKey, SharedTableSources>,
     /// The successful catalog table lookups so far, shared by repeated references to
     /// the same table within the query.
     catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
@@ -504,14 +504,16 @@ impl PlanResolverState {
         self.ctes.values()
     }
 
-    pub fn get_table_source(&self, key: &TableSourceKey) -> Option<Arc<dyn TableSource>> {
-        self.table_sources
-            .get(key)
-            .map(|source| Arc::clone(&source.0))
+    pub fn get_table_sources(&self, key: &TableSourceKey) -> Option<Vec<Arc<dyn TableSource>>> {
+        self.table_sources.get(key).map(|sources| sources.0.clone())
     }
 
-    pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
-        self.table_sources.insert(key, SharedTableSource(source));
+    pub fn insert_table_sources(
+        &mut self,
+        key: TableSourceKey,
+        sources: Vec<Arc<dyn TableSource>>,
+    ) {
+        self.table_sources.insert(key, SharedTableSources(sources));
     }
 
     pub fn get_catalog_table_lookup(

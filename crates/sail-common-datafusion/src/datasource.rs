@@ -219,6 +219,13 @@ pub struct BucketBy {
     pub num_buckets: usize,
 }
 
+/// A literal catalog location and its values in declared partition column order.
+#[derive(Debug, Clone)]
+pub struct RegisteredPartition {
+    pub location: Option<String>,
+    pub values: Vec<datafusion_common::ScalarValue>,
+}
+
 /// Information required to create a data source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -491,6 +498,24 @@ pub trait DataSource: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
+    /// Whether catalog partition metadata controls ordinary reads of this data source.
+    fn supports_registered_partitions(&self) -> bool {
+        false
+    }
+
+    /// Creates a file source for registered partitions in one object store.
+    async fn create_partitioned_source(
+        &self,
+        _ctx: &dyn Session,
+        _info: SourceInfo,
+        _partitions: Vec<RegisteredPartition>,
+    ) -> Result<Arc<dyn TableSource>> {
+        Err(not_impl_datafusion_err!(
+            "registered partition reads for {}",
+            self.name()
+        ))
+    }
+
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
@@ -524,6 +549,11 @@ impl DataSourceRegistry {
     }
 
     pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
+        self.get_data_source_if_registered(name)?
+            .ok_or_else(|| missing_data_source_error(name))
+    }
+
+    pub fn get_data_source_if_registered(&self, name: &str) -> Result<Option<Arc<dyn DataSource>>> {
         let sources = self
             .sources
             .read()
@@ -538,10 +568,7 @@ impl DataSourceRegistry {
             | "org.apache.spark.sql.execution.datasources.json.jsonfileformat" => "json",
             _ => &normalized,
         };
-        sources
-            .get(canonical)
-            .cloned()
-            .ok_or_else(|| missing_data_source_error(name))
+        Ok(sources.get(canonical).cloned())
     }
 
     pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {

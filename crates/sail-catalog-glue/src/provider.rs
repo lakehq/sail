@@ -10,12 +10,16 @@ use aws_sdk_glue::types::{
     Partition, StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::hive_format::HiveDetectedFormat;
+use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
+use sail_catalog::lakehouse::{
+    LakehouseResolvedTable, RegisteredFileTable, ResolveLakehouseTableRequest,
+    resolve_lakehouse_table_status,
+};
 use sail_catalog::provider::{
     AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
     CreateTableMetadataRequirement, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode,
-    Namespace,
+    Namespace, PartitionFileFormat,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -137,6 +141,50 @@ impl GlueCatalogProvider {
             location: db.location_uri().map(|s| s.to_string()),
             properties,
         })
+    }
+
+    async fn fetch_table(&self, database: &Namespace, table: &str) -> CatalogResult<Table> {
+        let client = self.get_client().await?;
+        let database_name = Self::database_name(database)?;
+
+        let result = client
+            .get_table()
+            .set_catalog_id(self.catalog_id())
+            .database_name(&database_name)
+            .name(table)
+            .send()
+            .await;
+
+        match result {
+            Ok(output) => {
+                let tbl = output
+                    .table
+                    .ok_or_else(|| CatalogError::External("Table response is empty".to_string()))?;
+
+                // Reject views - they should be accessed via get_view
+                if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
+                }
+
+                Ok(tbl)
+            }
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to get table: {service_err}"
+                    )))
+                }
+            }
+        }
     }
 
     fn table_to_status(
@@ -412,9 +460,50 @@ fn hive_storage_format(storage: Option<&StorageDescriptor>) -> String {
     .to_string()
 }
 
+fn csv_read_options(storage: Option<&StorageDescriptor>) -> Vec<(String, String)> {
+    let serde = storage.and_then(|sd| sd.serde_info());
+    let csv_parameters = serde
+        .filter(|serde| {
+            serde
+                .serialization_library()
+                .is_none_or(|s| s == "org.apache.hadoop.hive.serde2.OpenCSVSerde")
+        })
+        .and_then(|serde| serde.parameters());
+    [
+        ("separatorChar", "delimiter"),
+        ("quoteChar", "quote"),
+        ("escapeChar", "escape"),
+    ]
+    .into_iter()
+    .filter_map(|(property, option)| {
+        csv_parameters?
+            .get(property)
+            .map(|value| (option.to_string(), value.clone()))
+    })
+    .collect()
+}
+
 fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
+    let storage = partition.storage_descriptor();
+    let serde = storage
+        .and_then(|sd| sd.serde_info())
+        .and_then(|s| s.serialization_library());
+    let input = storage.and_then(|sd| sd.input_format());
+    let output = storage.and_then(|sd| sd.output_format());
+    let text = HiveStorageFormat::textfile();
+    let format = if serde.is_none() && input.is_none() && output.is_none() {
+        PartitionFileFormat::Inherit
+    } else if serde.is_none()
+        && input.is_none_or(|i| i == text.input_format)
+        && output.is_none_or(|o| o == text.output_format)
+    {
+        PartitionFileFormat::HiveText
+    } else {
+        PartitionFileFormat::Explicit(hive_storage_format(storage))
+    };
     CatalogFilePartition {
-        format: hive_storage_format(partition.storage_descriptor()),
+        read_options: csv_read_options(storage),
+        format,
         location: partition
             .storage_descriptor
             .and_then(|sd| sd.location)
@@ -724,47 +813,33 @@ impl CatalogProvider for GlueCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let client = self.get_client().await?;
-        let database_name = Self::database_name(database)?;
+        self.table_to_status(database, &self.fetch_table(database, table).await?)
+    }
 
-        let result = client
-            .get_table()
-            .set_catalog_id(self.catalog_id())
-            .database_name(&database_name)
-            .name(table)
-            .send()
-            .await;
-
-        match result {
-            Ok(output) => {
-                let tbl = output
-                    .table()
-                    .ok_or_else(|| CatalogError::External("Table response is empty".to_string()))?;
-
-                // Reject views - they should be accessed via get_view
-                if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
-                    return Err(CatalogError::NotFound(
-                        CatalogObject::Table,
-                        table.to_string(),
-                    ));
-                }
-
-                self.table_to_status(database, tbl)
-            }
-            Err(sdk_err) => {
-                let service_err = sdk_err.into_service_error();
-                if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound(
-                        CatalogObject::Table,
-                        table.to_string(),
-                    ))
-                } else {
-                    Err(CatalogError::External(format!(
-                        "Failed to get table: {service_err}"
-                    )))
-                }
-            }
+    async fn get_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        let table = self.fetch_table(database, table).await?;
+        let status = self.table_to_status(database, &table)?;
+        let mut resolved = resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        );
+        if !table.partition_keys().is_empty() && !iceberg::is_iceberg_parameters(table.parameters())
+        {
+            resolved.registered_file_table = Some(RegisteredFileTable {
+                read_options: csv_read_options(table.storage_descriptor()),
+                infer_reader_from_partitions: table_provider_format(table.parameters())
+                    .is_none_or(|provider| HiveStorageFormat::from_format(&provider).is_ok()),
+            });
         }
+        Ok((status, resolved))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
