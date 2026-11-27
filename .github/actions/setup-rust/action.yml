@@ -14,11 +14,7 @@ runs:
   using: composite
   steps:
     - name: Install protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        # Set the GitHub token to avoid rate limiting when using the GitHub API
-        # to get the latest protoc release.
-        repo-token: ${{ github.token }}
+      uses: $/.github/actions/setup-protoc
 
     # The Rust stable toolchain is likely installed already, but we need to check for updates.
     - name: Install Rust toolchain (stable)
