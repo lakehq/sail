@@ -87,3 +87,44 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) ->
     parquet.content_defined_chunking.norm_level = config.content_defined_chunking.norm_level;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::common::parquet_config::DFParquetCompression;
+    use sail_common::config::AppConfig;
+
+    use super::*;
+
+    #[test]
+    fn apply_parquet_config_maps_the_parquet_config() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = AppConfig::load()?;
+        config.parquet.enable_page_index = false;
+        config.parquet.pruning = false;
+        config.parquet.metadata_size_hint = Some(32768);
+        config.parquet.pushdown_filters = true;
+        config.parquet.schema_force_view_types = false;
+        config.parquet.binary_as_string = true;
+        config.parquet.compression = "gzip(3)".to_string();
+        config.parquet.max_row_group_size = 2048;
+        config.parquet.force_filter_selections = true;
+        config.parquet.max_in_list_size = 50;
+        config.parquet.max_row_group_bytes = Some(8192);
+        let mut parquet = ParquetOptions::default();
+        apply_parquet_config(&mut parquet, &config.parquet)?;
+        assert!(!parquet.enable_page_index);
+        assert!(!parquet.pruning);
+        assert_eq!(parquet.metadata_size_hint, Some(32768));
+        assert!(parquet.pushdown_filters);
+        assert!(!parquet.schema_force_view_types);
+        assert!(parquet.binary_as_string);
+        assert_eq!(parquet.compression, Some(DFParquetCompression::Gzip(3)));
+        assert_eq!(parquet.max_row_group_size, 2048);
+        assert!(parquet.force_filter_selections);
+        assert_eq!(parquet.max_in_list_size, 50);
+        assert_eq!(parquet.max_row_group_bytes.map(|v| v.get()), Some(8192));
+        assert_eq!(parquet.coerce_int96, Some(DFTimeUnit::Microsecond));
+        assert_eq!(parquet.bloom_filter_ndv, None);
+        assert_eq!(parquet.created_by, SAIL_PARQUET_CREATED_BY);
+        Ok(())
+    }
+}
