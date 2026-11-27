@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
+import pyarrow.parquet as pq
 import pytest
 from pyiceberg.avro.decoder import StreamingBinaryDecoder
 from pyiceberg.avro.file import AvroFile, AvroOutputFile
@@ -125,7 +126,9 @@ def table_with_partition_statistics(sql_catalog, variables):
     stats = path / "metadata" / "parent-stats.avro"
     with AvroOutputFile(table.io.new_output(stats.as_uri()), stats_schema, "table") as writer:
         writer.writer = construct_writer(_partition_stats_physical_schema(stats_schema))
-        writer.write_block([Record(partition, 0, 1, 1, 15, 0, 0, 0, 0, None, parent.timestamp_ms, parent.snapshot_id)])
+        writer.write_block(
+            [Record(partition, 0, 1, 1, 15, None, None, None, None, None, parent.timestamp_ms, parent.snapshot_id)]
+        )
     metadata = _find_latest_metadata(path)
     metadata["partition-statistics"] = [
         {
@@ -169,3 +172,15 @@ def partition_statistics_match_snapshot(query, spark, variables, snapshot, monke
     assert counts.pop("last_updated_snapshot_id") == current["snapshot-id"]
     assert counts.pop("last_updated_at") == current["timestamp-ms"]
     assert snapshot == {"partition": values, "statistics": counts}
+
+
+@then("the upgraded partition statistics match the snapshot")
+def upgraded_partition_statistics_match_snapshot(query, spark, snapshot):
+    (result,) = spark.sql(query).collect()
+    stats = pq.read_table(_local_file_path(result.partition_statistics_file))
+    (row,) = stats.to_pylist()
+    assert snapshot == {
+        field.name: {"required": not field.nullable, "value": row[field.name]}
+        for field in stats.schema
+        if field.name in {"data_record_count", "dv_count", "total_record_count"} or "_delete_" in field.name
+    }

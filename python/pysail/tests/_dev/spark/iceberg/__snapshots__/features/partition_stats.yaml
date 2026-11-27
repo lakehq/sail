@@ -1,5 +1,29 @@
 # serializer version: 1
 ---
+name: "test_a_v3_table_reuses_avro_statistics_with_null_v2_delete_counts"
+data:
+  data_record_count:
+    required: true
+    value: 3
+  dv_count:
+    required: true
+    value: 0
+  equality_delete_file_count:
+    required: true
+    value: 0
+  equality_delete_record_count:
+    required: true
+    value: 0
+  position_delete_file_count:
+    required: true
+    value: 0
+  position_delete_record_count:
+    required: true
+    value: 0
+  total_record_count:
+    required: false
+    value: null
+---
 name: "test_incremental_avro_statistics_preserve_typed_partition_values"
 data:
   partition:

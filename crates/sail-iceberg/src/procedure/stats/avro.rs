@@ -169,18 +169,26 @@ fn decode_record(
         .fields()
         .iter()
         .map(|field| {
-            let Some((value, source)) = by_id.remove(&field.id) else {
-                if field.required {
-                    // A v2 file may omit delete metrics and has no v3 deletion-vector count.
-                    return match field.id {
-                        6 | 8 => Ok(ScalarValue::Int64(Some(0))),
-                        7 | 9 | 13 => Ok(ScalarValue::Int32(Some(0))),
-                        _ => exec_err!("Missing required partition statistic {}", field.name),
-                    };
+            let value = by_id
+                .remove(&field.id)
+                .map(|(value, source)| decode(value, source, &field.field_type))
+                .transpose()?;
+            match (field.id, value) {
+                // V2 delete counts can be absent or null. V3 requires numeric counts.
+                (6 | 8, None | Some(ScalarValue::Int64(None))) if field.required => {
+                    Ok(0_i64.into())
                 }
-                return ScalarValue::try_from(&iceberg_type_to_arrow(&field.field_type)?);
-            };
-            decode(value, source, &field.field_type)
+                (7 | 9, None | Some(ScalarValue::Int32(None))) if field.required => {
+                    Ok(0_i32.into())
+                }
+                // Deletion vectors did not exist in v2.
+                (13, None) if field.required => Ok(0_i32.into()),
+                (_, Some(value)) => Ok(value),
+                (_, None) if field.required => {
+                    exec_err!("Missing required partition statistic {}", field.name)
+                }
+                (_, None) => ScalarValue::try_from(&iceberg_type_to_arrow(&field.field_type)?),
+            }
         })
         .collect()
 }
