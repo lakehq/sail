@@ -20,7 +20,9 @@ use crate::spec::{
     ManifestFile, ManifestMetadata, ManifestWriter, Operation, PrimitiveLiteral, SnapshotBuilder,
     SnapshotReference, TableMetadata, TableRequirement, TableUpdate,
 };
-use crate::table::files::{EntrySelection, ManifestScope, SnapshotScope, scan_manifests};
+use crate::table::files::{
+    EntrySelection, ManifestScope, SnapshotScope, scan_manifests_with_budget,
+};
 use crate::table::metadata_loader::table_metadata_location;
 
 const TARGET_SIZE_PROPERTY: &str = "commit.manifest.target-size-bytes";
@@ -99,7 +101,7 @@ impl RewriteManifests {
             table_url,
             metadata,
             output_schema,
-            MAX_ENTRIES,
+            ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
             MAX_OUTPUT_BYTES,
         )
         .await
@@ -119,7 +121,7 @@ impl RewriteManifests {
             table_url,
             metadata,
             output_schema,
-            max_entries,
+            ManifestReadBudget::new(MAX_INPUT_BYTES, max_entries),
             MAX_OUTPUT_BYTES,
         )
         .await
@@ -131,7 +133,7 @@ impl RewriteManifests {
         table_url: &url::Url,
         metadata: &TableMetadata,
         output_schema: SchemaRef,
-        max_entries: usize,
+        mut input: ManifestReadBudget,
         max_output_bytes: usize,
     ) -> Result<PreparedManifestRewrite> {
         let mut budget = OutputBudget::new(max_output_bytes);
@@ -165,13 +167,14 @@ impl RewriteManifests {
         if parent.key_id.is_some() || !metadata.encryption_keys.is_empty() {
             return not_impl_err!("rewrite_manifests does not support encrypted table metadata");
         }
-        let mut manifests = scan_manifests(
+        let mut manifests = scan_manifests_with_budget(
             store,
             metadata,
             &ManifestScope {
                 snapshots: SnapshotScope::Current,
                 content: None,
             },
+            &mut input,
         )
         .await?;
         let mut selected = HashSet::new();
@@ -242,7 +245,6 @@ impl RewriteManifests {
         };
         let mut added = vec![];
         let mut live_entries = 0usize;
-        let mut input = ManifestReadBudget::new(MAX_INPUT_BYTES, max_entries);
         let mut replaced = HashSet::new();
         for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
             // Retain the original schema when rewriting historical manifests: using only the
@@ -758,7 +760,7 @@ pub(crate) mod tests {
                     .await
                     .expect("objects");
                 let error = RewriteManifests { spec_id: None }
-                    .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 4)
+                    .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 7)
                     .await
                     .err()
                     .expect("retained entries share budget");
@@ -776,7 +778,13 @@ pub(crate) mod tests {
             let counting = Arc::new(crate::io::test_store::TestStore::new(store.base.clone()));
             let store = StoreContext::new(counting.clone(), &url).expect("counting store");
             let prepared = RewriteManifests { spec_id: None }
-                .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 5)
+                .prepare_with_entry_limit(
+                    &store,
+                    &url,
+                    &metadata,
+                    output_schema(),
+                    if upgraded { 8 } else { 5 },
+                )
                 .await
                 .expect("prepare");
             let gets = counting.gets.lock().expect("get counts");
@@ -845,6 +853,56 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn inline_v1_rewrite_charges_discovery_even_for_a_noop() {
+        let version = FormatVersion::V1;
+        let (store, url, mut metadata, manifests) =
+            rewrite_fixture(version, vec![(0, vec![entry(1, version)])], false).await;
+        let descriptor = &manifests[0];
+        let size = descriptor.manifest_length as u64;
+        metadata.snapshots[0].manifest_list.clear();
+        metadata.snapshots[0].manifests = Some(vec![descriptor.manifest_path.clone()]);
+
+        // With one small manifest, discovery alone reads one path and one record.
+        // Forcing a rewrite must charge the read of that same file a second time.
+        for rewrite in [false, true] {
+            let (bytes, records) = if rewrite {
+                metadata
+                    .properties
+                    .insert(TARGET_SIZE_PROPERTY.into(), "1".into());
+                (2 * size, 3)
+            } else {
+                (size, 2)
+            };
+            for (byte_limit, entry_limit, error) in [
+                (
+                    bytes - 1,
+                    records,
+                    Some("Manifest input byte limit exceeded"),
+                ),
+                (bytes, records - 1, Some("Manifest entry limit exceeded")),
+                (bytes, records, None),
+            ] {
+                let result = operation()
+                    .prepare_with_limits(
+                        &store,
+                        &url,
+                        &metadata,
+                        output_schema(),
+                        ManifestReadBudget::new(byte_limit, entry_limit),
+                        MAX_OUTPUT_BYTES,
+                    )
+                    .await;
+                if let Some(error) = error {
+                    let err = result.err().expect("input budget must be enforced");
+                    assert!(err.to_string().contains(error), "{err}");
+                } else {
+                    assert_eq!(!result.expect("exact budget").updates.is_empty(), rewrite);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn entry_budget_counts_deleted_records_across_manifests_before_staging() {
         use futures::TryStreamExt;
 
@@ -875,7 +933,7 @@ pub(crate) mod tests {
                 vec![(0, entries.clone())],
                 vec![(0, entries[..2].to_vec()), (0, entries[2..].to_vec())],
             ] {
-                let (store, url, mut metadata, _) =
+                let (store, url, mut metadata, descriptors) =
                     rewrite_fixture(FormatVersion::V2, inputs, false).await;
                 metadata
                     .properties
@@ -887,11 +945,12 @@ pub(crate) mod tests {
                     .await
                     .expect("objects");
                 let metadata_before = serde_json::to_value(&metadata).expect("metadata");
-                for limit in [0, 2, 3] {
+                let records = descriptors.len() + entries.len();
+                for limit in [0, records - 1, records] {
                     let result = RewriteManifests { spec_id: None }
                         .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), limit)
                         .await;
-                    if limit < 3 {
+                    if limit < records {
                         let error = result.err().expect("entry limit");
                         assert!(
                             error.to_string().contains("Manifest entry limit exceeded"),
@@ -1052,7 +1111,14 @@ pub(crate) mod tests {
         assert_eq!(list.entries().len(), 3, "includes out-of-spec descriptor");
         for limit in [0, 1, manifests_size, manifests_size + 1] {
             let error = operation()
-                .prepare_with_limits(&store, &url, &metadata, output_schema(), MAX_ENTRIES, limit)
+                .prepare_with_limits(
+                    &store,
+                    &url,
+                    &metadata,
+                    output_schema(),
+                    ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
+                    limit,
+                )
                 .await
                 .err()
                 .expect("output limit");
@@ -1157,7 +1223,14 @@ pub(crate) mod tests {
         assert!(discarded_bytes < limit);
         assert!(discarded_bytes > 64);
         let prepared = operation()
-            .prepare_with_limits(&store, &url, &table, output_schema(), MAX_ENTRIES, limit)
+            .prepare_with_limits(
+                &store,
+                &url,
+                &table,
+                output_schema(),
+                ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
+                limit,
+            )
             .await
             .expect("released no-op budget");
         assert_eq!(

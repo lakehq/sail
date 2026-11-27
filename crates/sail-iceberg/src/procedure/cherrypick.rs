@@ -30,8 +30,6 @@ use crate::table::files::inherit_manifest_entries;
 use crate::table::metadata_loader::table_metadata_location;
 
 const STAGED_WAP_ID: &str = "wap.id";
-const PUBLISHED_WAP_ID: &str = "published-wap-id";
-const SOURCE_SNAPSHOT_ID: &str = "source-snapshot-id";
 
 pub(crate) enum CherryPick {
     Snapshot(i64),
@@ -100,7 +98,7 @@ pub(super) async fn prepare(
     if source.summary.operation == Operation::Append || dynamic {
         if let Some(wap) = props.get(STAGED_WAP_ID).filter(|v| !v.is_empty())
             && ancestors.iter().any(|s| {
-                [STAGED_WAP_ID, PUBLISHED_WAP_ID]
+                [STAGED_WAP_ID, keys::PUBLISHED_WAP_ID]
                     .iter()
                     .any(|k| s.summary.additional_properties.get(*k) == Some(wap))
             })
@@ -126,7 +124,7 @@ pub(super) async fn prepare(
         if ancestor
             .summary
             .additional_properties
-            .get(SOURCE_SNAPSHOT_ID)
+            .get(keys::SOURCE_SNAPSHOT_ID)
             == Some(&source_id)
         {
             return plan_err!(
@@ -182,9 +180,9 @@ pub(super) async fn prepare(
         )
         .await?;
     let mut summary = replay.summary(source, ancestors.first().copied());
-    summary = summary.with_property(SOURCE_SNAPSHOT_ID, source_id);
+    summary = summary.with_property(keys::SOURCE_SNAPSHOT_ID, source_id);
     if let Some(wap) = props.get(STAGED_WAP_ID) {
-        summary = summary.with_property(PUBLISHED_WAP_ID, wap);
+        summary = summary.with_property(keys::PUBLISHED_WAP_ID, wap);
     }
     let list_path = format!("metadata/snap-{snapshot_id}-{}.avro", uuid::Uuid::new_v4());
     let mut snapshot = SnapshotBuilder::new()

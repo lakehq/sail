@@ -169,6 +169,31 @@ def test_pick_replayed_overwrite(spark, target):
     assert [r.id for r in spark.table(table).orderBy("id").collect()] == [20, 30, 40]
 
 
+@pytest.mark.parametrize("key", ["source-snapshot-id", "published-wap-id"])
+def test_append_cannot_claim_snapshot_publication(spark, target, key):
+    table, path = target
+    write(spark, table, 1, 0)
+    base = _find_latest_metadata(path)["current-snapshot-id"]
+    write(spark, table, 2, 0, wap="audit")
+    source = _find_latest_metadata(path)["current-snapshot-id"]
+    rollback(spark, table, base)
+    before = _find_latest_metadata(path)
+
+    setting = f"spark.sql.iceberg.snapshot-property.{key}"
+    spark.conf.set(setting, str(source) if key == "source-snapshot-id" else "audit")
+    try:
+        with pytest.raises(PySparkException, match=f"snapshot property '{key}' is reserved"):
+            write(spark, table, 3, 0)
+    finally:
+        spark.conf.unset(setting)
+
+    assert _find_latest_metadata(path) == before
+    write(spark, table, 3, 0)
+    result = spark.sql(f"CALL system.publish_changes('{table}', 'audit')").first()
+    assert result.source_snapshot_id == source
+    assert [r.id for r in spark.table(table).orderBy("id").collect()] == [1, 2, 3]
+
+
 def test_publish_requires_unique_staged_id(spark, target):
     table, path = target
     for identifier in (1, 2):

@@ -240,6 +240,8 @@ CALL system.rewrite_data_files(
 
 To publish a snapshot staged by an Iceberg writer, supply its snapshot ID or its unique WAP ID.
 Choose one call for the source snapshot. Both return `source_snapshot_id` and `current_snapshot_id`.
+Sail reserves the `source-snapshot-id` and `published-wap-id` summary keys for publication.
+Setting either key through a snapshot-property write option or session setting causes the write to fail.
 
 ```sql
 CALL system.cherrypick_snapshot(table => 'users', snapshot_id => 123);

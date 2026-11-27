@@ -8,7 +8,9 @@ use datafusion::common::{Result, exec_err};
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 
-use crate::io::{StoreContext, load_manifest, load_snapshot_manifest_list};
+use crate::io::{
+    ManifestReadBudget, StoreContext, load_manifest, load_snapshot_manifest_list_with_budget,
+};
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
     ManifestStatus, TableMetadata,
@@ -56,6 +58,21 @@ pub(crate) async fn scan_manifests(
     metadata: &TableMetadata,
     scope: &ManifestScope,
 ) -> Result<Vec<ManifestFile>> {
+    scan_manifests_with_budget(
+        store,
+        metadata,
+        scope,
+        &mut ManifestReadBudget::new(u64::MAX, usize::MAX),
+    )
+    .await
+}
+
+pub(crate) async fn scan_manifests_with_budget(
+    store: &StoreContext,
+    metadata: &TableMetadata,
+    scope: &ManifestScope,
+    input: &mut ManifestReadBudget,
+) -> Result<Vec<ManifestFile>> {
     let snapshots = match scope.snapshots {
         SnapshotScope::Current => metadata.current_snapshot().into_iter().collect::<Vec<_>>(),
         SnapshotScope::All => metadata.snapshots.iter().collect(),
@@ -63,15 +80,15 @@ pub(crate) async fn scan_manifests(
     let mut paths = HashSet::new();
     let mut manifests = vec![];
     for snapshot in snapshots {
-        let list = load_snapshot_manifest_list(store, snapshot).await?;
-        for manifest in list.entries() {
+        let list = load_snapshot_manifest_list_with_budget(store, snapshot, input).await?;
+        for manifest in list.into_entries() {
             if scope
                 .content
                 .as_ref()
                 .is_none_or(|content| &manifest.content == content)
                 && paths.insert(manifest.manifest_path.clone())
             {
-                manifests.push(manifest.clone());
+                manifests.push(manifest);
             }
         }
     }
