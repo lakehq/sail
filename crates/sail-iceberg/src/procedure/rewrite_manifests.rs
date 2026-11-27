@@ -685,7 +685,7 @@ async fn read_entries(
     let (object_store, path) = store.resolve(&descriptor.manifest_path)?;
     let bytes = object_store.get(&path).await?.bytes().await?;
     let (manifest_metadata, decoded) =
-        Manifest::decode_avro_entries_with_limit(&bytes, *remaining_entries, |entry, value| {
+        Manifest::decode_avro_entries_with_limit(&bytes, *remaining_entries, |entry, value, _| {
             apache_avro::from_value::<RawEntry>(value)
                 .map(|raw| (entry, raw))
                 .map_err(|error| format!("Avro decode manifest bounds error: {error}"))

@@ -142,6 +142,45 @@ def test_partition_stats_full_incremental_and_reuse(spark, tmp_path, version):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+@pytest.mark.parametrize(
+    ("oversized", "error"),
+    [("object", "partition statistics input byte limit"), ("groups", "partition statistics group limit")],
+)
+def test_partition_stats_rejects_oversized_ancestor(spark, tmp_path, oversized, error):
+    name = "oversized_partition_stats"
+    spark.sql(f"""CREATE TABLE {name} (id INT, p INT) USING iceberg PARTITIONED BY (p)
+        LOCATION '{escape_sql_string_literal(str(tmp_path))}'""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 10)")
+        call = f"CALL system.compute_partition_stats('{name}')"
+        ancestor = _local_file_path(spark.sql(call).first()[0])
+        original = ancestor.read_bytes()
+        spark.sql(f"INSERT INTO {name} VALUES (2, 10)")
+        before = _find_latest_metadata(tmp_path)
+        files = set(ancestor.parent.iterdir())
+        if oversized == "object":
+            # The descriptor still advertises the original size. The object itself is sparse.
+            with ancestor.open("ab") as stream:
+                stream.truncate(256 * 1024 * 1024 + 1)
+        else:
+            # Compress a large set of distinct ancestor keys into a small Parquet file.
+            table = pq.read_table(ancestor)
+            rows = 100_001
+            key_type = table.schema.field("partition").type
+            keys = pa.StructArray.from_arrays([pa.array(range(rows), type=pa.int32())], fields=list(key_type))
+            expanded = table.take(pa.repeat(pa.scalar(0), rows))
+            pq.write_table(expanded.set_column(0, table.schema.field(0), keys), ancestor)
+        with pytest.raises(Exception, match=error):
+            spark.sql(call).collect()
+        assert _find_latest_metadata(tmp_path) == before
+        assert set(ancestor.parent.iterdir()) == files
+        ancestor.write_bytes(original)
+        result = pq.read_table(_local_file_path(spark.sql(call).first()[0]))
+        assert result["data_record_count"].to_pylist() == [2]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 def test_partition_stats_across_overwrite_then_append(spark, tmp_path):
     name = "replaced_partition_stats"
     path = tmp_path / name

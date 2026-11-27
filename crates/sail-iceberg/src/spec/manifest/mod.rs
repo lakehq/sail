@@ -127,7 +127,7 @@ pub(crate) fn replace_avro_schema_header(
     replace_avro_schema_header_with_limit(bytes, schema, partition_type, usize::MAX)
 }
 
-pub(super) fn replace_avro_schema_header_with_limit(
+pub(crate) fn replace_avro_schema_header_with_limit(
     bytes: &[u8],
     schema: &AvroSchema,
     partition_type: &StructType,
@@ -390,8 +390,10 @@ fn partition_avro_header(
 
 fn decode_avro_values<T, F>(bytes: &[u8], max_entries: usize, decode: &F) -> Result<Vec<T>, String>
 where
-    F: Fn(AvroValue) -> Result<T, String>,
+    F: FnMut(AvroValue) -> Result<T, String> + Clone,
 {
+    // A codec retry starts with fresh caller state (e.g. row IDs and byte budgets).
+    let mut decode = decode.clone();
     AvroReader::new(bytes)
         .map_err(|error| format!("Avro reader error: {error}"))?
         .enumerate()
@@ -402,7 +404,7 @@ where
             }
             value
                 .map_err(|error| format!("Avro read value error: {error}"))
-                .and_then(decode)
+                .and_then(&mut decode)
         })
         .collect()
 }
@@ -414,7 +416,7 @@ fn decode_iceberg_avro<T, F>(
     decode: F,
 ) -> Result<Vec<T>, String>
 where
-    F: Fn(AvroValue) -> Result<T, String>,
+    F: FnMut(AvroValue) -> Result<T, String> + Clone,
 {
     let (has_named_schema, requires_iceberg_codec) = partition_type.fields().iter().fold(
         (false, false),
@@ -577,14 +579,14 @@ impl Manifest {
         bs: &[u8],
         decode: impl Fn(ManifestEntry, &AvroValue) -> Result<T, String>,
     ) -> Result<(ManifestMetadata, Vec<T>), String> {
-        Self::decode_avro_entries_with_limit(bs, usize::MAX, decode)
+        Self::decode_avro_entries_with_limit(bs, usize::MAX, |entry, value, _| decode(entry, value))
     }
 
     /// Bound all records, including deleted entries, before collecting decoded values.
     pub(crate) fn decode_avro_entries_with_limit<T>(
         bs: &[u8],
         max_entries: usize,
-        decode: impl Fn(ManifestEntry, &AvroValue) -> Result<T, String>,
+        mut decode: impl FnMut(ManifestEntry, &AvroValue, FormatVersion) -> Result<T, String> + Clone,
     ) -> Result<(ManifestMetadata, Vec<T>), String> {
         // Parse manifest metadata from avro user metadata
         let header = parse_avro_object_header(bs)?;
@@ -595,28 +597,24 @@ impl Manifest {
             .partition_spec
             .partition_type(&metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let entries = decode_iceberg_avro(bs, &partition_type, max_entries, |value| {
-            let entry = match metadata.format_version {
+        let version = metadata.format_version;
+        let partition = &partition_type;
+        let table_schema = &metadata.schema;
+        let spec_id = metadata.partition_spec.spec_id();
+        let entries = decode_iceberg_avro(bs, partition, max_entries, move |value| {
+            let entry = match version {
                 FormatVersion::V1 => {
                     let entry: _serde::ManifestEntryV1 = avro_from_value(&value)
                         .map_err(|e| format!("Avro decode v1 entry error: {e}"))?;
-                    entry.into_entry(
-                        metadata.partition_spec.spec_id(),
-                        &partition_type,
-                        Some(&metadata.schema),
-                    )?
+                    entry.into_entry(spec_id, partition, Some(table_schema))?
                 }
                 FormatVersion::V2 | FormatVersion::V3 => {
                     let entry: _serde::ManifestEntryV2 = avro_from_value(&value)
                         .map_err(|e| format!("Avro decode entry error: {e}"))?;
-                    entry.into_entry(
-                        metadata.partition_spec.spec_id(),
-                        &partition_type,
-                        Some(&metadata.schema),
-                    )?
+                    entry.into_entry(spec_id, partition, Some(table_schema))?
                 }
             };
-            decode(entry, &value)
+            decode(entry, &value, version)
         })?;
 
         Ok((metadata, entries))
@@ -962,10 +960,14 @@ mod tests {
             .is_err()
         );
         assert_eq!(decoded.get(), 1);
-        assert_eq!(
-            super::decode_iceberg_avro(&bytes, &partition_type, 2, decode)?.len(),
-            2
-        );
+        // Row lineage and materialization budgets must restart along with the codec.
+        let mut ordinal = 0;
+        let ordinals = super::decode_iceberg_avro(&bytes, &partition_type, 2, move |value| {
+            decode(value)?;
+            ordinal += 1;
+            Ok(ordinal)
+        })?;
+        assert_eq!(ordinals, vec![1, 2]);
         assert!(
             super::decode_iceberg_avro(&bytes, &partition_type, 1, decode)
                 .err()

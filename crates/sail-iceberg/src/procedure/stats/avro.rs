@@ -7,10 +7,12 @@ use apache_avro::types::Value;
 use apache_avro::{Reader, Schema as AvroSchema};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion::common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, resources_err,
+};
 
 use crate::datasource::type_converter::{iceberg_field_to_arrow, iceberg_type_to_arrow};
-use crate::spec::avro_utils::{avro_compatible_name, create_avro_writer};
+use crate::spec::avro_utils::{LimitedWriter, avro_compatible_name, create_avro_writer};
 use crate::spec::{
     Literal, PrimitiveLiteral as L, PrimitiveType as P, StructType, Type, partition_stats_schemas,
 };
@@ -24,17 +26,24 @@ pub(super) fn write(
     batch: &RecordBatch,
     fields: &StructType,
     partition: &StructType,
+    limit: usize,
 ) -> Result<Vec<u8>> {
     let (schema, physical) = partition_stats_schemas(fields).map_err(DataFusionError::Execution)?;
-    let mut writer = create_avro_writer(&physical, Vec::new()).map_err(external)?;
+    let mut writer =
+        create_avro_writer(&physical, LimitedWriter::new(Vec::new(), limit)).map_err(external)?;
     for row in 0..batch.num_rows() {
         writer
             .append_value(encode_record(fields, batch.columns(), row)?)
             .map_err(external)?;
     }
     let bytes = writer.into_inner().map_err(external)?;
-    crate::spec::manifest::replace_avro_schema_header(&bytes, &schema, partition)
-        .map_err(DataFusionError::Execution)
+    crate::spec::manifest::replace_avro_schema_header_with_limit(
+        &bytes.into_inner(),
+        &schema,
+        partition,
+        limit,
+    )
+    .map_err(DataFusionError::Execution)
 }
 
 fn encode_record(fields: &StructType, columns: &[ArrayRef], row: usize) -> Result<Value> {
@@ -100,9 +109,12 @@ fn encode_record(fields: &StructType, columns: &[ArrayRef], row: usize) -> Resul
 pub(super) fn read(data: &[u8], fields: &StructType, schema: SchemaRef) -> Result<RecordBatch> {
     if let Some(physical) = crate::spec::manifest::stats_avro_physical_header(data)
         .map_err(DataFusionError::Execution)?
-        && let Ok(batch) = read_records(&physical, fields, schema.clone())
     {
-        return Ok(batch);
+        match read_records(&physical, fields, schema.clone()) {
+            Err(error @ DataFusionError::ResourcesExhausted(_)) => return Err(error),
+            Ok(batch) => return Ok(batch),
+            Err(_) => {}
+        }
     }
     read_records(data, fields, schema)
 }
@@ -111,8 +123,16 @@ fn read_records(data: &[u8], fields: &StructType, schema: SchemaRef) -> Result<R
     let reader = Reader::new(data).map_err(external)?;
     let source = reader.writer_schema().clone();
     let mut columns = vec![vec![]; fields.fields().len()];
-    for row in reader {
+    let mut used = 0;
+    for (index, row) in reader.enumerate() {
+        if index >= super::partition::MAX_GROUPS {
+            return resources_err!(
+                "Iceberg partition statistics group limit ({}) exceeded",
+                super::partition::MAX_GROUPS
+            );
+        }
         let row = decode_record(row.map_err(external)?, &source, fields)?;
+        super::partition::reserve_materialized(&mut used, ScalarValue::size_of_vec(&row))?;
         for (values, value) in columns.iter_mut().zip(row) {
             values.push(value);
         }
