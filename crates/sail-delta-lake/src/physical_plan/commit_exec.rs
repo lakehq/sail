@@ -947,12 +947,9 @@ impl ExecutionPlan for DeltaCommitExec {
                     partition_fields
                         .iter()
                         .map(|(name, parser)| {
+                            let raw = add.partition_values.get(name).and_then(Option::as_deref);
                             parser
-                                .parse(
-                                    add.partition_values
-                                        .get(name)
-                                        .and_then(|value| value.as_deref()),
-                                )
+                                .parse(raw)
                                 // ScalarValue compares float bits, while Spark equates signed zeros.
                                 .map(|value| match value {
                                     ScalarValue::Float32(Some(0.0)) => {
