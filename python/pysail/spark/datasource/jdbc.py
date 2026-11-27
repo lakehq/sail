@@ -209,7 +209,7 @@ class JdbcDataSourceReader(DataSourceReader):
         if n > 1 and self.partition_column is not None and lb != ub and ub - lb < n:  # type: ignore[operator]
             # Same as Spark: cap the partition count so that every stride is at least 1.
             logger.warning(
-                "The number of partitions is reduced because the specified number of partitions is less than "
+                "The number of partitions is reduced because the specified number of partitions is greater than "
                 "the difference between upper bound and lower bound. Updated number of partitions: %d; "
                 "Input number of partitions: %d; Lower bound: %d; Upper bound: %d.",
                 ub - lb,  # type: ignore[operator]
