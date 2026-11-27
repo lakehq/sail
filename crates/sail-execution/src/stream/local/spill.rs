@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{Result, exec_err};
+use datafusion::common::{DataFusionError, Result, exec_err};
 use datafusion::execution::TaskContext;
 use futures::future::{BoxFuture, Shared};
 use futures::{FutureExt, TryStreamExt, stream};
@@ -45,21 +45,30 @@ impl SpillStream {
         ))
     }
 
+    pub fn open_committed(&self) -> Option<Result<TaskStreamSource>> {
+        self.committed.clone().now_or_never().map(|result| {
+            let replay = result.map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Self::open(&replay, &self.context)
+        })
+    }
+
     pub fn subscribe(&self) -> TaskStreamSource {
         let committed = self.committed.clone();
         let context = self.context.clone();
         Box::pin(
             stream::once(async move {
                 let replay = committed.await?;
-                replay
-                    .open(&context)
-                    .map(|stream| {
-                        stream.map_err(|error| TaskStreamError::External(Arc::new(error)))
-                    })
-                    .map_err(|error| TaskStreamError::External(Arc::new(error)))
+                Self::open(&replay, &context).map_err(|e| TaskStreamError::External(Arc::new(e)))
             })
             .try_flatten(),
         )
+    }
+
+    fn open(replay: &ReplayPartition, context: &TaskContext) -> Result<TaskStreamSource> {
+        let stream = replay.open(context)?;
+        Ok(Box::pin(stream.map_err(|error| {
+            TaskStreamError::External(Arc::new(error))
+        })))
     }
 }
 
@@ -110,10 +119,15 @@ mod tests {
         )?;
         let (stream, mut sink) = SpillStream::try_new(schema.clone(), context.clone())?;
         sink.write(batch.clone()).await?;
+        assert!(stream.open_committed().is_none());
         let mut reader = stream.subscribe();
         assert!(futures::poll!(reader.next()).is_pending());
         sink.commit().await?;
-        let second = stream.subscribe();
+        assert_eq!(context.memory_pool().reserved(), 0);
+        let second = stream.open_committed().ok_or_else(|| {
+            datafusion::common::exec_datafusion_err!("expected a committed partition")
+        })??;
+        assert!(context.memory_pool().reserved() > 0);
         drop(stream);
         let first = reader
             .try_collect::<Vec<_>>()

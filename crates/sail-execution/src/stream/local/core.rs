@@ -232,6 +232,16 @@ impl LocalStreamManager {
             }
             return Ok(Box::pin(futures::stream::empty()));
         }
+        // A partition-pair input selects a single producer and channel. Reserve
+        // its committed reader at open, before the join consumes the memory pool.
+        // Merges still open each reader as they poll its stream.
+        let mut selected = keys.keys();
+        if let (Some(key), None) = (selected.next(), selected.next())
+            && let Some(LocalStreamState::Materialized { stream }) = self.streams.get(&key)
+            && let Some(source) = stream.open_committed()
+        {
+            return Ok(source?);
+        }
         let mut sources = vec![];
         let mut error = None;
         for key in keys.keys() {

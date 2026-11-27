@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, JoinType, Result, exec_err, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
@@ -12,12 +12,58 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use futures::future::{BoxFuture, Shared};
+use futures::channel::oneshot;
+use futures::future::{BoxFuture, Shared, try_join_all};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, TryStreamExt, stream};
 use sail_common_datafusion::replay::{check_bounded, replay_error};
 
 use crate::replay::ReplayExec;
+
+type ReaderOpen = BoxFuture<'static, Result<()>>;
+
+/// Opens the selected shuffle readers before the nested-loop join starts polling its build.
+pub struct PairInputOpens {
+    pending: Mutex<Option<Vec<ReaderOpen>>>,
+}
+
+impl std::fmt::Debug for PairInputOpens {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("PairInputOpens").finish_non_exhaustive()
+    }
+}
+
+impl PairInputOpens {
+    pub fn register<T: Send + 'static>(
+        &self,
+        open: impl Future<Output = Result<T>> + Send + 'static,
+    ) -> BoxFuture<'static, Result<T>> {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(pending) = pending.as_mut() else {
+            return open.boxed();
+        };
+        let (tx, rx) = oneshot::channel();
+        pending.push(
+            async move {
+                let _ = tx.send(open.await?);
+                Ok(())
+            }
+            .boxed(),
+        );
+        async move { rx.await.map_err(|e| DataFusionError::External(Box::new(e))) }.boxed()
+    }
+
+    async fn open(&self) -> Result<()> {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap_or_default();
+        try_join_all(pending).await?;
+        Ok(())
+    }
+}
 
 type PreparedInputs = Shared<BoxFuture<'static, Result<(), Arc<DataFusionError>>>>;
 
@@ -200,15 +246,37 @@ impl ExecutionPlan for PartitionPairJoinExec {
                 .shared()
             })
             .clone();
-        let left = Arc::new(PartitionExec::new(self.left.clone(), left));
-        let right = Arc::new(PartitionExec::new(self.right.clone(), right));
+        let opens = Arc::new(PairInputOpens {
+            pending: Mutex::new(Some(Vec::new())),
+        });
+        let select = |input: &Arc<dyn ExecutionPlan>, partition| -> Result<_> {
+            let input = if input.is::<ReplayExec>() {
+                input.clone()
+            } else {
+                input
+                    .clone()
+                    .transform_up(|node| {
+                        Ok(match node.with_new_state(opens.clone()) {
+                            Some(node) => Transformed::yes(node),
+                            None => Transformed::no(node),
+                        })
+                    })
+                    .data()?
+            };
+            Ok(Arc::new(PartitionExec::new(input, partition)))
+        };
+        let left = select(&self.left, left)?;
+        let right = select(&self.right, right)?;
         let filter = self.filter.clone();
         let projection = self.projection.clone();
         let stream = stream::once(async move {
             prepared.await.map_err(replay_error)?;
             // A fresh NLJ owns its OnceAsync/build bitmap and spill state for this pair only.
-            NestedLoopJoinExec::try_new(left, right, filter, &JoinType::Inner, projection)?
-                .execute(0, context)
+            let join =
+                NestedLoopJoinExec::try_new(left, right, filter, &JoinType::Inner, projection)?
+                    .execute(0, context)?;
+            opens.open().await?;
+            Ok::<_, DataFusionError>(join)
         })
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
