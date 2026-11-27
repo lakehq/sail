@@ -44,10 +44,10 @@ jobs:
               - "pyproject.toml"
               - "rustfmt.toml"
 
-      - uses: ./.github/actions/commit-baseline
+      - uses: $/.github/actions/commit-baseline
         id: baseline
 
-      - uses: ./.github/actions/commit-workflow
+      - uses: $/.github/actions/commit-workflow
         id: baseline-workflow
         with:
           sha: ${{ steps.baseline.outputs.sha }}
@@ -90,6 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pull-requests: read
     outputs:
       matrix: ${{ steps.versions.outputs.matrix }}
@@ -141,19 +142,17 @@ jobs:
             const choices = await preparePythonTestSuites({
               github,
               context,
-              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
               inventoryPath: '/tmp/python-test-suites.json',
-              reportPath: '/tmp/python-test-selection-report',
+              reportPath: '/tmp/python-test-selection-report/report.md',
             });
             core.setOutput('choices', JSON.stringify(choices));
 
-      - name: Upload test selection report
-        uses: actions/upload-artifact@v7
+      - uses: $/.github/actions/pull-request-prepare-report
         if: github.event_name == 'pull_request'
         with:
-          name: python-test-selection-report
-          path: /tmp/python-test-selection-report
-          retention-days: 7
+          report_name: python-test-selection
+          report_path: /tmp/python-test-selection-report/report.md
+          retention_days: 7
 
   rust-tests:
     name: Rust Tests
@@ -177,6 +176,9 @@ jobs:
     name: Spark Tests
     if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_spark_tests == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
+    permissions:
+      contents: read
+      actions: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
@@ -193,6 +195,9 @@ jobs:
     name: Ibis Tests
     if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_ibis_tests == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
+    permissions:
+      contents: read
+      actions: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
