@@ -506,6 +506,12 @@ impl PlanResolver<'_> {
             options: origin.options.clone(),
             temporal_options: origin.temporal_options.clone(),
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
+            partition_value_cast: (!is_lake_source).then(|| {
+                (
+                    self.config.ansi_mode,
+                    Arc::clone(&self.config.session_timezone),
+                )
+            }),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(sources) = source_key

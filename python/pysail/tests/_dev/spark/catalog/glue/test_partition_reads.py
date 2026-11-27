@@ -445,3 +445,54 @@ def test_temporary_views_read_the_current_registered_partitions(spark, moto_endp
         spark.sql("DROP VIEW IF EXISTS one_scan")
         spark.sql("DROP VIEW IF EXISTS two_scans")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_view_and_table_reads_cast_partition_values_with_their_own_config(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_view_config"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
+    parquet = tmp_path / "parquet"
+    parquet.mkdir()
+    pq.write_table(pa.table({"id": [1]}), parquet / "data.parquet")
+    # The JSON partition is read in another scan, so the view resolves its query at each read.
+    json_path = tmp_path / "json"
+    json_path.mkdir()
+    (json_path / "data.json").write_text(json.dumps({"id": 2}))
+    for value, descriptor in [
+        ("bad", {"Location": str(parquet)}),
+        (
+            "2",
+            {
+                "Location": f"file:{json_path}",
+                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+            },
+        ),
+    ]:
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
+        )
+    ansi = "spark.sql.ansi.enabled"
+    previous = spark.conf.get(ansi)
+    try:
+        spark.conf.set(ansi, "false")
+        spark.sql(f"CREATE TEMPORARY VIEW lenient_partitions AS SELECT id, p FROM {table}")  # noqa: S608
+        spark.conf.set(ansi, "true")
+        # The direct read casts the partition values with the session's ANSI mode,
+        # whichever read of the table comes first.
+        for query in [
+            f"SELECT id, p FROM {table}",  # noqa: S608
+            f"SELECT id, p FROM lenient_partitions UNION ALL SELECT id, p FROM {table}",  # noqa: S608
+            f"SELECT id, p FROM {table} UNION ALL SELECT id, p FROM lenient_partitions",  # noqa: S608
+        ]:
+            with pytest.raises(Exception, match="invalid integer partition value: bad"):
+                spark.sql(query).collect()
+    finally:
+        spark.conf.set(ansi, previous)
+        spark.sql("DROP VIEW IF EXISTS lenient_partitions")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
