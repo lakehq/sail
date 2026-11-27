@@ -12,12 +12,6 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 # while Sail casts it in the session time zone.
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail casts appended TIMESTAMP_NTZ data for Delta tables")
 
-# Two input partitions make a worker run the Delta writer, rather than the driver task that commits.
-NTZ_SOURCE = (
-    "CAST(id AS INT) AS id",
-    "TIMESTAMP_NTZ '2024-01-01 00:00:00' + make_interval(0, 0, 0, 0, CAST(id AS INT), 0, 0) AS ts",
-)
-
 
 @pytest.fixture(scope="module", params=["local", "local-cluster"])
 def remote(request):
@@ -29,6 +23,14 @@ def remote(request):
         }
     ) as server:
         yield server.remote
+
+
+def ntz_rows(spark):
+    # Two input partitions make a worker run the Delta writer, rather than the driver task that commits.
+    return spark.range(1, 3, 1, 2).selectExpr(
+        "CAST(id AS INT) AS id",
+        "TIMESTAMP_NTZ '2024-01-01 00:00:00' + make_interval(0, 0, 0, 0, CAST(id AS INT), 0, 0) AS ts",
+    )
 
 
 def utc_micros(hour):
@@ -43,7 +45,7 @@ def test_delta_append_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, 
         f"CREATE TABLE ntz_append (id INT, ts TIMESTAMP) USING delta LOCATION '{escape_sql_string_literal(str(path))}'"
     )
     try:
-        spark.range(1, 3, 1, 2).selectExpr(*NTZ_SOURCE).write.format("delta").mode("append").save(str(path))
+        ntz_rows(spark).write.format("delta").mode("append").save(str(path))
         rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_append ORDER BY id").collect()
         # The wall clock is read in the session time zone (UTC-8).
         assert [(row.id, row.micros) for row in rows] == [(1, utc_micros(9)), (2, utc_micros(10))]
@@ -60,7 +62,7 @@ def test_delta_timestamp_partition_values_are_utc(spark, tmp_path, session_timez
         f"LOCATION '{escape_sql_string_literal(str(path))}'"
     )
     try:
-        spark.range(1, 3, 1, 2).selectExpr(*NTZ_SOURCE).write.format("delta").mode("append").save(str(path))
+        ntz_rows(spark).write.format("delta").mode("append").save(str(path))
         spark.sql("INSERT INTO ts_partition VALUES (3, TIMESTAMP '2024-01-01 03:00:00')").collect()
         for frame in [spark.table("ts_partition"), spark.read.format("delta").load(str(path))]:
             rows = frame.selectExpr("id", "unix_micros(ts) AS micros").orderBy("id").collect()
