@@ -6,10 +6,9 @@ use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, AsArray, PrimitiveArray, TimestampMicrosecondArray,
     downcast_integer_array,
 };
-use arrow::compute::cast;
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
-    Float64Type,
+    ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DecimalType, Float16Type, Float32Type, Float64Type,
 };
 use datafusion_common::{Result, exec_err};
 use sail_common::utils::datetime::MICROS_PER_SECOND;
@@ -21,17 +20,9 @@ pub(super) fn timestamp_from_seconds(
     safe: bool,
 ) -> Result<ArrayRef> {
     let micros: TimestampMicrosecondArray = match seconds.data_type() {
-        dt if dt.is_floating() => {
-            let values = cast(seconds, &DataType::Float64)?;
-            values
-                .as_primitive::<Float64Type>()
-                .iter()
-                .map(|value| match value {
-                    Some(value) => float_micros(value, safe),
-                    None => Ok(None),
-                })
-                .collect::<Result<_>>()?
-        }
+        DataType::Float16 => float_micros(seconds.as_primitive::<Float16Type>(), safe)?,
+        DataType::Float32 => float_micros(seconds.as_primitive::<Float32Type>(), safe)?,
+        DataType::Float64 => float_micros(seconds.as_primitive::<Float64Type>(), safe)?,
         DataType::Decimal32(..) => {
             decimal_micros(seconds.as_primitive::<Decimal32Type>(), i64::from)
         }
@@ -53,22 +44,36 @@ pub(super) fn timestamp_from_seconds(
     Ok(Arc::new(micros.with_timezone(Arc::clone(zone))))
 }
 
-fn float_micros(seconds: f64, safe: bool) -> Result<Option<i64>> {
-    if !seconds.is_finite() {
-        if safe {
-            return Ok(None);
+fn float_micros<T: ArrowPrimitiveType>(
+    values: &PrimitiveArray<T>,
+    safe: bool,
+) -> Result<TimestampMicrosecondArray>
+where
+    T::Native: Into<f64>,
+{
+    if safe {
+        return Ok(values.unary_opt(|value| {
+            let seconds = value.into();
+            seconds
+                .is_finite()
+                .then_some((seconds * MICROS_PER_SECOND as f64) as i64)
+        }));
+    }
+    values.try_unary(|value| {
+        let seconds = value.into();
+        if !seconds.is_finite() {
+            return exec_err!(
+                "[CAST_INVALID_INPUT] The value {seconds} cannot be cast to \"TIMESTAMP\" because it is malformed"
+            );
         }
-        return exec_err!(
-            "[CAST_INVALID_INPUT] The value {seconds} cannot be cast to \"TIMESTAMP\" because it is malformed"
-        );
-    }
-    let micros = seconds * MICROS_PER_SECOND as f64;
-    if !safe && !(i64::MIN as f64..=i64::MAX as f64).contains(&micros) {
-        return exec_err!(
-            "[CAST_OVERFLOW] The value {micros} cannot be cast to \"BIGINT\" due to an overflow"
-        );
-    }
-    Ok(Some(micros as i64))
+        let micros = seconds * MICROS_PER_SECOND as f64;
+        if !(i64::MIN as f64..=i64::MAX as f64).contains(&micros) {
+            return exec_err!(
+                "[CAST_OVERFLOW] The value {micros} cannot be cast to \"BIGINT\" due to an overflow"
+            );
+        }
+        Ok(micros as i64)
+    })
 }
 
 // BigDecimal.longValue truncates towards zero and takes the low 64 bits.

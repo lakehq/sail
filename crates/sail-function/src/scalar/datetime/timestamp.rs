@@ -269,6 +269,10 @@ impl Timestamp {
         self.is_try
     }
 
+    fn timestamp_type(&self) -> DataType {
+        DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone())
+    }
+
     /// Whether a parse/cast failure yields NULL: `try_*` always, or the strict
     /// variant when ANSI is disabled.
     fn safe(&self) -> bool {
@@ -291,10 +295,7 @@ impl ScalarUDFImpl for Timestamp {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            self.timezone.clone(),
-        ))
+        Ok(self.timestamp_type())
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -306,7 +307,7 @@ impl ScalarUDFImpl for Timestamp {
         };
         Ok(Arc::new(Field::new(
             self.name(),
-            self.return_type(&[])?,
+            self.timestamp_type(),
             nullable,
         )))
     }
