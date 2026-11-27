@@ -806,6 +806,26 @@ mod tests {
                 }
             }
         }
+        // Values are read at microsecond precision, as Spark reads them, and coarser units round
+        // down.
+        let before_epoch = "1969-12-31 23:59:59.999999";
+        for (unit, raw, expected) in [
+            (TimeUnit::Second, before_epoch, -1),
+            (TimeUnit::Millisecond, before_epoch, -1),
+            (TimeUnit::Nanosecond, before_epoch, -1_000),
+            (
+                TimeUnit::Nanosecond,
+                "2024-01-01 09:00:00.123456789",
+                1_704_099_600_123_456_000,
+            ),
+        ] {
+            let data_type = ArrowDataType::Timestamp(unit, Some("UTC".into()));
+            assert_eq!(
+                parse_partition_value(raw, &data_type, "UTC")?,
+                ScalarValue::Int64(Some(expected)).cast_to(&data_type)?,
+                "{raw} as {data_type}"
+            );
+        }
         // Dates do not depend on the session time zone.
         assert_eq!(
             parse_partition_value("2024-01-01", &ArrowDataType::Date32, "America/Los_Angeles")?,
