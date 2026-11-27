@@ -1016,7 +1016,7 @@ impl PlanResolver<'_> {
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
     /// whether the table gained columns, or `None` if the table is now read in several scans,
-    /// or the error of the columns that changed.
+    /// or the error that the table no longer fits the stored plan.
     async fn bind_view_table_scan(
         &self,
         scan: &TableScan,
