@@ -1164,56 +1164,67 @@ mod tests {
         writer.write(&deletes)?;
         let bytes = writer.into_inner()?;
         let size = bytes.len() as u64;
-        let store = Arc::new(TestStore::new(Arc::new(InMemory::new())));
-        store
-            .put(&ObjectPath::from("table/deletes.parquet"), bytes.into())
-            .await?;
 
-        // A hint covering the whole file reads it with a single request.
-        let mut config = SessionConfig::new();
-        config.options_mut().execution.parquet.metadata_size_hint = Some(size as usize);
-        let ctx = SessionContext::new_with_config(config);
-        let table_url = Url::parse("memory://iceberg/table/").unwrap();
-        ctx.register_object_store(&table_url, store.clone());
+        // A hint covering the whole file reads it with a single request, while a hint smaller
+        // than the footer reads the footer first, unlike any default hint.
+        for hint in [size as usize, 16] {
+            let store = Arc::new(TestStore::new(Arc::new(InMemory::new())));
+            store
+                .put(
+                    &ObjectPath::from("table/deletes.parquet"),
+                    bytes.clone().into(),
+                )
+                .await?;
+            let mut config = SessionConfig::new();
+            config.options_mut().execution.parquet.metadata_size_hint = Some(hint);
+            let ctx = SessionContext::new_with_config(config);
+            let table_url = Url::parse("memory://iceberg/table/").unwrap();
+            ctx.register_object_store(&table_url, store.clone());
 
-        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "id",
-            DataType::Int64,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int64Array::from_iter_values(0..5))],
-        )?;
-        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
-        let apply = Arc::new(IcebergDeleteApplyExec::new(
-            input,
-            data_file_path.to_string(),
-            vec![PositionDeleteFile::File {
-                path: "memory://iceberg/table/deletes.parquet".to_string(),
-                size,
-                file_format: DataFileFormat::Parquet,
-            }],
-            vec![],
-            table_url.to_string(),
-            IcebergSchema::builder().build().unwrap(),
-        ));
-        let batches = collect(apply, ctx.task_ctx()).await?;
-        let ids = batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap()
-                    .values()
-                    .iter()
-                    .copied()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec![0, 2, 4]);
-        assert_eq!(store.largest_read.load(Ordering::Relaxed), size as usize);
+            let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                "id",
+                DataType::Int64,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from_iter_values(0..5))],
+            )?;
+            let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
+            let apply = Arc::new(IcebergDeleteApplyExec::new(
+                input,
+                data_file_path.to_string(),
+                vec![PositionDeleteFile::File {
+                    path: "memory://iceberg/table/deletes.parquet".to_string(),
+                    size,
+                    file_format: DataFileFormat::Parquet,
+                }],
+                vec![],
+                table_url.to_string(),
+                IcebergSchema::builder().build().unwrap(),
+            ));
+            let batches = collect(apply, ctx.task_ctx()).await?;
+            let ids = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec![0, 2, 4]);
+            let largest_read = store.largest_read.load(Ordering::Relaxed);
+            if hint == size as usize {
+                assert_eq!(largest_read, hint);
+            } else {
+                assert!(largest_read < size as usize, "largest read {largest_read}");
+            }
+        }
         Ok(())
     }
 

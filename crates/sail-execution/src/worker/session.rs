@@ -92,8 +92,13 @@ impl JobSession {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::common::config::{ConfigNonZeroUsize, SpillCompression};
-    use datafusion::common::parquet_config::DFTimeUnit;
+    use datafusion::common::config::{
+        ConfigNonZeroUsize, MaxRowGroupBytes, ParquetCdcOptions, SpillCompression,
+    };
+    use datafusion::common::parquet_config::{
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
+        DFTimeUnit, RowGroupRangeAssignment,
+    };
     use sail_common_datafusion::session::time_zone::session_time_zone;
 
     use super::*;
@@ -154,6 +159,64 @@ mod tests {
         assert_eq!(session_time_zone(&options), Some("+05:30:15"));
         assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
         assert!(options.optimizer.enable_topk_dynamic_filter_pushdown);
+        Ok(())
+    }
+
+    /// Every Parquet option must reach workers. The struct literal fails to compile when
+    /// DataFusion adds an option, so that its transport is checked here.
+    #[test]
+    fn job_session_round_trips_every_parquet_option() -> Result<()> {
+        let parquet = ParquetOptions {
+            enable_page_index: false,
+            pruning: false,
+            skip_metadata: false,
+            metadata_size_hint: Some(128),
+            pushdown_filters: true,
+            reorder_filters: true,
+            force_filter_selections: true,
+            schema_force_view_types: false,
+            binary_as_string: true,
+            coerce_int96: Some(DFTimeUnit::Millisecond),
+            coerce_int96_tz: Some("America/Los_Angeles".parse()?),
+            bloom_filter_on_read: false,
+            max_predicate_cache_size: Some(4096),
+            max_in_list_size: 7,
+            enable_rle_to_dictionary: true,
+            row_group_range_assignment: RowGroupRangeAssignment::Midpoint,
+            data_pagesize_limit: 4096,
+            write_batch_size: 64,
+            writer_version: DFParquetWriterVersion::V2_0,
+            skip_arrow_metadata: true,
+            compression: Some(DFParquetCompression::Gzip(3)),
+            dictionary_enabled: Some(false),
+            dictionary_page_size_limit: 4096,
+            statistics_enabled: Some(DFParquetStatistics::Chunk),
+            max_row_group_size: 2048,
+            max_row_group_bytes: Some(MaxRowGroupBytes::try_new(8192)?),
+            created_by: "test".to_string(),
+            column_index_truncate_length: Some(16),
+            statistics_truncate_length: None,
+            data_page_row_count_limit: 100,
+            encoding: Some(DFParquetEncoding::Plain),
+            bloom_filter_on_write: true,
+            bloom_filter_fpp: Some(0.01),
+            bloom_filter_ndv: Some(1000),
+            write_row_group_number_distinct_values: true,
+            allow_single_file_parallelism: false,
+            maximum_parallel_row_group_writers: 3,
+            maximum_buffered_record_batches_per_stream: 5,
+            content_defined_chunking: ParquetCdcOptions {
+                enabled: true,
+                min_chunk_size: 1024,
+                max_chunk_size: 8192,
+                norm_level: 1,
+            },
+        };
+        assert_ne!(parquet, ParquetOptions::default());
+        let mut driver = ConfigOptions::default();
+        driver.execution.parquet = parquet;
+        let options = JobSession::capture(&driver)?.config_options()?;
+        assert_eq!(options.execution.parquet, driver.execution.parquet);
         Ok(())
     }
 
