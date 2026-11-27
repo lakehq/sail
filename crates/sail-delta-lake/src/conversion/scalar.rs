@@ -492,6 +492,7 @@ fn format_timestamp(value: i64) -> String {
 /// `spark.databricks.delta.write.utcTimestampPartitionValues` (the default), so that every reader
 /// gets the same instant whatever its session time zone.
 fn format_utc_timestamp(value: i64) -> String {
+    // chrono's `%Y` signs years outside 0000-9999, as Delta-Spark's `uuuu` pattern does.
     format_micros(value, "%Y-%m-%dT%H:%M:%S%.6fZ")
 }
 
