@@ -421,7 +421,7 @@ def test_temporary_views_read_the_current_registered_partitions(spark, moto_endp
 
     try:
         add_parquet_partition("1")
-        spark.sql(f"CREATE TEMPORARY VIEW one_scan AS SELECT id, p FROM {table}")
+        spark.sql(f"CREATE TEMPORARY VIEW one_scan AS SELECT id, p FROM {table}")  # noqa: S608
         assert sorted(spark.table("one_scan").collect()) == [(1, 1)]
         # The JSON partition is read in another scan than the Parquet partitions.
         path = tmp_path / "json-2"
@@ -436,7 +436,7 @@ def test_temporary_views_read_the_current_registered_partitions(spark, moto_endp
             },
         )
         assert sorted(spark.table("one_scan").collect()) == [(1, 1), (2, 2)]
-        spark.sql(f"CREATE TEMPORARY VIEW two_scans AS SELECT id, p FROM {table}")
+        spark.sql(f"CREATE TEMPORARY VIEW two_scans AS SELECT id, p FROM {table}")  # noqa: S608
         assert sorted(spark.table("two_scans").collect()) == [(1, 1), (2, 2)]
         add_parquet_partition("3")
         for view in ["one_scan", "two_scans"]:
