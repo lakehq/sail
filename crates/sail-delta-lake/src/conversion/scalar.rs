@@ -787,7 +787,7 @@ mod tests {
                     let array = parser.parse_array(&raw)?;
                     assert_eq!(array.data_type(), &data_type);
                     for (index, (raw, seconds)) in cases.into_iter().enumerate() {
-                        // A wall clock without a time zone is its UTC reading.
+                        // A TIMESTAMP_NTZ value is its wall clock, which is the UTC reading here.
                         let seconds = seconds[if label.is_some() { session_index } else { 0 }];
                         let expected =
                             ScalarValue::Int64(Some(seconds * per_second)).cast_to(&data_type)?;
