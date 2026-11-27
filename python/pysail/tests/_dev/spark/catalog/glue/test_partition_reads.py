@@ -509,7 +509,9 @@ def test_view_over_one_scan_resolves_its_query_when_the_table_is_read_in_several
         add_json_partition(glue, name, tmp_path, "2", {"id": 2, "b": 20})
         stored = glue.get_table(DatabaseName="test_db", Name=name)["Table"]
         table_input = {
-            key: stored[key] for key in ["Name", "StorageDescriptor", "PartitionKeys", "TableType", "Parameters"]
+            key: stored[key]
+            for key in ["Name", "StorageDescriptor", "PartitionKeys", "TableType", "Parameters"]
+            if key in stored
         }
         columns = table_input["StorageDescriptor"]["Columns"]
         table_input["StorageDescriptor"]["Columns"] = [column for column in columns if column["Name"] != "b"]
