@@ -71,9 +71,13 @@ impl SessionFactory<()> for WorkerSessionFactory {
 ///   worker. These are not options, so they come from the worker session as a whole.
 ///   Extensions that only the driver session has (such as the Spark configuration and the
 ///   catalog manager) do not exist on workers, so operators that run on workers read query
-///   settings from the options only.
+///   settings from the options only. Built-in functions are not reconfigured with the options
+///   of the job, so operators must not rely on `ScalarUDFImpl::with_updated_config` on workers.
 /// * `datafusion.execution.target_partitions` and `datafusion.execution.planning_concurrency`,
 ///   which size concurrency to the worker. The partitioning of a task is fixed in its plan.
+///   An option whose DataFusion default depends on the host (today those that default to
+///   `get_available_parallelism()`) must be kept here too, since the driver ships only the
+///   options that differ from the defaults on its own host.
 /// * `datafusion.execution.spill_compression`, which encodes the worker's temporary files.
 /// * The settings that cluster execution requires (see `apply_cluster_constraints`), which are
 ///   enforced even if the driver session changes them.

@@ -40,7 +40,9 @@ impl JobSession {
     /// Only options that differ from the DataFusion defaults are captured by key, since the
     /// worker applies them on top of the defaults. The Parquet options are captured as a whole,
     /// since some of them cannot be unset by key. The Spark session time zone is kept in a
-    /// configuration extension that has no entries, so it is captured separately.
+    /// configuration extension that has no entries, so it is captured separately. Other
+    /// configuration extensions are not shipped; one that operators read on workers needs its own
+    /// field, like the Spark session time zone.
     pub(crate) fn capture(options: &ConfigOptions) -> Result<Self> {
         let mut values = HashMap::new();
         for (key, value) in entry_values(options) {
