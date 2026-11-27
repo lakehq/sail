@@ -135,6 +135,14 @@ impl JobScheduler {
         });
     }
 
+    pub fn has_completed_materialized_output(&self, key: &TaskKey) -> bool {
+        self.jobs
+            .get(&key.job_id)
+            .and_then(|job| job.graph.stages().get(key.stage))
+            .is_some_and(|stage| matches!(stage.mode, OutputMode::MaterializedLocal))
+            && matches!(self.get_task_state(key), Some(TaskState::Succeeded))
+    }
+
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
         let attempt = self
             .jobs
@@ -706,11 +714,13 @@ impl JobScheduler {
                         if !cause.is_retryable() {
                             terminal_cause.get_or_insert(cause);
                         }
-                    }
-                    if matches!(attempt.state, TaskState::Failed)
-                        && let Some(cause) = &attempt.cause
-                    {
-                        causes.entry((s, t)).or_default().push(cause);
+                        // A completed replay producer keeps its success state if its worker is lost.
+                        if matches!(attempt.state, TaskState::Failed)
+                            || matches!(job.graph.stages()[s].mode, OutputMode::MaterializedLocal)
+                                && matches!(attempt.state, TaskState::Succeeded)
+                        {
+                            causes.entry((s, t)).or_default().push(cause);
+                        }
                     }
                 }
             }
