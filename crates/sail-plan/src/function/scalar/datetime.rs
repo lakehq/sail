@@ -895,8 +895,8 @@ fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResu
 
 /// Shared `to_timestamp` / `try_to_timestamp` (+ `_ntz`) planner.
 ///
-/// The 1-arg form goes through `cast` / `try_cast`, which route strings to
-/// `Timestamp` (honoring ANSI for the strict variant) and cast other types.
+/// The 1-arg form parses strings and converts numeric epoch seconds for LTZ.
+/// Date and timestamp inputs use the session time zone when changing timestamp types.
 /// The 2-arg form parses the value with the given format via `Timestamp`.
 fn timestamp_with_try(
     input: ScalarFunctionInput,
@@ -913,12 +913,7 @@ fn timestamp_with_try(
     if input.arguments.len() == 1 {
         let expr = input.arguments.one()?;
         let expr_type = expr.get_type(input.function_context.schema)?;
-        if matches!(
-            expr_type,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-        ) {
-            // Strings parse through Timestamp, which honors ANSI (errors
-            // under ANSI, NULL otherwise) for the strict variant.
+        if expr_type.is_string() || (!timestamp_ntz && expr_type.is_numeric()) {
             let udf = ScalarUDF::from(Timestamp::try_new(timezone, ansi_mode, is_try)?);
             Ok(udf.call(vec![expr]))
         } else {

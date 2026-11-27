@@ -6,16 +6,21 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::{SparkZone, localize_with_fallback};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::datetime::utils::common::string_array_iter;
 use crate::scalar::datetime::utils::format::DateTimeFormat;
 use crate::scalar::datetime::utils::parser::{ParsedTimestamp, parse_timestamp_string};
+
+mod numeric;
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -292,6 +297,20 @@ impl ScalarUDFImpl for Timestamp {
         ))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = match args.arg_fields {
+            [field] if field.data_type().is_numeric() => {
+                field.is_nullable() || field.data_type().is_floating()
+            }
+            _ => true,
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&[])?,
+            nullable,
+        )))
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if !matches!(arg_types.len(), 1 | 2) {
             return Err(invalid_arg_count_exec_err(
@@ -301,9 +320,7 @@ impl ScalarUDFImpl for Timestamp {
             ));
         }
         match &arg_types[0] {
-            // String-only, matching the kernel (which parses strings) and the
-            // sibling parsers `Date`/`Time`. The planner casts/handles
-            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
+            dt if dt.is_numeric() && arg_types.len() == 1 && self.timezone.is_some() => {}
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
             other => {
                 return Err(unsupported_data_type_exec_err(
@@ -329,6 +346,15 @@ impl ScalarUDFImpl for Timestamp {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        if let [arg] = args.as_slice()
+            && arg.data_type().is_numeric()
+            && let Some(zone) = &self.timezone
+        {
+            return make_scalar_function(
+                |arrays| numeric::timestamp_from_seconds(&arrays[0], zone, self.safe()),
+                vec![],
+            )(&args);
+        }
         let (arg, format) = match args.len() {
             1 => (args.one()?, None),
             2 => {
