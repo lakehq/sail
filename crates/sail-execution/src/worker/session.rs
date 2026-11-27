@@ -144,7 +144,6 @@ mod tests {
     use sail_common_datafusion::session::time_zone::{
         session_time_zone, set_spark_session_time_zone,
     };
-    use sail_delta_lake::DeltaSnapshotConfig;
 
     use super::*;
 
@@ -293,15 +292,6 @@ mod tests {
             let options = JobSession::capture(&driver)?.config_options()?;
             assert_eq!(
                 options.execution.time_zone, driver.execution.time_zone,
-                "{time_zone}"
-            );
-            assert_eq!(
-                DeltaSnapshotConfig::default()
-                    .with_partition_time_zone(&options)
-                    .partition_time_zone,
-                DeltaSnapshotConfig::default()
-                    .with_partition_time_zone(&driver)
-                    .partition_time_zone,
                 "{time_zone}"
             );
         }

@@ -9,8 +9,6 @@ use std::sync::Arc;
 
 use datafusion::common::config::ConfigOptions;
 use object_store::path::Path;
-use sail_common_datafusion::session::time_zone::session_time_zone;
-use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use serde::{Deserialize, Serialize};
 
 /// Configuration options for loading Delta table snapshots.
@@ -85,11 +83,14 @@ impl DeltaSnapshotConfig {
 }
 
 /// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
-/// session time zone, as Delta-Spark reads it.
+/// session time zone, as Delta-Spark reads it. The Arrow label of the session time zone is read
+/// because workers receive only the label.
 pub(crate) fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
-    session_time_zone(options)
-        .map(|time_zone| arrow_timezone_label(time_zone).into())
-        .unwrap_or_else(|| "UTC".into())
+    options
+        .execution
+        .time_zone
+        .as_ref()
+        .map_or_else(|| "UTC".into(), |time_zone| time_zone.as_str().into())
 }
 
 impl Default for DeltaSnapshotConfig {
