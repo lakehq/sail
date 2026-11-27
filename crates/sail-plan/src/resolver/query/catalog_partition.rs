@@ -16,7 +16,7 @@ use sail_data_source::listing::{RegisteredTableSource, cast_catalog_partition_va
 use sail_data_source::parse_absolute_directory_url;
 use url::Position;
 
-use super::temp_view::TableOrigin;
+use super::temp_view::{CatalogTableOrigin, TableOrigin};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -26,7 +26,7 @@ impl PlanResolver<'_> {
         &self,
         manager: &CatalogManager,
         registry: &DataSourceRegistry,
-        reference: &[String],
+        origin: &CatalogTableOrigin,
         format: &str,
         registered: Option<RegisteredFileTable>,
         info: SourceInfo,
@@ -45,7 +45,7 @@ impl PlanResolver<'_> {
         });
         let listing = match registered {
             Some(table) => manager
-                .list_file_partitions(reference, &vec![None; info.partition_by.len()])
+                .list_file_partitions(&origin.name, &vec![None; info.partition_by.len()])
                 .await?
                 .map(|partitions| (partitions, table.read_options)),
             None => None,
@@ -72,6 +72,7 @@ impl PlanResolver<'_> {
             )?)]);
         }
         let (fields, _) = get_partition_columns_and_file_schema(schema, info.partition_by.clone())?;
+        let (ansi_mode, session_timezone) = &origin.partition_value_cast;
         // Each file scan uses one reader and one object store. Most tables need only one scan.
         let mut groups = BTreeMap::new();
         for partition in partitions {
@@ -93,8 +94,8 @@ impl PlanResolver<'_> {
                     cast_catalog_partition_value(
                         value,
                         field.data_type(),
-                        self.config.ansi_mode,
-                        &self.config.session_timezone,
+                        *ansi_mode,
+                        session_timezone,
                     )
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?;

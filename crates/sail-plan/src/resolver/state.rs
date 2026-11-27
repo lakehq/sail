@@ -33,8 +33,8 @@ pub(super) struct TableSourceKey {
     /// How the source matches the letter case of column names, for a source that matches
     /// the columns of the table with the columns of its files.
     pub read_case_sensitive: Option<bool>,
-    /// The ANSI mode and the session time zone, which cast the values of the partitions
-    /// that the catalog lists, for a source other than Delta Lake and Iceberg.
+    /// The ANSI mode and the session time zone of the read, which cast the values of the
+    /// partitions that the catalog lists, for a source other than Delta Lake and Iceberg.
     pub partition_value_cast: Option<(bool, Arc<str>)>,
     /// The catalog instance of the table, for a table that a global temporary view reads
     /// in a catalog of the session that created the view.

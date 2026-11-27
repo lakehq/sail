@@ -133,6 +133,9 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
     pub read_case_sensitive: bool,
+    /// The ANSI mode and the session time zone that cast the values of the partitions that
+    /// the catalog lists, as the session had them when the query was resolved.
+    pub partition_value_cast: (bool, Arc<str>),
 }
 
 impl CatalogTableOrigin {
@@ -1707,6 +1710,7 @@ mod tests {
             options: vec![],
             temporal_options: vec![],
             read_case_sensitive: false,
+            partition_value_cast: (false, Arc::from("UTC")),
         }))
     }
 

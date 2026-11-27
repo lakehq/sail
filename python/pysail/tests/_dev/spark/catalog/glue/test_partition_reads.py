@@ -447,43 +447,49 @@ def test_temporary_views_read_the_current_registered_partitions(spark, moto_endp
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-def test_view_and_table_reads_cast_partition_values_with_their_own_config(spark, moto_endpoint, tmp_path):
+@pytest.mark.parametrize("scans", [1, 2])
+def test_views_cast_partition_values_with_their_creation_config(spark, moto_endpoint, tmp_path, scans):
     glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
-    name = "registered_partition_view_config"
+    name = f"registered_partition_view_config_{scans}"
     table = f"test_db.{name}"
     root = tmp_path / "root"
     root.mkdir()
     spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
-    parquet = tmp_path / "parquet"
-    parquet.mkdir()
-    pq.write_table(pa.table({"id": [1]}), parquet / "data.parquet")
-    # The JSON partition is read in another scan, so the view resolves its query at each read.
-    json_path = tmp_path / "json"
-    json_path.mkdir()
-    (json_path / "data.json").write_text(json.dumps({"id": 2}))
-    for value, descriptor in [
-        ("bad", {"Location": str(parquet)}),
-        (
-            "2",
-            {
-                "Location": f"file:{json_path}",
-                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
-            },
-        ),
-    ]:
+
+    def add_partition(value, descriptor):
         glue.create_partition(
             DatabaseName="test_db",
             TableName=name,
             PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
         )
+
+    for value, id_ in [("1", 1), ("bad", 9)]:
+        path = tmp_path / f"parquet-{value}"
+        path.mkdir()
+        pq.write_table(pa.table({"id": [id_]}), path / "data.parquet")
+        add_partition(value, {"Location": str(path)})
+    expected = [(1, 1), (9, None)]
+    if scans == 2:
+        # The JSON partition is read in another scan, so the view resolves its query at each read.
+        path = tmp_path / "json-2"
+        path.mkdir()
+        (path / "data.json").write_text(json.dumps({"id": 2}))
+        add_partition(
+            "2",
+            {
+                "Location": f"file:{path}",
+                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+            },
+        )
+        expected = [(1, 1), (2, 2), (9, None)]
     ansi = "spark.sql.ansi.enabled"
     previous = spark.conf.get(ansi)
     try:
         spark.conf.set(ansi, "false")
         spark.sql(f"CREATE TEMPORARY VIEW lenient_partitions AS SELECT id, p FROM {table}")  # noqa: S608
         spark.conf.set(ansi, "true")
-        # The direct read casts the partition values with the session's ANSI mode,
+        # A direct read casts the partition values with the ANSI mode of the session,
         # whichever read of the table comes first.
         for query in [
             f"SELECT id, p FROM {table}",  # noqa: S608
@@ -492,6 +498,7 @@ def test_view_and_table_reads_cast_partition_values_with_their_own_config(spark,
         ]:
             with pytest.raises(Exception, match="invalid integer partition value: bad"):
                 spark.sql(query).collect()
+        assert spark.table("lenient_partitions").orderBy("id").collect() == expected
     finally:
         spark.conf.set(ansi, previous)
         spark.sql("DROP VIEW IF EXISTS lenient_partitions")

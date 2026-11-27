@@ -390,6 +390,10 @@ impl PlanResolver<'_> {
                     options,
                     temporal_options,
                     read_case_sensitive: self.config.case_sensitive,
+                    partition_value_cast: (
+                        self.config.ansi_mode,
+                        Arc::clone(&self.config.session_timezone),
+                    ),
                 };
                 // The source has a large future, which the future of every read would
                 // otherwise hold, also in the recursion of the query resolver.
@@ -506,12 +510,7 @@ impl PlanResolver<'_> {
             options: origin.options.clone(),
             temporal_options: origin.temporal_options.clone(),
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
-            partition_value_cast: (!is_lake_source).then(|| {
-                (
-                    self.config.ansi_mode,
-                    Arc::clone(&self.config.session_timezone),
-                )
-            }),
+            partition_value_cast: (!is_lake_source).then(|| origin.partition_value_cast.clone()),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(sources) = source_key
@@ -566,7 +565,7 @@ impl PlanResolver<'_> {
                 self.create_catalog_table_sources(
                     &manager,
                     &data_source_registry,
-                    &origin.name,
+                    origin,
                     &format,
                     resolved.registered_file_table,
                     info,
