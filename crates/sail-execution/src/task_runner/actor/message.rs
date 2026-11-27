@@ -21,7 +21,7 @@ use crate::worker::r#gen::JobSession;
 /// Where the tasks of a batch get their task context from.
 pub enum TaskBatchContext {
     /// The task context of the job, for tasks that run on the driver.
-    Job(Arc<TaskContext>),
+    Driver(Arc<TaskContext>),
     /// The task context of the worker session and the driver session settings of the job,
     /// from which the worker builds the task context of the job.
     Worker {

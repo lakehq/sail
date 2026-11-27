@@ -768,7 +768,7 @@ impl DriverActor {
                                 stage,
                                 tasks: tasks.clone(),
                                 definition,
-                                context: TaskBatchContext::Job(context),
+                                context: TaskBatchContext::Driver(context),
                                 peers: vec![],
                                 result,
                             })

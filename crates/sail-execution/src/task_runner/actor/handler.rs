@@ -64,7 +64,7 @@ impl TaskRunnerActor {
         }
         // The plan must be decoded with the job context, since decoding captures its options.
         let context = match context {
-            TaskBatchContext::Job(context) => context,
+            TaskBatchContext::Driver(context) => context,
             TaskBatchContext::Worker { worker, session } => {
                 self.job_context(job_id, &worker, &session)?
             }
@@ -104,7 +104,8 @@ impl TaskRunnerActor {
     }
 
     /// Returns the task context of a job on a worker, which is created on the first task batch
-    /// of the job and dropped when the job is closed.
+    /// of the job and dropped when the job is closed (a lost `CleanUpJob` keeps it until the
+    /// worker stops, like the other per-job state).
     pub(super) fn job_context(
         &mut self,
         job_id: JobId,
@@ -115,7 +116,7 @@ impl TaskRunnerActor {
             return Ok(context.clone());
         }
         let factory = worker.extension::<JobContextFactory>()?;
-        let context = Arc::new(factory.create(worker, session.options()?)?);
+        let context = Arc::new(factory.create(worker, session.config_options()?)?);
         self.job_contexts.insert(job_id, context.clone());
         Ok(context)
     }

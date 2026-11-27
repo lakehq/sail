@@ -10,7 +10,7 @@ use datafusion::common::config::ConfigOptions;
 use datafusion::execution::TaskContext;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::StreamExt;
-use sail_common::actor::{Actor, ActorHandle, ActorSystem};
+use sail_common::actor::{Actor, ActorContext, ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, SystemCatalogStore};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::job_context::JobContextFactory;
@@ -19,13 +19,16 @@ use tokio::sync::oneshot;
 use crate::driver::job_scheduler::event_reporter;
 use crate::driver::{DriverActor, DriverComponents, DriverOptions};
 use crate::error::ExecutionResult;
-use crate::id::{DriverId, JobId, TaskKey, TaskStreamKeySet};
+use crate::id::{DriverId, JobId, TaskAttempt, TaskKey, TaskStreamKeySet};
 use crate::stream::local::LocalStreamManager;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState};
+use crate::task::definition::{
+    TaskDefinition, TaskOutput, TaskOutputDistribution, TaskOutputLocator,
+};
 use crate::task_runner::{
-    TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerMessage,
-    TaskRunnerPlacement,
+    TaskBatchContext, TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions,
+    TaskRunnerMessage, TaskRunnerPlacement,
 };
 use crate::worker::r#gen::JobSession;
 use crate::worker_manager::LocalWorkerManager;
@@ -403,9 +406,37 @@ async fn job_context_is_created_once_per_job_and_dropped_when_the_job_closes()
     );
 
     runner.handle_close_job(job_id);
-    let third = runner.job_context(job_id, &worker, &session)?;
-    assert!(!Arc::ptr_eq(&first, &third));
-    assert_eq!(CREATED.load(Ordering::SeqCst), 2);
+    assert!(runner.job_contexts.is_empty());
+
+    // A task batch that arrives after the job is closed must not create the context again.
+    let handle = task_runner(&mut system, "job-context-handle")?;
+    let mut ctx = ActorContext::new(&handle);
+    let definition = TaskDefinition {
+        plan: Arc::from(Vec::new()),
+        inputs: vec![],
+        output: TaskOutput {
+            distribution: TaskOutputDistribution::RoundRobinBatch { channels: 1 },
+            locator: TaskOutputLocator::Blocking,
+        },
+    };
+    let output = runner.handle_run_task_batch(
+        &mut ctx,
+        job_id,
+        0,
+        vec![TaskAttempt {
+            partition: 0,
+            attempt: 0,
+        }],
+        Arc::new(definition),
+        TaskBatchContext::Worker {
+            worker: Arc::new(worker),
+            session: Arc::new(session),
+        },
+        vec![],
+    );
+    assert!(output.is_err());
+    assert!(runner.job_contexts.is_empty());
+    assert_eq!(CREATED.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

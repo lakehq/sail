@@ -10,67 +10,64 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use datafusion::common::config::{ConfigField, ConfigOptions, ParquetOptions};
-use datafusion::common::{Result, internal_err, plan_datafusion_err};
+use datafusion::common::{Result, internal_datafusion_err, internal_err};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use prost::Message;
 use sail_common_datafusion::session::time_zone::{
     set_spark_session_time_zone, spark_session_time_zone,
 };
 
-use crate::worker::r#gen::{JobSession, JobSessionEntry};
+use crate::worker::r#gen::JobSession;
 
 const DATAFUSION_PREFIX: &str = "datafusion.";
 const PARQUET_PREFIX: &str = "datafusion.execution.parquet.";
 
 /// The value of each DataFusion option in its default configuration.
-static DEFAULT_ENTRIES: LazyLock<HashMap<String, Option<String>>> = LazyLock::new(|| {
-    ConfigOptions::default()
+static DEFAULT_ENTRIES: LazyLock<HashMap<String, Option<String>>> =
+    LazyLock::new(|| entry_values(&ConfigOptions::default()).collect());
+
+/// Returns the key and the printed value of each option.
+fn entry_values(options: &ConfigOptions) -> impl Iterator<Item = (String, Option<String>)> {
+    options
         .entries()
         .into_iter()
         .map(|entry| (entry.key, entry.value))
-        .collect()
-});
+}
 
 impl JobSession {
     /// Captures the settings of a driver session.
     ///
-    /// Only options that differ from the DataFusion defaults are captured as entries, since the
+    /// Only options that differ from the DataFusion defaults are captured by key, since the
     /// worker applies them on top of the defaults. The Parquet options are captured as a whole,
     /// since some of them cannot be unset by key. The Spark session time zone is kept in a
     /// configuration extension that has no entries, so it is captured separately.
     pub(crate) fn capture(options: &ConfigOptions) -> Result<Self> {
-        let mut entries = vec![];
-        for entry in options.entries() {
-            if !entry.key.starts_with(DATAFUSION_PREFIX) || entry.key.starts_with(PARQUET_PREFIX) {
+        let mut values = HashMap::new();
+        for (key, value) in entry_values(options) {
+            if !key.starts_with(DATAFUSION_PREFIX) || key.starts_with(PARQUET_PREFIX) {
                 continue;
             }
-            if DEFAULT_ENTRIES.get(&entry.key) == Some(&entry.value) {
+            if DEFAULT_ENTRIES.get(&key) == Some(&value) {
                 continue;
             }
-            let Some(value) = entry.value else {
-                return internal_err!(
-                    "cannot ship the unset session option {} to workers",
-                    entry.key
-                );
+            let Some(value) = value else {
+                return internal_err!("cannot ship the unset session option {key} to workers");
             };
-            entries.push(JobSessionEntry {
-                key: entry.key,
-                value,
-            });
+            values.insert(key, value);
         }
         let parquet = gen_datafusion_common::ParquetOptions::try_from(&options.execution.parquet)?
             .encode_to_vec();
         Ok(Self {
-            entries,
+            options: values,
             parquet,
             spark_time_zone: spark_session_time_zone(options).map(ToString::to_string),
         })
     }
 
     /// Returns the options of the driver session.
-    pub(crate) fn options(&self) -> Result<ConfigOptions> {
+    pub(crate) fn config_options(&self) -> Result<ConfigOptions> {
         let mut options = ConfigOptions::default();
-        for JobSessionEntry { key, value } in &self.entries {
+        for (key, value) in &self.options {
             let Some(field) = key.strip_prefix(DATAFUSION_PREFIX) else {
                 return internal_err!("invalid session option from the driver: {key}");
             };
@@ -80,7 +77,9 @@ impl JobSession {
                 .map_err(|e| e.context(format!("cannot apply session option {key}")))?;
         }
         let parquet = gen_datafusion_common::ParquetOptions::decode(self.parquet.as_slice())
-            .map_err(|e| plan_datafusion_err!("invalid Parquet options from the driver: {e}"))?;
+            .map_err(|e| {
+                internal_datafusion_err!("invalid Parquet options from the driver: {e}")
+            })?;
         options.execution.parquet = ParquetOptions::try_from(&parquet)?;
         if let Some(time_zone) = &self.spark_time_zone {
             set_spark_session_time_zone(&mut options, time_zone)?;
@@ -98,11 +97,26 @@ mod tests {
     use super::*;
 
     fn entries(options: &ConfigOptions) -> Vec<(String, Option<String>)> {
-        options
-            .entries()
-            .into_iter()
-            .map(|entry| (entry.key, entry.value))
-            .collect()
+        entry_values(options).collect()
+    }
+
+    /// The options are shipped by their printed values, so each printed value must set the
+    /// option to the same value. Options that are unset by default are never shipped unset.
+    #[test]
+    fn printed_option_values_set_the_same_values() -> Result<()> {
+        let defaults = entries(&ConfigOptions::default());
+        for (key, value) in &defaults {
+            if key.starts_with(PARQUET_PREFIX) {
+                continue;
+            }
+            let (Some(field), Some(value)) = (key.strip_prefix(DATAFUSION_PREFIX), value) else {
+                continue;
+            };
+            let mut options = ConfigOptions::default();
+            ConfigField::set(&mut options, field, value)?;
+            assert_eq!(entries(&options), defaults, "option {key} = {value}");
+        }
+        Ok(())
     }
 
     #[test]
@@ -124,14 +138,14 @@ mod tests {
         set_spark_session_time_zone(&mut driver, "+05:30:15")?;
 
         let session = JobSession::decode(JobSession::capture(&driver)?.encode_to_vec().as_slice())
-            .map_err(|e| plan_datafusion_err!("{e}"))?;
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
         assert!(
             session
-                .entries
-                .iter()
-                .all(|entry| !entry.key.starts_with(PARQUET_PREFIX))
+                .options
+                .keys()
+                .all(|key| !key.starts_with(PARQUET_PREFIX))
         );
-        let options = session.options()?;
+        let options = session.config_options()?;
 
         assert_eq!(entries(&options), entries(&driver));
         assert_eq!(options.execution.parquet, driver.execution.parquet);
@@ -142,12 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn job_session_without_changes_has_no_entries() -> Result<()> {
+    fn job_session_without_changes_has_no_options() -> Result<()> {
         let session = JobSession::capture(&ConfigOptions::default())?;
-        assert!(session.entries.is_empty());
+        assert!(session.options.is_empty());
         assert_eq!(session.spark_time_zone, None);
         assert_eq!(
-            entries(&session.options()?),
+            entries(&session.config_options()?),
             entries(&ConfigOptions::default())
         );
         Ok(())
@@ -156,12 +170,9 @@ mod tests {
     #[test]
     fn job_session_rejects_unknown_options() {
         let session = JobSession {
-            entries: vec![JobSessionEntry {
-                key: "datafusion.execution.unknown".to_string(),
-                value: "1".to_string(),
-            }],
+            options: HashMap::from([("datafusion.execution.unknown".to_string(), "1".to_string())]),
             ..Default::default()
         };
-        assert!(session.options().is_err());
+        assert!(session.config_options().is_err());
     }
 }
