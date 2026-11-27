@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::common::config::{ConfigNonZeroUsize, ConfigOptions};
+use datafusion::common::config::ConfigOptions;
 use datafusion::execution::{SessionStateBuilder, TaskContext};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::AppConfig;
@@ -46,12 +46,10 @@ impl SessionFactory<()> for WorkerSessionFactory {
                 self.config.cluster.shuffle_write_buffer_size,
             )))
             .with_extension(Arc::new(JobContextFactory::new(create_job_context)));
-        let execution = &mut config.options_mut().execution;
-        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
-        execution.spill_compression =
+        // Tasks run with the options of the driver session, so only the options that stay
+        // worker-local are set here (see `create_job_context`).
+        config.options_mut().execution.spill_compression =
             super::temporary_file_compression(self.config.runtime.temporary_files.compression);
-        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet)?;
-        super::apply_cluster_constraints(config.options_mut());
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -71,6 +69,9 @@ impl SessionFactory<()> for WorkerSessionFactory {
 ///   caches), the session extensions (shuffle and repartition buffers, Delta table cache), the
 ///   functions, and the session ID, which scopes cache entries to the object stores of the
 ///   worker. These are not options, so they come from the worker session as a whole.
+///   Extensions that only the driver session has (such as the Spark configuration and the
+///   catalog manager) do not exist on workers, so operators that run on workers read query
+///   settings from the options only.
 /// * `datafusion.execution.target_partitions` and `datafusion.execution.planning_concurrency`,
 ///   which size concurrency to the worker. The partitioning of a task is fixed in its plan.
 /// * `datafusion.execution.spill_compression`, which encodes the worker's temporary files.
@@ -100,18 +101,26 @@ fn create_job_context(worker: &TaskContext, mut options: ConfigOptions) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use datafusion::common::parquet_config::{DFParquetCompression, DFTimeUnit};
+    use datafusion::common::config::{ConfigNonZeroUsize, SpillCompression};
+    use sail_common::config::TemporaryFileCompression;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
+    use sail_common_datafusion::session::time_zone::{
+        session_time_zone, set_spark_session_time_zone,
+    };
 
     use super::*;
+
+    fn worker_session(config: AppConfig) -> Result<SessionContext> {
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        WorkerSessionFactory::new(Arc::new(config), runtime).create(())
+    }
 
     #[tokio::test]
     async fn worker_applies_shuffle_write_buffer_size() -> Result<(), Box<dyn std::error::Error>> {
         let mut config = AppConfig::load()?;
         config.cluster.shuffle_write_buffer_size = 1024;
-        let handle = tokio::runtime::Handle::current();
-        let runtime = RuntimeHandle::new(handle.clone(), handle);
-        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
+        let session = worker_session(config)?;
         let context = session.task_ctx();
         let shuffle = context.extension::<ShuffleWriteConfig>()?;
         assert_eq!(shuffle.buffer_size(), 1024);
@@ -119,60 +128,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worker_applies_parquet_config() -> Result<(), Box<dyn std::error::Error>> {
-        let mut config = AppConfig::load()?;
-        config.parquet.enable_page_index = false;
-        config.parquet.pruning = false;
-        config.parquet.metadata_size_hint = Some(32768);
-        config.parquet.pushdown_filters = true;
-        config.parquet.schema_force_view_types = false;
-        config.parquet.binary_as_string = true;
-        config.parquet.compression = "gzip(3)".to_string();
-        config.parquet.max_row_group_size = 2048;
-        config.parquet.force_filter_selections = true;
-        config.parquet.max_in_list_size = 50;
-        config.parquet.max_row_group_bytes = Some(8192);
-        let handle = tokio::runtime::Handle::current();
-        let runtime = RuntimeHandle::new(handle.clone(), handle);
-        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
-        let state = session.state_ref();
-        let state = state.read();
-        let parquet = &state.config_options().execution.parquet;
-        assert!(!parquet.enable_page_index);
-        assert!(!parquet.pruning);
-        assert_eq!(parquet.metadata_size_hint, Some(32768));
-        assert!(parquet.pushdown_filters);
-        assert!(!parquet.schema_force_view_types);
-        assert!(parquet.binary_as_string);
-        assert_eq!(parquet.compression, Some(DFParquetCompression::Gzip(3)));
-        assert_eq!(parquet.max_row_group_size, 2048);
-        assert!(parquet.force_filter_selections);
-        assert_eq!(parquet.max_in_list_size, 50);
-        assert_eq!(parquet.max_row_group_bytes.map(|v| v.get()), Some(8192));
-        assert_eq!(parquet.coerce_int96, Some(DFTimeUnit::Microsecond));
-        assert_eq!(parquet.bloom_filter_ndv, None);
-        assert_eq!(
-            parquet.created_by,
-            sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn job_context_follows_the_driver_except_worker_local_settings()
     -> Result<(), Box<dyn std::error::Error>> {
-        use datafusion::common::config::SpillCompression;
-        use sail_common_datafusion::session::time_zone::{
-            session_time_zone, set_spark_session_time_zone,
-        };
-
         let mut config = AppConfig::load()?;
-        config.parquet.metadata_size_hint = Some(8192);
-        config.runtime.temporary_files.compression =
-            sail_common::config::TemporaryFileCompression::Lz4Frame;
-        let handle = tokio::runtime::Handle::current();
-        let runtime = RuntimeHandle::new(handle.clone(), handle);
-        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
+        config.runtime.temporary_files.compression = TemporaryFileCompression::Lz4Frame;
+        let session = worker_session(config)?;
         let worker = session.task_ctx();
 
         let mut driver = ConfigOptions::default();
@@ -185,10 +145,7 @@ mod tests {
         driver.execution.parquet.metadata_size_hint = Some(128);
         set_spark_session_time_zone(&mut driver, "America/Los_Angeles")?;
 
-        let factory = worker.session_config().get_extension::<JobContextFactory>();
-        let Some(factory) = factory else {
-            return Err("missing job context factory".into());
-        };
+        let factory = worker.extension::<JobContextFactory>()?;
         let job = factory.create(&worker, driver)?;
         let options = job.session_config().options();
         let local = worker.session_config().options();
@@ -211,27 +168,15 @@ mod tests {
         assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
         assert_eq!(job.session_id(), worker.session_id());
         assert!(Arc::ptr_eq(&job.runtime_env(), &worker.runtime_env()));
-        assert_eq!(job.extension::<ShuffleWriteConfig>()?.buffer_size(), {
+        assert_eq!(
+            job.extension::<ShuffleWriteConfig>()?.buffer_size(),
             worker.extension::<ShuffleWriteConfig>()?.buffer_size()
-        });
+        );
         assert!(job.extension::<DeltaTableCache>().is_ok());
         assert_eq!(
             job.scalar_functions().len(),
             worker.scalar_functions().len()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn worker_applies_cluster_constraints() -> Result<(), Box<dyn std::error::Error>> {
-        let handle = tokio::runtime::Handle::current();
-        let runtime = RuntimeHandle::new(handle.clone(), handle);
-        let session = WorkerSessionFactory::new(Arc::new(AppConfig::load()?), runtime).create(())?;
-        let state = session.state_ref();
-        let state = state.read();
-        let options = state.config_options();
-        assert!(!options.execution.enable_nlj_coordinated_fallback);
-        assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
         Ok(())
     }
 }

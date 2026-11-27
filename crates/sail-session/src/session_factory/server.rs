@@ -146,6 +146,12 @@ impl ServerSessionFactory {
             &self.config.parquet,
         )?;
         self.apply_optimizer_config(&mut config)?;
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            super::apply_cluster_constraints(config.options_mut());
+        }
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -198,12 +204,6 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            super::apply_cluster_constraints(config.options_mut());
-        }
         Ok(())
     }
 

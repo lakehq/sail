@@ -51,7 +51,7 @@ fn temporary_file_compression(
     }
 }
 
-// Apply the same Parquet settings when planning on the server or building scans on workers.
+// Workers run tasks with these settings from the server session (see `worker.rs`).
 fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) -> Result<()> {
     parquet.created_by = SAIL_PARQUET_CREATED_BY.to_string();
     parquet.enable_page_index = config.enable_page_index;
