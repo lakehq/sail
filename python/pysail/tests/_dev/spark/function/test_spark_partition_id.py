@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 def test_spark_partition_id_smoke(spark):
@@ -124,3 +128,36 @@ def test_partition_function_in_having(spark, function):
 def test_partition_function_rejected_inside_aggregate(spark, function):
     with pytest.raises(Exception, match=r"(?i)non.?deterministic"):
         spark.range(40).agg(F.max(function())).collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail reads each large Parquet row group in its own partition")
+@pytest.mark.parametrize("function", ["spark_partition_id", "monotonically_increasing_id"])
+@pytest.mark.parametrize("source", ["table", "path"])
+def test_partition_dependent_id_without_other_columns_over_files(spark, tmp_path, function, source):
+    # The value depends on the partition of each row, which a scan that reads no column keeps.
+    location = tmp_path / "data"
+    location.mkdir()
+    schema = pa.schema([("id", pa.int64()), ("payload", pa.string())])
+    with pq.ParquetWriter(location / "data.parquet", schema, compression="NONE", use_dictionary=False) as writer:
+        # Each row group is over 1 MiB, so the scan reads it in its own partition.
+        for start in range(0, 30_000, 10_000):
+            ids = range(start, start + 10_000)
+            writer.write_table(pa.table({"id": ids, "payload": ["x" * 128] * len(ids)}, schema=schema))
+    if source == "table":
+        relation = "partition_dependent_ids"
+        spark.sql(f"CREATE TABLE {relation} USING parquet LOCATION '{escape_sql_string_literal(str(location))}'")
+        frame = spark.table(relation)
+    else:
+        relation = f"parquet.`{location}`"
+        frame = spark.read.parquet(str(location))
+    try:
+        alone = f"SELECT {function}() AS v FROM {relation}"  # noqa: S608
+        with_id = f"SELECT id, {function}() AS v FROM {relation}"  # noqa: S608
+        expected = sorted(row.v for row in spark.sql(with_id).collect())
+        assert len(expected) == 30_000
+        assert len(set(expected)) > 1
+        assert sorted(row.v for row in spark.sql(alone).collect()) == expected
+        assert spark.sql(f"SELECT count(*), max(v) FROM ({alone})").collect() == [(30_000, expected[-1])]  # noqa: S608
+        assert sorted(row[0] for row in frame.select(getattr(F, function)()).collect()) == expected
+    finally:
+        spark.sql("DROP TABLE IF EXISTS partition_dependent_ids")
