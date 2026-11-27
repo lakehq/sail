@@ -69,7 +69,9 @@ pub struct DeltaSnapshotConfig {
     /// Catalog-ratified commits for a catalog-managed Delta snapshot.
     pub catalog_managed_commits: Option<CatalogManagedCommitSet>,
     /// The time zone of TIMESTAMP partition values without an offset (see
-    /// [`partition_time_zone`]).
+    /// [`partition_time_zone`]). The default, UTC, suits only loads that never parse partition
+    /// values; a load whose snapshot is scanned, pruned or aggregated must use
+    /// [`Self::with_partition_time_zone`].
     pub partition_time_zone: Arc<str>,
 }
 
@@ -84,7 +86,7 @@ impl DeltaSnapshotConfig {
 
 /// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
 /// session time zone, as Delta-Spark reads it.
-pub fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
+pub(crate) fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
     session_time_zone(options)
         .map(|time_zone| arrow_timezone_label(time_zone).into())
         .unwrap_or_else(|| "UTC".into())
@@ -107,4 +109,39 @@ fn default_parallelism() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::common::Result;
+    use datafusion::common::config::ConfigOptions;
+    use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
+
+    use super::partition_time_zone;
+
+    #[test]
+    fn partition_time_zone_follows_the_spark_session_time_zone() -> Result<()> {
+        assert_eq!(
+            partition_time_zone(&ConfigOptions::default()).as_ref(),
+            "UTC"
+        );
+        for (session, expected) in [
+            ("America/Los_Angeles", "America/Los_Angeles"),
+            ("PST", "America/Los_Angeles"),
+            ("Z", "+00:00"),
+            ("GMT+8", "+08:00"),
+            ("+05:30", "+05:30"),
+            // TODO: Spark reads values in an offset with seconds, which Arrow labels cannot hold.
+            ("+05:30:45", "UTC"),
+        ] {
+            let mut options = ConfigOptions::default();
+            set_spark_session_time_zone(&mut options, session)?;
+            assert_eq!(
+                partition_time_zone(&options).as_ref(),
+                expected,
+                "{session}"
+            );
+        }
+        Ok(())
+    }
 }
