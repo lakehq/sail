@@ -40,6 +40,7 @@ use crate::task::definition::{
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
 };
+use crate::worker::r#gen::JobSession;
 
 impl JobScheduler {
     fn next_job_id(&mut self) -> ExecutionResult<JobId> {
@@ -791,7 +792,7 @@ impl JobScheduler {
         &self,
         key: &TaskKey,
         assignments: &dyn TaskAssignmentGetter,
-    ) -> ExecutionResult<(TaskDefinition, Arc<TaskContext>)> {
+    ) -> ExecutionResult<(TaskDefinition, Arc<TaskContext>, Arc<JobSession>)> {
         let Some(job) = self.jobs.get(&key.job_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "job {} not found",
@@ -817,7 +818,7 @@ impl JobScheduler {
             inputs,
             output,
         };
-        Ok((definition, job.context.clone()))
+        Ok((definition, job.context.clone(), job.session.clone()))
     }
 
     pub fn stop(&mut self) {
@@ -2135,7 +2136,7 @@ pub(super) mod tests {
                 })
                 .collect(),
         );
-        let (definition, _) = scheduler.get_task_definition(&key, &workers)?;
+        let (definition, _, _) = scheduler.get_task_definition(&key, &workers)?;
         let [input] = definition.inputs.as_slice() else {
             return Err("the task must have one input".into());
         };

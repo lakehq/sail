@@ -22,6 +22,7 @@ impl Actor for TaskRunnerActor {
             session_id,
             signals: Default::default(),
             tasks: Default::default(),
+            job_contexts: Default::default(),
             extensions,
             placement,
         }

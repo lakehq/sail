@@ -26,6 +26,7 @@ use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::definition::TaskDefinition;
+use crate::worker::r#gen::JobSession;
 use crate::worker::{WorkerClientSet, WorkerLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
@@ -334,6 +335,7 @@ impl WorkerPool {
         stage: usize,
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
+        session: Arc<JobSession>,
     ) {
         let running_workers = self.list_running_workers();
         let prepare = || -> ExecutionResult<_> {
@@ -366,7 +368,7 @@ impl WorkerPool {
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(error) = client
-                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                .run_task_batch(job_id, stage, tasks.clone(), definition, &session, peers)
                 .await
             {
                 for task in tasks {

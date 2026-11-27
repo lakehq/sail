@@ -11,7 +11,7 @@ use tonic::{Request, Response, Status};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskKey};
 use crate::task::definition::TaskDefinition;
-use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
+use crate::task_runner::{TaskBatchContext, TaskRunnerActor, TaskRunnerMessage};
 use crate::worker::r#gen::worker_service_server::WorkerService;
 use crate::worker::r#gen::{
     CleanUpJobRequest, CleanUpJobResponse, RunTaskBatchRequest, RunTaskBatchResponse,
@@ -53,7 +53,9 @@ impl WorkerService for WorkerServer {
             tasks,
             definition,
             peers,
+            session,
         } = request;
+        let session = session.ok_or_else(|| Status::invalid_argument("missing job session"))?;
         let peers = peers
             .into_iter()
             .map(|x| x.try_into())
@@ -80,7 +82,10 @@ impl WorkerService for WorkerServer {
                 stage,
                 tasks,
                 definition: Arc::new(TaskDefinition::try_from(definition)?),
-                context: self.context.clone(),
+                context: TaskBatchContext::Worker {
+                    worker: self.context.clone(),
+                    session: Arc::new(session),
+                },
                 peers,
                 result,
             })

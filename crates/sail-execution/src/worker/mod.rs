@@ -6,6 +6,7 @@ mod debug;
 pub(crate) mod entrypoint;
 pub(crate) mod peer_tracker;
 mod server;
+mod session;
 
 #[expect(clippy::allow_attributes)]
 pub(crate) mod r#gen {
