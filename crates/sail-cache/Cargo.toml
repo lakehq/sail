@@ -24,3 +24,9 @@ datafusion-common = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true }
+quick_cache = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

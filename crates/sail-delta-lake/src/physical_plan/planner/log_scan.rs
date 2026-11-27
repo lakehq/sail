@@ -12,7 +12,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
 use datafusion::datasource::physical_plan::parquet::{
-    CachedParquetFileReaderFactory, transform_binary_to_string, transform_schema_to_view,
+    transform_binary_to_string, transform_schema_to_view,
 };
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
@@ -25,6 +25,7 @@ use datafusion_common::extensions::Extensions;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema::{clear_metadata, mark_partially_present_fields_nullable};
 
@@ -500,10 +501,11 @@ pub async fn build_delta_log_datasource_scans_with_options(
     let parquet_checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = {
         let mut source =
             datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone())
-                .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
+                .with_parquet_file_reader_factory(parquet_reader_factory(
+                    ctx.session().config(),
                     Arc::clone(&store),
                     metadata_cache,
-                )));
+                ));
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }

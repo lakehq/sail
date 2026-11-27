@@ -6356,8 +6356,10 @@ version = "0.6.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9c6658afe513a3b484e3abfdaa0d03ef3c0bbf017542c178dd55f94eb3051f9"
 dependencies = [
+ "ahash",
  "equivalent",
  "hashbrown 0.16.1",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -6982,16 +6984,20 @@ dependencies = [
 name = "sail-cache"
 version = "0.7.3"
 dependencies = [
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-common",
+ "futures",
  "log",
  "moka",
  "object_store",
+ "quick_cache",
  "sail-common",
  "sail-common-datafusion",
  "sail-object-store",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

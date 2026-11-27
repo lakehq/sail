@@ -11,7 +11,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::ParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -27,6 +27,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use object_store::ObjectMeta;
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
@@ -710,7 +711,7 @@ impl IcebergScan {
         &self,
         session: &dyn Session,
         nan_free: bool,
-        reader_factory: Arc<CachedParquetFileReaderFactory>,
+        reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -734,7 +735,7 @@ impl IcebergScan {
         &self,
         session: &dyn Session,
         file_column_name: &str,
-        reader_factory: Arc<CachedParquetFileReaderFactory>,
+        reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.arrow_schema,
@@ -1190,7 +1191,8 @@ impl IcebergScan {
         {
             return Ok(scan);
         }
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+        let reader_factory = parquet_reader_factory(
+            session.config(),
             session.runtime_env().object_store(&object_store_url)?,
             scoped_file_metadata_cache(
                 session
@@ -1200,7 +1202,7 @@ impl IcebergScan {
                 &object_store_url,
                 session.session_id(),
             ),
-        ));
+        );
 
         if dirty_units.is_empty() && clean_avro.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
@@ -1441,7 +1443,8 @@ impl IcebergScan {
             }
         }
 
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+        let reader_factory = parquet_reader_factory(
+            session.config(),
             session.runtime_env().object_store(&object_store_url)?,
             scoped_file_metadata_cache(
                 session
@@ -1451,7 +1454,7 @@ impl IcebergScan {
                 &object_store_url,
                 session.session_id(),
             ),
-        ));
+        );
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
 

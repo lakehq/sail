@@ -7,7 +7,6 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::parquet::metadata::{
     DFParquetMetadata, ordering_from_parquet_metadata,
 };
@@ -28,6 +27,7 @@ use datafusion_common::{
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common::geoarrow::extension::{GeoArrowEdges, GeoArrowWkbType};
 use sail_common::spec::{self, SAIL_SPARK_INTERVAL_METADATA_KEY};
@@ -762,7 +762,7 @@ impl ReadFormat for ParquetReadFormat {
         )
         .await?;
         let cached_parquet_read_factory = Arc::new(super::ListingParquetReaderFactory(
-            CachedParquetFileReaderFactory::new(store, metadata_cache),
+            parquet_reader_factory(ctx.config(), store, metadata_cache),
         ));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 

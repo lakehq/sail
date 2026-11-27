@@ -17,9 +17,7 @@ use datafusion::common::{
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::parquet::{
-    CachedParquetFileReaderFactory, ParquetFileReaderFactory,
-};
+use datafusion::datasource::physical_plan::parquet::ParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
     FileSource, JsonSource, ParquetSource,
@@ -101,6 +99,7 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common::spec::SparkIntervalMetadata;
@@ -765,7 +764,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &ctx.session_id(),
                 );
                 let cast_mode = Self::try_decode_schema_evolution_cast_mode(cast_mode)?;
-                let cached_reader = CachedParquetFileReaderFactory::new(store, metadata_cache);
+                let cached_reader =
+                    parquet_reader_factory(ctx.session_config(), store, metadata_cache);
                 let reader_factory: Arc<dyn ParquetFileReaderFactory> =
                     if cast_mode == SchemaEvolutionCastMode::Parquet {
                         Arc::new(
@@ -774,7 +774,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             ),
                         )
                     } else {
-                        Arc::new(cached_reader)
+                        cached_reader
                     };
                 let mut source = ParquetSource::new(table_schema)
                     .with_parquet_file_reader_factory(reader_factory)

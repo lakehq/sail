@@ -17,7 +17,6 @@ use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource, wrap_partition_type_in_dict,
     wrap_partition_value_in_dict,
@@ -26,6 +25,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
@@ -468,10 +468,11 @@ pub async fn build_file_scan_config(
         &object_store_url,
         session.session_id(),
     );
-    let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+    let reader_factory = parquet_reader_factory(
+        session.config(),
         Arc::clone(&store),
         Arc::clone(&metadata_cache),
-    ));
+    );
     let mut parquet_source = ParquetSource::new(table_schema)
         .with_table_parquet_options(parquet_options)
         .with_parquet_file_reader_factory(reader_factory);

@@ -6,6 +6,7 @@ use datafusion::common::Result;
 use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use sail_cache::parquet_range_cache::ParquetRangeCache;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
@@ -44,6 +45,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
             )));
+        ParquetRangeCache::configure(&mut config, self.config.parquet.range_cache_capacity)?;
         let execution = &mut config.options_mut().execution;
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =

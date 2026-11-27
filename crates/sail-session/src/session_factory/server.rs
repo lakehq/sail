@@ -9,6 +9,7 @@ use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_cache::parquet_range_cache::ParquetRangeCache;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
@@ -141,6 +142,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config)?;
+        ParquetRangeCache::configure(&mut config, self.config.parquet.range_cache_capacity)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,
             &self.config.parquet,
