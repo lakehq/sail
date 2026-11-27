@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Metadata};
+use datafusion::arrow::datatypes::{DataType, Metadata, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::{filter_partitioned_file, pruned_partition_list};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
@@ -337,15 +337,21 @@ async fn plan_file_write(
     } else {
         Arc::new(HivePartitionWriteExec::new(plan))
     };
-    if *overwrite {
+    let plan: Arc<dyn ExecutionPlan> = if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
         ));
-        Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
+        Arc::new(BarrierExec::new(vec![delete], plan))
     } else {
-        Ok(plan)
-    }
+        plan
+    };
+    // The sink reports the number of rows it writes, but the write has no result,
+    // like the write commands of Spark.
+    Ok(Arc::new(BarrierExec::new(
+        vec![plan],
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+    )))
 }
 
 fn try_create_output_ordering(
