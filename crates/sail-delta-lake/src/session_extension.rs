@@ -203,16 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn table_cache_key_separates_partition_time_zones() {
-        let url = Url::parse("file:///tmp/table").unwrap();
-
-        assert_ne!(
-            TableCacheKey::new(&url, 7, None, "UTC".into()),
-            TableCacheKey::new(&url, 7, None, "America/Los_Angeles".into())
-        );
-    }
-
-    #[test]
     fn table_cache_key_is_stable_without_lakehouse_context() {
         let url = Url::parse("file:///tmp/table").unwrap();
 

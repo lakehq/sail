@@ -1567,9 +1567,15 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StructArray};
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Int32Array, StructArray, TimestampSecondArray,
+    };
+    use datafusion::arrow::compute::cast;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatchOptions;
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
@@ -1613,16 +1619,6 @@ mod tests {
     /// cast to the table type, so the formats only need to handle microseconds.
     #[tokio::test]
     async fn timestamp_partition_values_of_every_time_unit() -> Result<()> {
-        use datafusion::arrow::array::TimestampSecondArray;
-        use datafusion::arrow::compute::cast;
-        use datafusion::arrow::datatypes::TimeUnit;
-        use object_store::ObjectStore;
-        use object_store::memory::InMemory;
-        use object_store::path::Path;
-
-        use crate::writer::variant_shredding::VariantShreddingConfig;
-        use crate::writer::{DeltaWriter, WriterConfig};
-
         const SESSION_TIME_ZONE: &str = "America/Los_Angeles";
         // Instants (in UTC) for sources with a time zone: recent, before 1970, and before 1900.
         const INSTANTS: [i64; 3] = [1_704_099_600, -1, -2_209_032_000];
@@ -1646,11 +1642,10 @@ mod tests {
             ("1969-12-31 15:59:59.000000", "1969-12-31 15:59:59.000000"),
             ("1899-12-31 12:00:00.000000", "1899-12-31 12:00:00.000000"),
         ];
-        // An instant written to a column without a time zone keeps its UTC wall clock. This is
-        // existing behavior, unlike Spark, which uses the session wall clock.
-        // TODO: This is the known limitation of `validate_and_adapt_batch` for TIMESTAMP to
-        //   TIMESTAMP_NTZ writes. Update these values when that cast follows the session time
-        //   zone, rather than treating the change as a regression.
+        // An instant written to a column without a time zone keeps its UTC wall clock, unlike Spark,
+        // which uses the session wall clock.
+        // TODO: Update these values when `validate_and_adapt_batch` casts TIMESTAMP to TIMESTAMP_NTZ
+        //   in the session time zone; that change is then a fix, not a regression.
         let to_timestamp_ntz_from_instant = [
             ("2024-01-01 09:00:00.000000", "2024-01-01 09:00:00.000000"),
             ("1969-12-31 23:59:59.000000", "1969-12-31 23:59:59.000000"),
