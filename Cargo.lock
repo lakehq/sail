@@ -7703,6 +7703,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-function",
  "sail-physical-plan",
+ "tokio",
 ]
 
 [[package]]

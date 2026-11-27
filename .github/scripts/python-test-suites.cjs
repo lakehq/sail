@@ -1,12 +1,7 @@
 const fs = require("node:fs");
+const path = require("node:path");
 
-const {
-  findReportComment,
-  renderReport,
-  writeReport,
-} = require("./pull-request-report.cjs");
-
-const REPORT_NAME = "python-test-selection";
+const CHECKLIST_MARKER = "<!-- python-test-selection -->";
 
 function resolveSuiteChoices(suites, event, overrides) {
   if (!["pull_request", "push", "schedule"].includes(event)) {
@@ -62,44 +57,46 @@ function validateInventory(inventory) {
 async function readSuiteChoices({ github, context }) {
   const pr = context.payload.pull_request;
   if (!pr) return {};
-  const comment = await findReportComment(
-    github,
-    context.repo,
-    pr.number,
-    REPORT_NAME,
+  const comments = await github.paginate(github.rest.issues.listComments, {
+    ...context.repo,
+    issue_number: pr.number,
+    per_page: 100,
+  });
+  const comment = comments.find(
+    ({ body, user }) =>
+      user?.login === "github-actions[bot]" &&
+      body?.split(/\r?\n/, 3).includes(CHECKLIST_MARKER),
   );
   return comment ? parseSuiteChoices(comment.body) : {};
 }
 
-function writeSuiteReport({
-  context,
-  runAttempt,
-  suites,
-  choices,
-  reportPath,
-}) {
-  const pr = context.payload.pull_request;
-  if (!pr) return;
+function writeSuiteReport({ context, suites, choices, reportPath }) {
+  if (!context.payload.pull_request) return;
   const report = renderSuiteChecklist(
     suites,
     {
       id: context.runId,
       run_number: context.runNumber,
-      run_attempt: runAttempt,
       repository: { full_name: `${context.repo.owner}/${context.repo.repo}` },
     },
     choices,
   );
-  writeReport(reportPath, pr.number, report);
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  fs.writeFileSync(reportPath, report);
 }
 
 function renderSuiteChecklist(suites, run, selectedSuites) {
   const enabled = new Set(selectedSuites);
+  const activeSuites = selectedSuites
+    .map((name) => `<kbd><b>${name}</b></kbd>`)
+    .join(" ");
   const lines = suites.map(
     ({ name, test_count }) =>
       `- [${enabled.has(name) ? "x" : " "}] \`${name}\` (${test_count} ${test_count === 1 ? "test" : "tests"})`,
   );
-  const body = [
+  return [
+    CHECKLIST_MARKER,
+    "",
     "### Python Test Selection",
     "",
     "Please expand the list to view or select test suites.",
@@ -122,15 +119,19 @@ function renderSuiteChecklist(suites, run, selectedSuites) {
     "",
     "</details>",
     "",
-    `The test suites were discovered by [Build #${run.run_number}](https://github.com/${run.repository.full_name}/actions/runs/${run.id}).`,
+    [
+      `The test suites were discovered by [Build #${run.run_number}](https://github.com/${run.repository.full_name}/actions/runs/${run.id}).`,
+      activeSuites
+        ? "The following test suites were active for this build."
+        : "No test suites were active for this build.",
+    ].join(" "),
+    ...(activeSuites ? ["", activeSuites] : []),
   ].join("\n");
-  return renderReport(REPORT_NAME, run, body);
 }
 
 async function preparePythonTestSuites({
   github,
   context,
-  runAttempt,
   inventoryPath,
   reportPath,
 }) {
@@ -139,7 +140,7 @@ async function preparePythonTestSuites({
   );
   const overrides = await readSuiteChoices({ github, context });
   const choices = resolveSuiteChoices(suites, context.eventName, overrides);
-  writeSuiteReport({ context, runAttempt, suites, choices, reportPath });
+  writeSuiteReport({ context, suites, choices, reportPath });
   return choices;
 }
 

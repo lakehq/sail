@@ -6,9 +6,9 @@ use std::fmt::Write;
 use std::num::NonZeroU8;
 use std::sync::{Arc, LazyLock};
 
-use arrow::datatypes::Date32Type;
+use arrow::datatypes::{Date32Type, Decimal128Type, DecimalType};
 use arrow_schema::{DataType, Field, FieldRef, IntervalUnit, Schema, SchemaRef, TimeUnit};
-use bigdecimal::{BigDecimal, ToPrimitive};
+use bigdecimal::{BigDecimal, RoundingMode, ToPrimitive, Zero};
 use chrono::NaiveDate;
 use datafusion::catalog::Session;
 use datafusion_common::{
@@ -25,6 +25,8 @@ use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::session::time_zone::session_time_zone;
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
+use sail_function::scalar::conversion::cast_string_to_int32::parse_spark_legacy_string_to_i64;
+use sail_function::scalar::datetime::date::Date;
 use sail_function::scalar::datetime::timestamp::TimestampParser;
 use sail_function::scalar::datetime::utils::parse_time_nanoseconds;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
@@ -261,13 +263,17 @@ fn decoded(value: &str) -> Cow<'_, str> {
     Cow::Owned(result)
 }
 
-fn java_double(value: &str) -> Option<f64> {
-    // Double.parseDouble accepts ASCII whitespace, numeric suffixes, and C99 hex floats.
+fn java_float<F>(value: &str) -> Option<F>
+where
+    F: std::str::FromStr
+        + std::ops::Neg<Output = F>
+        + lexical_core::FromLexicalWithOptions<Options = lexical_core::ParseFloatOptions>,
+{
+    // Java floating-point parsers accept ASCII whitespace, numeric suffixes, and C99 hex floats.
     let value = value.trim_matches(|c| c <= ' ');
     let unsigned = value.strip_prefix(['+', '-']).unwrap_or(value);
     let number = match unsigned {
-        "Infinity" => f64::INFINITY,
-        "NaN" => f64::NAN,
+        "Infinity" | "NaN" => unsigned.parse::<F>().ok()?,
         _ => {
             let literal = unsigned
                 .strip_suffix(['d', 'D', 'f', 'F'])
@@ -276,7 +282,7 @@ fn java_double(value: &str) -> Option<f64> {
                 .strip_prefix("0x")
                 .or_else(|| literal.strip_prefix("0X"))
             {
-                hex_double(hex)?
+                hex_float::<F>(hex)?
             } else {
                 if !literal.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
                     return None;
@@ -292,7 +298,9 @@ fn java_double(value: &str) -> Option<f64> {
     })
 }
 
-fn hex_double(hex: &str) -> Option<f64> {
+fn hex_float<F: lexical_core::FromLexicalWithOptions<Options = lexical_core::ParseFloatOptions>>(
+    hex: &str,
+) -> Option<F> {
     // A Java hex float uses a binary exponent. Express its significand in binary too,
     // so lexical can round the entire value once, including subnormal values.
     const FORMAT: u128 = lexical_core::NumberFormatBuilder::new()
@@ -312,7 +320,7 @@ fn hex_double(hex: &str) -> Option<f64> {
     }
     binary.push('p');
     binary.push_str(exponent);
-    lexical_core::parse_with_options::<f64, FORMAT>(
+    lexical_core::parse_with_options::<F, FORMAT>(
         binary.as_bytes(),
         &lexical_core::parse_float_options::HEX_FLOAT,
     )
@@ -403,7 +411,7 @@ fn infer_partition_type(
     } else if let Some(decimal @ ScalarValue::Decimal128(_, _, 0)) = partition_decimal(&normalized)
     {
         decimal.data_type()
-    } else if java_double(value).is_some() {
+    } else if java_float::<f64>(value).is_some() {
         DataType::Float64
     } else if PARTITION_DATETIME.is_match(value) && value.parse::<NaiveDate>().is_ok() {
         DataType::Date32
@@ -573,6 +581,112 @@ impl PartitionDiscovery {
     }
 }
 
+/// Cast a raw catalog value without interpreting file-path escapes.
+pub fn cast_catalog_partition_value(
+    value: String,
+    ty: &DataType,
+    ansi: bool,
+    session_timezone: &str,
+) -> Result<ScalarValue> {
+    if value == HIVE_NULL {
+        return ScalarValue::try_from(ty);
+    }
+    let scalar = match ty {
+        DataType::Date32 => Date::string_to_date32(&value, !ansi).map(ScalarValue::Date32),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let parser = match tz {
+                Some(_) => TimestampParser::Ltz {
+                    default_timezone: session_timezone.to_string(),
+                },
+                None => TimestampParser::Ntz,
+            };
+            parser
+                .parse_unformatted(&value)
+                .map(|micros| ScalarValue::TimestampMicrosecond(Some(micros), tz.clone()))
+        }
+        ty if ty.is_signed_integer() && !ansi => {
+            ScalarValue::Int64(parse_spark_legacy_string_to_i64(&value)).cast_to(ty)
+        }
+        ty if ty.is_signed_integer() => {
+            let integer = value
+                .trim_matches(|c: char| c == ' ' || c.is_ascii_control())
+                .parse::<i64>()
+                .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}"))?;
+            ScalarValue::Int64(Some(integer)).cast_to(ty)
+        }
+        DataType::Boolean => match value
+            .trim_matches(|c: char| c == ' ' || c.is_ascii_control())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "t" | "true" | "y" | "yes" | "1" => Ok(ScalarValue::Boolean(Some(true))),
+            "f" | "false" | "n" | "no" | "0" => Ok(ScalarValue::Boolean(Some(false))),
+            _ => Err(plan_datafusion_err!(
+                "invalid boolean partition value: {value}"
+            )),
+        },
+        DataType::Decimal128(precision, scale) => catalog_decimal(&value, *precision, *scale),
+        DataType::Float32 => java_float::<f32>(catalog_float_literal(&value))
+            .map(|v| ScalarValue::Float32(Some(v)))
+            .ok_or_else(|| plan_datafusion_err!("invalid float partition value: {value}")),
+        DataType::Float64 => java_float::<f64>(catalog_float_literal(&value))
+            .map(|v| ScalarValue::Float64(Some(v)))
+            .ok_or_else(|| plan_datafusion_err!("invalid double partition value: {value}")),
+        _ => ScalarValue::try_from_string(value, ty),
+    };
+    match scalar {
+        Err(_) if !ansi => ScalarValue::try_from(ty),
+        result => result,
+    }
+}
+
+// Spark also accepts case-insensitive special values in casts from strings.
+fn catalog_float_literal(value: &str) -> &str {
+    let value = value.trim_matches(|c| c <= ' ');
+    match value.to_ascii_lowercase().as_str() {
+        "inf" | "+inf" | "infinity" | "+infinity" => "Infinity",
+        "-inf" | "-infinity" => "-Infinity",
+        "nan" => "NaN",
+        _ => value,
+    }
+}
+
+#[expect(clippy::expect_used)]
+static CATALOG_DECIMAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE]([+-]?[0-9]+))?$")
+        .expect("valid decimal pattern")
+});
+
+fn catalog_decimal(value: &str, precision: u8, scale: i8) -> Result<ScalarValue> {
+    let invalid =
+        || plan_datafusion_err!("invalid DECIMAL({precision},{scale}) partition value: {value}");
+    // Java BigDecimal bounds the exponent and the resulting scale to signed 32-bit integers.
+    let literal = normalize_decimal_digits(value.trim_matches(|c| c <= ' '));
+    let captures = CATALOG_DECIMAL.captures(&literal).ok_or_else(invalid)?;
+    if let Some(exponent) = captures.get(1) {
+        exponent.as_str().parse::<i32>().map_err(|_| invalid())?;
+    }
+    let decimal = literal.parse::<BigDecimal>().map_err(|_| invalid())?;
+    i32::try_from(decimal.fractional_digit_count()).map_err(|_| invalid())?;
+    let digits_before_point =
+        i128::from(decimal.digits()) - i128::from(decimal.fractional_digit_count());
+    // Bound exponent expansion before rounding a scientific-notation value to the target scale.
+    let unscaled = if decimal.is_zero() || digits_before_point < -i128::from(scale) {
+        0
+    } else if digits_before_point > i128::from(precision) - i128::from(scale) {
+        return Err(invalid());
+    } else {
+        decimal
+            .with_scale_round(i64::from(scale), RoundingMode::HalfUp)
+            .into_bigint_and_exponent()
+            .0
+            .to_i128()
+            .ok_or_else(invalid)?
+    };
+    Decimal128Type::validate_decimal_precision(unscaled, precision, scale)?;
+    Ok(ScalarValue::Decimal128(Some(unscaled), precision, scale))
+}
+
 fn cast_partition_value(
     options: &BasePathOptions,
     value: &str,
@@ -609,7 +723,7 @@ fn parse_partition_value(
     let ty = field.data_type();
     match ty {
         DataType::Float32 | DataType::Float64 => {
-            let number = java_double(value).ok_or_else(|| {
+            let number = java_float::<f64>(value).ok_or_else(|| {
                 plan_datafusion_err!("invalid floating-point partition value: {value}")
             })?;
             ScalarValue::Float64(Some(number)).cast_to(ty)

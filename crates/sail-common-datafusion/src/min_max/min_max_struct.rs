@@ -12,7 +12,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 
 use crate::min_max::common::compare_nested;
@@ -123,36 +123,32 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         )
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
-    //     let num_groups = self.inner.min_max.len();
-    //     selection.validate_num_groups(num_groups)?;
-    //     let num_values = selection.len();
-    //     let min_maxes = selection
-    //         .iter()
-    //         .map(|index| self.inner.min_max[index].as_ref());
-    //     self.build_array(min_maxes, num_values)
-    // }
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        let num_groups = self.inner.min_max.len();
+        selection.validate_num_groups(num_groups)?;
+        let num_values = selection.len();
+        let min_maxes = selection
+            .iter()
+            .map(|index| self.inner.min_max[index].as_ref());
+        self.build_array(min_maxes, num_values)
+    }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn supports_evaluate_preserving(&self) -> bool {
-    //     true
-    // }
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // min/max are their own states (no transition needed)
         self.evaluate(emit_to).map(|arr| vec![arr])
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn state_preserving(&mut self, selection: GroupSelection<'_>) -> Result<Vec<ArrayRef>> {
-    //     self.evaluate_preserving(selection).map(|array| vec![array])
-    // }
+    fn state_preserving(&mut self, selection: GroupSelection<'_>) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn supports_state_preserving(&self) -> bool {
-    //     true
-    // }
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
 
     fn merge_batch(
         &mut self,
@@ -518,70 +514,69 @@ mod tests {
         assert_eq!(str_array.value(1), "d");
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // #[test]
-    // fn test_min_struct_preserving_reads_and_empty_selection() -> Result<()> {
-    //     let array = create_test_struct_array(
-    //         vec![Some(3), Some(2), Some(1)],
-    //         vec![Some("c"), Some("b"), Some("a")],
-    //     );
-    //     let data_type = array.data_type().clone();
-    //     let mut accumulator = MinMaxStructAccumulator::new_min(data_type.clone());
-    //     accumulator.update_batch(&[Arc::new(array)], &[0, 1, 0], None, 3)?;
-    //
-    //     let selection = GroupSelection::try_from_indices(&[1, 0, 2, 1], 3)?;
-    //     for _ in 0..2 {
-    //         let actual = accumulator.evaluate_preserving(selection)?;
-    //         let actual = actual.as_struct();
-    //         assert_eq!(actual.len(), 4);
-    //         assert_eq!(
-    //             actual
-    //                 .column(0)
-    //                 .as_primitive::<Int32Type>()
-    //                 .iter()
-    //                 .collect::<Vec<_>>(),
-    //             vec![Some(2), Some(1), None, Some(2)]
-    //         );
-    //         assert_eq!(
-    //             actual
-    //                 .column(1)
-    //                 .as_string::<i32>()
-    //                 .iter()
-    //                 .collect::<Vec<_>>(),
-    //             vec![Some("b"), Some("a"), None, Some("b")]
-    //         );
-    //         assert!(actual.is_null(2));
-    //     }
-    //
-    //     let empty_selection = GroupSelection::try_from_indices(&[], 3)?;
-    //     let actual = accumulator.evaluate_preserving(empty_selection)?;
-    //     assert_eq!(actual.data_type(), &data_type);
-    //     assert!(actual.is_empty());
-    //     let state = accumulator.state_preserving(empty_selection)?;
-    //     assert_eq!(state.len(), 1);
-    //     assert_eq!(state[0].data_type(), &data_type);
-    //     assert!(state[0].is_empty());
-    //
-    //     let update = create_test_struct_array(vec![Some(0)], vec![Some("z")]);
-    //     accumulator.update_batch(&[Arc::new(update)], &[2], None, 3)?;
-    //     let actual = accumulator.evaluate_preserving(GroupSelection::all(3))?;
-    //     assert_eq!(
-    //         actual
-    //             .as_struct()
-    //             .column(0)
-    //             .as_primitive::<Int32Type>()
-    //             .values(),
-    //         &[1, 2, 0]
-    //     );
-    //
-    //     let mut empty_accumulator = MinMaxStructAccumulator::new_min(data_type);
-    //     assert!(
-    //         empty_accumulator
-    //             .evaluate_preserving(GroupSelection::all(0))?
-    //             .is_empty()
-    //     );
-    //     Ok(())
-    // }
+    #[test]
+    fn test_min_struct_preserving_reads_and_empty_selection() -> Result<()> {
+        let array = create_test_struct_array(
+            vec![Some(3), Some(2), Some(1)],
+            vec![Some("c"), Some("b"), Some("a")],
+        );
+        let data_type = array.data_type().clone();
+        let mut accumulator = MinMaxStructAccumulator::new_min(data_type.clone());
+        accumulator.update_batch(&[Arc::new(array)], &[0, 1, 0], None, 3)?;
+
+        let selection = GroupSelection::try_from_indices(&[1, 0, 2, 1], 3)?;
+        for _ in 0..2 {
+            let actual = accumulator.evaluate_preserving(selection)?;
+            let actual = actual.as_struct();
+            assert_eq!(actual.len(), 4);
+            assert_eq!(
+                actual
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                vec![Some(2), Some(1), None, Some(2)]
+            );
+            assert_eq!(
+                actual
+                    .column(1)
+                    .as_string::<i32>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                vec![Some("b"), Some("a"), None, Some("b")]
+            );
+            assert!(actual.is_null(2));
+        }
+
+        let empty_selection = GroupSelection::try_from_indices(&[], 3)?;
+        let actual = accumulator.evaluate_preserving(empty_selection)?;
+        assert_eq!(actual.data_type(), &data_type);
+        assert!(actual.is_empty());
+        let state = accumulator.state_preserving(empty_selection)?;
+        assert_eq!(state.len(), 1);
+        assert_eq!(state[0].data_type(), &data_type);
+        assert!(state[0].is_empty());
+
+        let update = create_test_struct_array(vec![Some(0)], vec![Some("z")]);
+        accumulator.update_batch(&[Arc::new(update)], &[2], None, 3)?;
+        let actual = accumulator.evaluate_preserving(GroupSelection::all(3))?;
+        assert_eq!(
+            actual
+                .as_struct()
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[1, 2, 0]
+        );
+
+        let mut empty_accumulator = MinMaxStructAccumulator::new_min(data_type);
+        assert!(
+            empty_accumulator
+                .evaluate_preserving(GroupSelection::all(0))?
+                .is_empty()
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_min_max_with_filter() {

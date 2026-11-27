@@ -80,7 +80,7 @@ impl Date {
         }
     }
 
-    fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
+    pub fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
         match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
             Ok(v) => Ok(Some(v)),
             Err(_e) if is_try => Ok(None),

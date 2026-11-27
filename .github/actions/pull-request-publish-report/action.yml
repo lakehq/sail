@@ -1,0 +1,47 @@
+name: Publish pull request report
+description: Publish a completed workflow attempt report to its pull request
+inputs:
+  report_name:
+    description: The name that identifies the report
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download report
+      id: download
+      uses: actions/download-artifact@v7
+      # Some workflow runs omit optional reports.
+      continue-on-error: true
+      with:
+        name: ${{ inputs.report_name }}-report
+        run-id: ${{ github.event.workflow_run.id }}
+        path: ${{ runner.temp }}/pull-request-report/${{ inputs.report_name }}
+        github-token: ${{ github.token }}
+
+    - name: Validate report
+      id: validate
+      if: steps.download.outcome == 'success'
+      uses: actions/github-script@v9
+      env:
+        REPORT_PATH: ${{ steps.download.outputs.download-path }}/report.md
+        REPORT_NAME: ${{ inputs.report_name }}
+        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
+      with:
+        script: |
+          const { validateReport } = require(process.env.REPORT_SCRIPT);
+          const number = await validateReport({
+            github,
+            context,
+            core,
+            reportPath: process.env.REPORT_PATH,
+            reportName: process.env.REPORT_NAME,
+          });
+          if (number !== undefined) core.setOutput('number', number);
+
+    - name: Publish report
+      if: steps.validate.outputs.number != ''
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: ${{ inputs.report_name }}
+        number: ${{ steps.validate.outputs.number }}
+        path: ${{ steps.download.outputs.download-path }}/report.md

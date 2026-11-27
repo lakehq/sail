@@ -22,8 +22,8 @@ use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::{
-    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
-    get_partition_columns_and_file_schema,
+    DataSource, OptionLayer, RegisteredPartition, SinkInfo, SinkMode, SourceInfo,
+    find_path_in_options, get_partition_columns_and_file_schema,
 };
 use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use url::Url;
@@ -31,7 +31,7 @@ use url::Url;
 use crate::listing::partition::{
     boolean_option, read_option, resolve_base_path, schema_names_match, split_discovered_partitions,
 };
-use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
+use crate::listing::table::{ListingTableSource, ListingTableSourceConfig, RegisteredReadOptions};
 use crate::listing::utils::{SchemaSampling, rewrite_unsupported_fields, sample_listing_files};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::url::{PathGlobFilter, resolve_listing_writer_url, resolve_read_urls};
@@ -54,6 +54,11 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
+    /// Whether a zero-byte file can produce a row during a scan.
+    fn reads_empty_files(&self) -> bool {
+        false
+    }
+
     fn configure_schema_inference(
         &mut self,
         _ctx: &dyn Session,
@@ -217,6 +222,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             partition_directories_only,
             base_path.as_ref(),
             recursive,
+            false,
             sampling,
         )
         .await?;
@@ -373,7 +379,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .transpose()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             output_projection,
-            table_paths: urls.into_iter().flatten().collect(),
+            table_paths: urls.into_iter().flatten().map(|url| (url, None)).collect(),
             recursive_file_lookup: recursive,
             base_path,
             schema,
@@ -386,6 +392,76 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             partition_directories_only,
             compression,
         })?;
+        Ok(Arc::new(source))
+    }
+
+    fn supports_registered_partitions(&self) -> bool {
+        true
+    }
+
+    async fn create_partitioned_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        partitions: Vec<RegisteredPartition>,
+    ) -> Result<Arc<dyn TableSource>> {
+        if boolean_option(
+            "recursiveFileLookup",
+            read_option(&info.options, "recursiveFileLookup"),
+            false,
+        )? {
+            return plan_err!("recursiveFileLookup is not supported for a partitioned table");
+        }
+        let schema = info.schema.ok_or_else(|| {
+            datafusion_common::plan_datafusion_err!("missing registered file table schema")
+        })?;
+        let (fields, file_schema) =
+            get_partition_columns_and_file_schema(&schema, info.partition_by)?;
+        let mut read_format = T::read(ctx, info.options)?;
+        let sampling =
+            read_format.configure_schema_inference(ctx, false, info.read_case_sensitive)?;
+        let path_glob_filter = read_format
+            .path_glob_filter()
+            .map(PathGlobFilter::parse)
+            .transpose()?;
+        let paths = partitions
+            .into_iter()
+            .map(|p| {
+                let location = p.location.ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "catalog partition is missing its storage location"
+                    )
+                })?;
+                let url = crate::parse_absolute_directory_url(&location).ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "invalid catalog partition location: {location}"
+                    )
+                })?;
+                Ok((ListingTableUrl::try_new(url, None)?, Some(p.values)))
+            })
+            .collect::<Result<_>>()?;
+        let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            table_paths: paths,
+            recursive_file_lookup: false,
+            base_path: None,
+            output_projection: None,
+            schema: TableSchema::builder(Arc::new(file_schema))
+                .with_table_partition_cols(fields)
+                .build(),
+            constraints: info.constraints,
+            file_sort_order: vec![info.sort_order],
+            collect_stat: ctx.config().collect_statistics(),
+            target_partitions: ctx.config().target_partitions(),
+            read_format: Arc::new(read_format),
+            path_glob_filter,
+            partition_directories_only: false,
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        })?
+        .with_registered_read(RegisteredReadOptions {
+            sampling,
+            format: T::name(),
+            case_sensitive: info.read_case_sensitive,
+        });
         Ok(Arc::new(source))
     }
 
@@ -446,6 +522,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         }))
     }
 }
+
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file"
@@ -456,6 +533,7 @@ async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     }
     listing_target_nonempty(ctx, url).await
 }
+
 async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;
@@ -464,7 +542,7 @@ async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
 
 // Reconciles a user-specified schema's field names with the physical file schema
 // case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
-fn reconcile_schema_names_case_insensitive(
+pub(super) fn reconcile_schema_names_case_insensitive(
     schema: Schema,
     physical: &Schema,
     partitions: &[String],

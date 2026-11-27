@@ -95,10 +95,7 @@ jobs:
         uses: pypa/hatch@install
 
       - name: Install protoc
-        id: protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: $/.github/actions/setup-protoc
 
       - name: Patch package version
         shell: bash
