@@ -776,18 +776,17 @@ impl PlanResolver<'_> {
             Ok(())
         })?;
         let definition = Self::stored_view_definition(view);
-        // A view whose query read persistent views, or tables that its plan does not scan,
-        // resolves its query again at each read, as a view over it does, since its stored
-        // plan would read what the query read when the view was created. A request for the
-        // schema gets the columns of the stored plan if the query no longer resolves.
+        // A view whose query read persistent views, a catalog table in several scans of its
+        // partitions, or tables that its plan does not scan, resolves its query again at each
+        // read, as a view over it does, since its stored plan would read what the query read
+        // when the view was created. A request for the schema gets the columns of the stored
+        // plan if the query no longer resolves.
         if let Some(definition) = definition.as_ref().filter(|x| x.resolves_at_each_read) {
-            match self
+            let result = self
                 .resolve_view_definition_at_read(plan, view, definition, state)
-                .await
-            {
-                Ok(plan) => return Ok(plan),
-                Err(error) if !self.schema_only => return Err(error),
-                Err(_) => {}
+                .await;
+            if result.is_ok() || !self.schema_only {
+                return result;
             }
         }
         let plan = plan.clone();
@@ -822,11 +821,11 @@ impl PlanResolver<'_> {
                 // as a read of a view created over several scans does.
                 Ok(Ok(None)) => {
                     state.replace_view_definition(recorded.take());
-                    let Some(definition) = &definition else {
-                        return Err(PlanError::internal(
+                    let definition = definition.as_ref().ok_or_else(|| {
+                        PlanError::internal(
                             "temporary view without a definition reads a catalog table",
-                        ));
-                    };
+                        )
+                    })?;
                     match self
                         .resolve_view_definition_at_read(&plan, view, definition, state)
                         .await

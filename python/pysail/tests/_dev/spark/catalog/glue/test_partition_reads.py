@@ -10,6 +10,33 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+JSON_PARTITION = {
+    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+    "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+}
+
+
+def add_partition(glue, name, value, descriptor):
+    glue.create_partition(
+        DatabaseName="test_db",
+        TableName=name,
+        PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
+    )
+
+
+def add_parquet_partition(glue, name, tmp_path, value, row):
+    path = tmp_path / f"parquet-{value}"
+    path.mkdir()
+    pq.write_table(pa.table({key: [x] for key, x in row.items()}), path / "data.parquet")
+    add_partition(glue, name, value, {"Location": str(path)})
+
+
+def add_json_partition(glue, name, tmp_path, value, row):
+    path = tmp_path / f"json-{value}"
+    path.mkdir()
+    (path / "data.json").write_text(json.dumps(row))
+    add_partition(glue, name, value, {"Location": f"file:{path}", **JSON_PARTITION})
+
 
 def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
     glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
@@ -405,40 +432,16 @@ def test_temporary_views_read_the_current_registered_partitions(spark, moto_endp
     root = tmp_path / "root"
     root.mkdir()
     spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
-
-    def add_partition(value, descriptor):
-        glue.create_partition(
-            DatabaseName="test_db",
-            TableName=name,
-            PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
-        )
-
-    def add_parquet_partition(value):
-        path = tmp_path / f"parquet-{value}"
-        path.mkdir()
-        pq.write_table(pa.table({"id": [int(value)]}), path / "data.parquet")
-        add_partition(value, {"Location": str(path)})
-
     try:
-        add_parquet_partition("1")
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1})
         spark.sql(f"CREATE TEMPORARY VIEW one_scan AS SELECT id, p FROM {table}")  # noqa: S608
         assert sorted(spark.table("one_scan").collect()) == [(1, 1)]
         # The JSON partition is read in another scan than the Parquet partitions.
-        path = tmp_path / "json-2"
-        path.mkdir()
-        (path / "data.json").write_text(json.dumps({"id": 2}))
-        add_partition(
-            "2",
-            {
-                "Location": f"file:{path}",
-                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
-            },
-        )
+        add_json_partition(glue, name, tmp_path, "2", {"id": 2})
         assert sorted(spark.table("one_scan").collect()) == [(1, 1), (2, 2)]
         spark.sql(f"CREATE TEMPORARY VIEW two_scans AS SELECT id, p FROM {table}")  # noqa: S608
         assert sorted(spark.table("two_scans").collect()) == [(1, 1), (2, 2)]
-        add_parquet_partition("3")
+        add_parquet_partition(glue, name, tmp_path, "3", {"id": 3})
         for view in ["one_scan", "two_scans"]:
             assert sorted(spark.table(view).collect()) == [(1, 1), (2, 2), (3, 3)]
     finally:
@@ -455,37 +458,16 @@ def test_views_cast_partition_values_with_their_creation_config(spark, moto_endp
     root = tmp_path / "root"
     root.mkdir()
     spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
-
-    def add_partition(value, descriptor):
-        glue.create_partition(
-            DatabaseName="test_db",
-            TableName=name,
-            PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
-        )
-
-    for value, id_ in [("1", 1), ("bad", 9)]:
-        path = tmp_path / f"parquet-{value}"
-        path.mkdir()
-        pq.write_table(pa.table({"id": [id_]}), path / "data.parquet")
-        add_partition(value, {"Location": str(path)})
-    expected = [(1, 1), (9, None)]
-    if scans == 2:
-        # The JSON partition is read in another scan, so the view resolves its query at each read.
-        path = tmp_path / "json-2"
-        path.mkdir()
-        (path / "data.json").write_text(json.dumps({"id": 2}))
-        add_partition(
-            "2",
-            {
-                "Location": f"file:{path}",
-                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
-            },
-        )
-        expected = [(1, 1), (2, 2), (9, None)]
     ansi = "spark.sql.ansi.enabled"
     previous = spark.conf.get(ansi)
     try:
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1})
+        add_parquet_partition(glue, name, tmp_path, "bad", {"id": 9})
+        expected = [(1, 1), (9, None)]
+        if scans == 2:
+            # The JSON partition is read in another scan, so the view resolves its query at each read.
+            add_json_partition(glue, name, tmp_path, "2", {"id": 2})
+            expected = [(1, 1), (2, 2), (9, None)]
         spark.conf.set(ansi, "false")
         spark.sql(f"CREATE TEMPORARY VIEW lenient_partitions AS SELECT id, p FROM {table}")  # noqa: S608
         spark.conf.set(ansi, "true")
@@ -520,32 +502,11 @@ def test_view_over_one_scan_resolves_its_query_when_the_table_is_read_in_several
         "rescan_star": f"SELECT * FROM {table}",  # noqa: S608
     }
     try:
-        path = tmp_path / "parquet-1"
-        path.mkdir()
-        pq.write_table(pa.table({"id": [1], "b": [10]}), path / "data.parquet")
-        glue.create_partition(
-            DatabaseName="test_db",
-            TableName=name,
-            PartitionInput={"Values": ["1"], "StorageDescriptor": {"Location": str(path)}},
-        )
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1, "b": 10})
         for view, query in queries.items():
             spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
         # The JSON partition is read in another scan, so each view now resolves its query.
-        path = tmp_path / "json-2"
-        path.mkdir()
-        (path / "data.json").write_text(json.dumps({"id": 2, "b": 20}))
-        glue.create_partition(
-            DatabaseName="test_db",
-            TableName=name,
-            PartitionInput={
-                "Values": ["2"],
-                "StorageDescriptor": {
-                    "Location": f"file:{path}",
-                    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                    "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
-                },
-            },
-        )
+        add_json_partition(glue, name, tmp_path, "2", {"id": 2, "b": 20})
         stored = glue.get_table(DatabaseName="test_db", Name=name)["Table"]
         table_input = {
             key: stored[key] for key in ["Name", "StorageDescriptor", "PartitionKeys", "TableType", "Parameters"]

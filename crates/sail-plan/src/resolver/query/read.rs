@@ -490,7 +490,8 @@ impl PlanResolver<'_> {
         // also pin one table snapshot, while file tables still list files for each scan.
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
         // Delta Lake and Iceberg sources read their columns by the metadata of the table,
-        // whatever the letter case of column names is matched by.
+        // whatever the letter case of column names is matched by, and do not cast the
+        // partition values that the catalog lists.
         let is_lake_source = data_source_registry
             .get_lake_source_if_supported(&format)?
             .is_some();

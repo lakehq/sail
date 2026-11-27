@@ -139,14 +139,14 @@ def test_save_as_table(spark, tmp_path):
 
 @pytest.mark.parametrize("table_format", ["parquet", "csv", "json"])
 def test_sql_writes_return_no_columns_and_no_rows(spark, tmp_path, table_format):
-    location = escape_sql_string_literal(str(tmp_path / "t2"))
-    spark.sql(f"CREATE TABLE t2 (id LONG) USING {table_format} LOCATION '{location}'")
+    location = {name: escape_sql_string_literal(str(tmp_path / name)) for name in ["t2", "t3", "out"]}
+    spark.sql(f"CREATE TABLE t2 (id LONG) USING {table_format} LOCATION '{location['t2']}'")
     for query in [
         "INSERT INTO t2 VALUES (1)",
         "INSERT INTO t2 SELECT 2 WHERE false",
         "INSERT OVERWRITE t2 VALUES (3)",
-        f"CREATE TABLE t3 USING {table_format} LOCATION '{location}3' AS SELECT CAST(4 AS LONG) AS id",
-        f"INSERT OVERWRITE DIRECTORY '{location}5' USING {table_format} SELECT 5 AS id",
+        f"CREATE TABLE t3 USING {table_format} LOCATION '{location['t3']}' AS SELECT CAST(4 AS LONG) AS id",
+        f"INSERT OVERWRITE DIRECTORY '{location['out']}' USING {table_format} SELECT 5 AS id",
     ]:
         result = spark.sql(query)
         assert result.schema == StructType([])
