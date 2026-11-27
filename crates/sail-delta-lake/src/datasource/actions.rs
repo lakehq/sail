@@ -12,37 +12,48 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion_common::extensions::Extensions;
 use object_store::ObjectMeta;
 
-use crate::conversion::parse_optional_partition_value;
+use crate::conversion::PartitionValueParser;
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
+
+/// Returns the parsers for the partition values of a scan, `None` for a column that `schema`
+/// does not have.
+pub fn partition_value_parsers(
+    partition_columns: &[PhysicalPartitionColumn],
+    schema: &ArrowSchema,
+    time_zone: &str,
+) -> DeltaResult<Vec<Option<PartitionValueParser>>> {
+    partition_columns
+        .iter()
+        .map(|column| {
+            schema
+                .field_with_name(&column.logical_name)
+                .ok()
+                .map(|field| PartitionValueParser::try_new(field.data_type(), time_zone))
+                .transpose()
+        })
+        .collect()
+}
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
     location: object_store::path::Path,
     partition_columns: &[PhysicalPartitionColumn],
-    schema: &ArrowSchema,
-    time_zone: &str,
+    parsers: &[Option<PartitionValueParser>],
 ) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
-        .map(|column| {
-            let field = match schema.field_with_name(&column.logical_name) {
-                Ok(field) => field,
-                Err(_) => return ScalarValue::Null,
+        .zip(parsers)
+        .map(|(column, parser)| {
+            let Some(parser) = parser else {
+                return ScalarValue::Null;
             };
-
-            action
+            let raw = action
                 .partition_values
                 .get(&column.physical_name)
-                .and_then(|value| value.as_ref())
-                .map(|value| {
-                    parse_optional_partition_value(Some(value), field.data_type(), time_zone)
-                })
-                .unwrap_or_else(|| {
-                    parse_optional_partition_value(None, field.data_type(), time_zone)
-                })
-                .unwrap_or(ScalarValue::Null)
+                .and_then(Option::as_deref);
+            parser.parse(raw).unwrap_or(ScalarValue::Null)
         })
         .collect::<Vec<_>>();
 
@@ -90,7 +101,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::ScalarValue;
 
-    use super::partitioned_file_from_action;
+    use super::{partition_value_parsers, partitioned_file_from_action};
     use crate::schema::PhysicalPartitionColumn;
     use crate::spec::Add;
 
@@ -120,12 +131,14 @@ mod tests {
         };
 
         #[expect(clippy::expect_used)]
+        let parsers = partition_value_parsers(&partition_columns, &schema, "UTC")
+            .expect("partition value types should be supported");
+        #[expect(clippy::expect_used)]
         let file = partitioned_file_from_action(
             &action,
             object_store::path::Path::from(action.path.as_str()),
             &partition_columns,
-            &schema,
-            "UTC",
+            &parsers,
         )
         .expect("partition values should parse");
 

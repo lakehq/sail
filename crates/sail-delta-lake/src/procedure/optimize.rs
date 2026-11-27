@@ -24,7 +24,7 @@ use super::maintenance::{
 use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
-use crate::conversion::{ScalarExt, parse_optional_partition_value};
+use crate::conversion::{PartitionValueParser, ScalarExt};
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
@@ -110,7 +110,7 @@ pub(crate) async fn plan(
     }
     let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
-    let partition_columns = bin_key_columns(&snapshot);
+    let partition_columns = bin_key_columns(&snapshot)?;
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
     for add in candidates {
         let dv_rewrite = add.deletion_vector.as_ref().is_some_and(|dv| {
@@ -355,20 +355,23 @@ pub(super) async fn finish(
         .map_err(|e| DeltaError::generic_err(e).into())
 }
 
-/// Resolves the partition column types once for the bin keys of all files.
+/// Resolves the partition value parsers once for the bin keys of all files.
 fn bin_key_columns(
     snapshot: &DeltaSnapshot,
-) -> Vec<(PhysicalPartitionColumn, Option<ArrowDataType>)> {
+) -> Result<Vec<(PhysicalPartitionColumn, Option<PartitionValueParser>)>> {
     snapshot
         .physical_partition_columns()
         .into_iter()
         .map(|column| {
-            let data_type = snapshot
+            let parser = snapshot
                 .schema()
                 .field_with_name(&column.logical_name)
                 .ok()
-                .map(|field| field.data_type().clone());
-            (column, data_type)
+                .map(|field| {
+                    PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())
+                })
+                .transpose()?;
+            Ok((column, parser))
         })
         .collect()
 }
@@ -379,7 +382,7 @@ fn bin_key_columns(
 /// offset now but without one by earlier versions, so that files of one partition share a bin.
 fn bin_key(
     snapshot: &DeltaSnapshot,
-    partition_columns: &[(PhysicalPartitionColumn, Option<ArrowDataType>)],
+    partition_columns: &[(PhysicalPartitionColumn, Option<PartitionValueParser>)],
     add: &Add,
 ) -> Result<BTreeMap<String, Option<String>>> {
     let mut key = add
@@ -387,34 +390,24 @@ fn bin_key(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<BTreeMap<_, _>>();
-    for (column, data_type) in partition_columns {
+    for (column, parser) in partition_columns {
         let Some(value) = key.get_mut(&column.physical_name) else {
             continue;
         };
+        let Some(parser) = parser else {
+            // A column missing from the schema fails only for an empty value, as before.
+            if value.as_deref() == Some("") {
+                snapshot.schema().field_with_name(&column.logical_name)?;
+            }
+            continue;
+        };
         if value.as_deref() == Some("") {
-            let data_type = match data_type {
-                Some(data_type) => data_type,
-                None => snapshot
-                    .schema()
-                    .field_with_name(&column.logical_name)?
-                    .data_type(),
-            };
-            if parse_optional_partition_value(
-                value.as_deref(),
-                data_type,
-                snapshot.partition_time_zone(),
-            )?
-            .is_null()
-            {
+            if parser.parse(value.as_deref())?.is_null() {
                 *value = None;
             }
-        } else if let Some(data_type @ ArrowDataType::Timestamp(_, Some(_))) = data_type
+        } else if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_)))
             // A timestamp value that does not parse keeps its spelling, as before.
-            && let Ok(scalar) = parse_optional_partition_value(
-                value.as_deref(),
-                data_type,
-                snapshot.partition_time_zone(),
-            )
+            && let Ok(scalar) = parser.parse(value.as_deref())
             && !scalar.is_null()
         {
             *value = Some(scalar.serialize().into_owned());
@@ -504,16 +497,16 @@ fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<R
             field,
             snapshot.effective_column_mapping_mode(),
         );
+        let parser =
+            PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())?;
         let values = snapshot
             .adds()
             .iter()
             .map(|add| {
-                parse_optional_partition_value(
+                parser.parse(
                     add.partition_values
                         .get(physical)
                         .and_then(Option::as_deref),
-                    field.data_type(),
-                    snapshot.partition_time_zone(),
                 )
             })
             .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
@@ -566,6 +559,7 @@ mod tests {
         fields: impl IntoIterator<Item = StructField>,
         partition_columns: Vec<String>,
         adds: impl IntoIterator<Item = Add>,
+        config: DeltaSnapshotConfig,
     ) -> Result<DeltaSnapshot> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let url = url::Url::parse("memory:///").unwrap();
@@ -597,13 +591,7 @@ mod tests {
                 },
             )
             .await?;
-        Ok(DeltaSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaSnapshotConfig::default(),
-            None,
-            None,
-        )
-        .await?)
+        Ok(DeltaSnapshot::try_new(log_store.as_ref(), config, None, None).await?)
     }
 
     async fn predicate_snapshot(
@@ -636,7 +624,7 @@ mod tests {
             data_change: true,
             ..Default::default()
         });
-        snapshot_with(fields, partition_columns, adds).await
+        snapshot_with(fields, partition_columns, adds, Default::default()).await
     }
 
     #[tokio::test]
@@ -648,9 +636,13 @@ mod tests {
             ],
             vec!["ts".into()],
             [],
+            DeltaSnapshotConfig {
+                partition_time_zone: "America/Los_Angeles".into(),
+                ..Default::default()
+            },
         )
         .await?;
-        let columns = bin_key_columns(&snapshot);
+        let columns = bin_key_columns(&snapshot)?;
         let key = |value: &str| {
             let add = Add {
                 path: format!("{value}.parquet"),
@@ -660,15 +652,16 @@ mod tests {
             bin_key(&snapshot, &columns, &add)
         };
 
-        // In a UTC session, a file written without an offset shares the bin of a file written
-        // with one.
-        let old = key("2024-01-01 09:00:00.000000")?;
+        // A file written without an offset shares the bin of a file written with one when both
+        // are the same instant in the session time zone.
+        let old = key("2024-01-01 01:00:00.000000")?;
         let new = key("2024-01-01T09:00:00.000000Z")?;
         assert_eq!(old, new);
         assert_eq!(
             new.get("ts"),
             Some(&Some("2024-01-01T09:00:00.000000Z".to_string()))
         );
+        assert_ne!(new, key("2024-01-01 09:00:00.000000")?);
         assert_ne!(new, key("2024-01-01T10:00:00.000000Z")?);
         Ok(())
     }

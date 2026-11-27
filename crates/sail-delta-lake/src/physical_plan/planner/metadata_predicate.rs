@@ -13,11 +13,11 @@ use datafusion::functions::core::expr_fn::nullif;
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
 use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunction};
-use datafusion::logical_expr::{Expr, Operator, lit};
+use datafusion::logical_expr::{Expr, Operator, ScalarUDF, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 
-use crate::conversion::partition_parse_type;
 use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
 use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
@@ -103,9 +103,10 @@ fn type_partition_columns(
                 .data_type()
                 .clone();
             let mut value = nullif(expr, lit(""));
-            // Parse as `parse_partition_value` does.
-            if let Some(parse_type) = partition_parse_type(&data_type, time_zone) {
-                value = Expr::Cast(Cast::new(Box::new(value), parse_type));
+            // Parse a TIMESTAMP value as `PartitionValueParser` does, in the session time zone.
+            if let ArrowDataType::Timestamp(_, Some(_)) = data_type {
+                let parse = Timestamp::try_new(Some(Arc::from(time_zone)), true, false)?;
+                value = ScalarUDF::new_from_impl(parse).call(vec![value]);
             }
             Ok(Transformed::yes(Expr::Cast(Cast::new(
                 Box::new(value),
@@ -572,7 +573,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray, StructArray};
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{Field, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::common::ToDFSchema;
     use datafusion::logical_expr::Expr;
@@ -705,6 +706,59 @@ mod tests {
                 &datafusion::arrow::array::BooleanArray::from(expected)
             );
         }
+        Ok(())
+    }
+
+    /// TIMESTAMP partition values parse as the scans parse them: without an offset, as a wall
+    /// clock in the session time zone, the first instant when it occurs twice.
+    #[test]
+    fn replay_timestamp_partition_values_use_the_session_time_zone() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "ts",
+            Arc::new(StringArray::from(vec![
+                "2024-01-01 01:00:00.000000",
+                "2024-01-01T09:00:00.000000Z",
+                "2024-01-01 09:00:00.000000",
+                "2024-11-03 01:30:00",
+                "",
+            ])) as Arc<_>,
+        )])?;
+        let logical_schema = ArrowSchema::new(vec![Field::new(
+            "ts",
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        )]);
+        let instant = |micros: i64| {
+            Expr::Literal(
+                ScalarValue::TimestampMicrosecond(Some(micros), Some("UTC".into())),
+                None,
+            )
+        };
+        let ts = Expr::Column(LogicalColumn::new_unqualified("ts"));
+        // 2024-01-01T09:00Z and 2024-11-03T08:30Z (01:30 PDT).
+        let predicate = ts
+            .clone()
+            .eq(instant(1_704_099_600_000_000))
+            .or(ts.eq(instant(1_730_622_600_000_000)));
+        let predicate = type_partition_columns(
+            predicate,
+            &["ts".to_string()],
+            &logical_schema,
+            "America/Los_Angeles",
+        )?;
+        let ctx = SessionContext::new();
+        let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
+        let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            actual.as_ref(),
+            &datafusion::arrow::array::BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+            ])
+        );
         Ok(())
     }
 

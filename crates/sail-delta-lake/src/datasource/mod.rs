@@ -29,7 +29,7 @@ pub mod scan;
 pub mod schema;
 
 // Re-exports
-pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
+pub use actions::{adds_to_remove_actions, partition_value_parsers, partitioned_file_from_action};
 pub use expressions::{
     PredicateProperties, collect_physical_columns, get_pushdown_filters,
     physical_predicate_uses_struct_value, predicate_uses_struct_value,

@@ -11,7 +11,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
 
 use super::DeltaSnapshot;
-use crate::conversion::parse_optional_partition_value;
+use crate::conversion::PartitionValueParser;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
@@ -206,12 +206,13 @@ pub(crate) fn parse_partition_values_array(
                 .get(physical_name)
                 .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?;
             let arrow_dt = arrow_field.data_type();
+            let parser = PartitionValueParser::try_new(arrow_dt, time_zone)?;
             let scalar_values: Vec<ScalarValue> = raw_values
                 .iter()
                 .map(|value| {
-                    parse_optional_partition_value(value.as_deref(), arrow_dt, time_zone).map_err(
-                        |e| DeltaTableError::generic(format!("partition value parse error: {e}")),
-                    )
+                    parser.parse(value.as_deref()).map_err(|e| {
+                        DeltaTableError::generic(format!("partition value parse error: {e}"))
+                    })
                 })
                 .collect::<DeltaResult<Vec<_>>>()?;
             let array = if scalar_values.is_empty() {

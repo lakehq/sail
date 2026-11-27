@@ -22,7 +22,7 @@ use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::{ScalarConverter, parse_optional_partition_value};
+use crate::conversion::{PartitionValueParser, ScalarConverter, parse_optional_partition_value};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, ColumnMappingMode};
@@ -156,6 +156,8 @@ pub(crate) fn partition_filter_mask(
             snapshot.schema().field_with_name(name)?,
             snapshot.effective_column_mapping_mode(),
         );
+        let parser =
+            PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())?;
         let values = adds
             .iter()
             .map(|add| {
@@ -163,11 +165,7 @@ pub(crate) fn partition_filter_mask(
                     .partition_values
                     .get(physical_name)
                     .and_then(Option::as_deref);
-                parse_optional_partition_value(
-                    raw,
-                    field.data_type(),
-                    snapshot.partition_time_zone(),
-                )
+                parser.parse(raw)
             })
             .collect::<crate::DeltaResult<Vec<_>>>()?;
         let column = if values.is_empty() {
@@ -417,7 +415,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .collect();
         let values = values?;
 
-        ScalarConverter::string_values_to_array(&values, field.data_type(), self.time_zone).ok()
+        PartitionValueParser::try_new(field.data_type(), self.time_zone)
+            .ok()?
+            .parse_array(&values)
+            .ok()
     }
 
     fn null_scalar(dt: &datafusion::arrow::datatypes::DataType) -> ScalarValue {

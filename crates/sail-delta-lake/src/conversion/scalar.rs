@@ -12,14 +12,17 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, UInt8Array, UInt16Array,
-    UInt32Array, UInt64Array,
+    Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
-use datafusion::common::Result as DataFusionResult;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
+use datafusion::common::{Result as DataFusionResult, exec_datafusion_err};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use sail_common_datafusion::utils::datetime::SparkZone;
+use sail_function::scalar::datetime::timestamp::parse_unformatted_timestamp;
 use serde_json::Value;
 
 use crate::spec::{
@@ -183,34 +186,6 @@ impl ScalarConverter {
                 )?))))
             }
             _ => Ok(None),
-        }
-    }
-
-    /// Parses partition values as [`parse_partition_value`] does.
-    pub fn string_values_to_array(
-        values: &[Option<&str>],
-        field_dt: &ArrowDataType,
-        time_zone: &str,
-    ) -> DataFusionResult<ArrayRef> {
-        let utf8_array: ArrayRef = Arc::new(StringArray::from(
-            values
-                .iter()
-                .map(|value| value.map(ToOwned::to_owned))
-                .collect::<Vec<_>>(),
-        ));
-
-        match field_dt {
-            ArrowDataType::Utf8 => Ok(utf8_array),
-            ArrowDataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(
-                values
-                    .iter()
-                    .map(|value| value.map(ToOwned::to_owned))
-                    .collect::<Vec<_>>(),
-            ))),
-            _ => match partition_parse_type(field_dt, time_zone) {
-                Some(parse_type) => Ok(cast(&cast(&utf8_array, &parse_type)?, field_dt)?),
-                None => Ok(cast(&utf8_array, field_dt)?),
-            },
         }
     }
 
@@ -551,42 +526,127 @@ fn number_from_f64(value: f64) -> Value {
         .unwrap_or_else(|| Value::String(value.to_string()))
 }
 
-/// Parse a partition value string into a `ScalarValue` for the given Arrow data type.
+/// Parses the partition values of one column. The log uses empty strings for NULL; directory
+/// markers remain literal values.
 ///
-/// This implements Delta-specific parsing rules for partition values stored in the log.
-/// A TIMESTAMP value without an offset is a wall clock in `time_zone`, the session time zone,
-/// as Delta-Spark reads it.
+/// A TIMESTAMP value (a type with a time zone) is parsed as `CAST(value AS TIMESTAMP)` in the
+/// session time zone, as Delta-Spark reads partition values: a value without an offset is a wall
+/// clock in that zone, whatever the label of the type. Other values are parsed by Arrow.
+#[derive(Debug)]
+pub struct PartitionValueParser {
+    field_dt: ArrowDataType,
+    /// The session time zone, for a TIMESTAMP type.
+    session_zone: Option<SparkZone>,
+}
+
+impl PartitionValueParser {
+    pub fn try_new(field_dt: &ArrowDataType, time_zone: &str) -> DeltaResultLocal<Self> {
+        let session_zone = match field_dt {
+            ArrowDataType::Timestamp(_, Some(_)) => Some(SparkZone::parse(time_zone)?),
+            _ => None,
+        };
+        Ok(Self {
+            field_dt: field_dt.clone(),
+            session_zone,
+        })
+    }
+
+    pub fn data_type(&self) -> &ArrowDataType {
+        &self.field_dt
+    }
+
+    pub fn parse(&self, raw: Option<&str>) -> DeltaResultLocal<ScalarValue> {
+        let raw = match raw {
+            Some(raw) if !raw.is_empty() => raw,
+            _ => {
+                return ScalarValue::try_new_null(&self.field_dt).map_err(|e| {
+                    DeltaTableError::generic(format!("Failed to create null scalar: {e}"))
+                });
+            }
+        };
+        match (&self.session_zone, &self.field_dt) {
+            (Some(zone), ArrowDataType::Timestamp(unit, label)) => {
+                parse_timestamp(raw, zone, *unit).map(|value| timestamp_scalar(value, *unit, label))
+            }
+            _ => ScalarConverter::string_to_arrow_scalar_value(raw, &self.field_dt),
+        }
+        .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
+    }
+
+    /// Parses values that are not empty, where a value that does not parse is null.
+    pub fn parse_array(&self, values: &[Option<&str>]) -> DataFusionResult<ArrayRef> {
+        if let (Some(zone), ArrowDataType::Timestamp(unit, label)) =
+            (&self.session_zone, &self.field_dt)
+        {
+            let values = values
+                .iter()
+                .map(|value| value.and_then(|raw| parse_timestamp(raw, zone, *unit).ok()));
+            let label = label.clone();
+            return Ok(match unit {
+                TimeUnit::Second => {
+                    Arc::new(TimestampSecondArray::from_iter(values).with_timezone_opt(label))
+                }
+                TimeUnit::Millisecond => {
+                    Arc::new(TimestampMillisecondArray::from_iter(values).with_timezone_opt(label))
+                }
+                TimeUnit::Microsecond => {
+                    Arc::new(TimestampMicrosecondArray::from_iter(values).with_timezone_opt(label))
+                }
+                TimeUnit::Nanosecond => {
+                    Arc::new(TimestampNanosecondArray::from_iter(values).with_timezone_opt(label))
+                }
+            });
+        }
+        let utf8_array: ArrayRef = Arc::new(StringArray::from(
+            values
+                .iter()
+                .map(|value| value.map(ToOwned::to_owned))
+                .collect::<Vec<_>>(),
+        ));
+        match &self.field_dt {
+            ArrowDataType::Utf8 => Ok(utf8_array),
+            ArrowDataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(
+                values
+                    .iter()
+                    .map(|value| value.map(ToOwned::to_owned))
+                    .collect::<Vec<_>>(),
+            ))),
+            field_dt => Ok(cast(&utf8_array, field_dt)?),
+        }
+    }
+}
+
+/// Parses a TIMESTAMP partition value in the session time zone, in `unit` since the epoch.
+fn parse_timestamp(raw: &str, zone: &SparkZone, unit: TimeUnit) -> DataFusionResult<i64> {
+    let micros = parse_unformatted_timestamp(raw, Some(zone))?;
+    match unit {
+        TimeUnit::Second => Ok(micros.div_euclid(1_000_000)),
+        TimeUnit::Millisecond => Ok(micros.div_euclid(1_000)),
+        TimeUnit::Microsecond => Ok(micros),
+        TimeUnit::Nanosecond => micros.checked_mul(1_000).ok_or_else(|| {
+            exec_datafusion_err!("timestamp is outside the nanosecond range: {raw}")
+        }),
+    }
+}
+
+fn timestamp_scalar(value: i64, unit: TimeUnit, label: &Option<Arc<str>>) -> ScalarValue {
+    let (value, label) = (Some(value), label.clone());
+    match unit {
+        TimeUnit::Second => ScalarValue::TimestampSecond(value, label),
+        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, label),
+        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, label),
+        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, label),
+    }
+}
+
+/// Parse a partition value string into a `ScalarValue` for the given Arrow data type, as
+/// [`PartitionValueParser`] does.
 pub fn parse_partition_value(
     raw: &str,
     field_dt: &ArrowDataType,
     time_zone: &str,
 ) -> DeltaResultLocal<ScalarValue> {
-    // The log uses empty strings for NULL; directory markers remain literal values.
-    if raw.is_empty() {
-        return ScalarValue::try_new_null(field_dt)
-            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
-    }
-    match partition_parse_type(field_dt, time_zone) {
-        Some(parse_type) => ScalarConverter::string_to_arrow_scalar_value(raw, &parse_type)
-            .and_then(|value| value.cast_to(field_dt)),
-        None => ScalarConverter::string_to_arrow_scalar_value(raw, field_dt),
-    }
-    .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
-}
-
-/// Returns the type to parse a TIMESTAMP partition value in, before it takes the time zone label
-/// of `field_dt`, since the label need not be the session time zone (Delta TIMESTAMP columns are
-/// labelled UTC, catalog columns keep the zone they were declared in).
-pub(crate) fn partition_parse_type(
-    field_dt: &ArrowDataType,
-    time_zone: &str,
-) -> Option<ArrowDataType> {
-    match field_dt {
-        ArrowDataType::Timestamp(unit, Some(label)) if label.as_ref() != time_zone => {
-            Some(ArrowDataType::Timestamp(*unit, Some(time_zone.into())))
-        }
-        _ => None,
-    }
+    PartitionValueParser::try_new(field_dt, time_zone)?.parse(Some(raw))
 }
 
 pub fn parse_optional_partition_value(
@@ -594,11 +654,7 @@ pub fn parse_optional_partition_value(
     field_dt: &ArrowDataType,
     time_zone: &str,
 ) -> DeltaResultLocal<ScalarValue> {
-    match raw {
-        Some(raw) => parse_partition_value(raw, field_dt, time_zone),
-        None => ScalarValue::try_new_null(field_dt)
-            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}"))),
-    }
+    PartitionValueParser::try_new(field_dt, time_zone)?.parse(raw)
 }
 
 /// Build a `ScalarValue` from an Arrow array at the given index, returning `None` for nulls.
@@ -627,8 +683,8 @@ mod tests {
     use datafusion::common::ScalarValue;
 
     use super::{
-        NULL_PARTITION_VALUE_DATA_PATH, ScalarConverter, ScalarExt, parse_optional_partition_value,
-        parse_partition_value,
+        NULL_PARTITION_VALUE_DATA_PATH, PartitionValueParser, ScalarExt,
+        parse_optional_partition_value, parse_partition_value,
     };
 
     fn timestamp(micros: i64, time_zone: Option<&str>) -> ScalarValue {
@@ -689,17 +745,31 @@ mod tests {
         );
     }
 
-    /// A value without an offset is a wall clock in the session time zone, whatever the time zone
-    /// label of the type, and a value with an offset is that instant. TIMESTAMP_NTZ values are wall
-    /// clocks. The scalar and the array parse agree.
+    /// A TIMESTAMP value without an offset is a wall clock in the session time zone, whatever the
+    /// label of the type, read as Spark reads it: the first instant when the wall clock occurs
+    /// twice, and the instant after a skipped hour. A value with an offset is that instant.
+    /// TIMESTAMP_NTZ values are wall clocks. The scalar and the array parse agree.
     #[test]
     fn timestamp_partition_values_parse_in_the_session_time_zone()
     -> Result<(), Box<dyn std::error::Error>> {
-        // 2024-01-01 09:00:00 as a wall clock in each session time zone, in seconds since the epoch.
-        let sessions = [
-            ("UTC", 1_704_099_600),
-            ("America/Los_Angeles", 1_704_128_400),
-            ("+05:30", 1_704_079_800),
+        let sessions = ["UTC", "America/Los_Angeles", "+05:30"];
+        // Each value in seconds since the epoch in each session time zone.
+        let cases = [
+            (
+                "2024-01-01 09:00:00.000000",
+                [1_704_099_600, 1_704_128_400, 1_704_079_800],
+            ),
+            ("2024-01-01T09:00:00.000000Z", [1_704_099_600; 3]),
+            // 02:30 does not occur in Los Angeles on 2024-03-10 and reads as 03:30 PDT.
+            (
+                "2024-03-10 02:30:00",
+                [1_710_037_800, 1_710_066_600, 1_710_018_000],
+            ),
+            // 01:30 occurs twice in Los Angeles on 2024-11-03 and reads as the first, in PDT.
+            (
+                "2024-11-03 01:30:00",
+                [1_730_597_400, 1_730_622_600, 1_730_577_600],
+            ),
         ];
         let units = [
             (TimeUnit::Second, 1),
@@ -707,30 +777,19 @@ mod tests {
             (TimeUnit::Microsecond, 1_000_000),
             (TimeUnit::Nanosecond, 1_000_000_000),
         ];
-        let raw = ["2024-01-01 09:00:00.000000", "2024-01-01T09:00:00.000000Z"];
-        for (session, zone_less) in sessions {
+        let raw = cases.map(|(raw, _)| Some(raw));
+        for (session_index, session) in sessions.into_iter().enumerate() {
             for (unit, per_second) in units {
                 for label in [None, Some("UTC"), Some("America/Los_Angeles")] {
                     let data_type = ArrowDataType::Timestamp(unit, label.map(Into::into));
-                    let expected = [
-                        if label.is_some() {
-                            zone_less
-                        } else {
-                            1_704_099_600
-                        },
-                        1_704_099_600,
-                    ]
-                    .map(|seconds| {
-                        ScalarValue::Int64(Some(seconds * per_second)).cast_to(&data_type)
-                    });
-                    let array = ScalarConverter::string_values_to_array(
-                        &raw.map(Some),
-                        &data_type,
-                        session,
-                    )?;
+                    let parser = PartitionValueParser::try_new(&data_type, session)?;
+                    let array = parser.parse_array(&raw)?;
                     assert_eq!(array.data_type(), &data_type);
-                    for (index, (raw, expected)) in raw.into_iter().zip(expected).enumerate() {
-                        let expected = expected?;
+                    for (index, (raw, seconds)) in cases.into_iter().enumerate() {
+                        // A wall clock without a time zone is its UTC reading.
+                        let seconds = seconds[if label.is_some() { session_index } else { 0 }];
+                        let expected =
+                            ScalarValue::Int64(Some(seconds * per_second)).cast_to(&data_type)?;
                         let case = format!("{raw} as {data_type} in {session}");
                         assert_eq!(
                             parse_partition_value(raw, &data_type, session)?,
@@ -746,6 +805,11 @@ mod tests {
                 }
             }
         }
+        // Dates do not depend on the session time zone.
+        assert_eq!(
+            parse_partition_value("2024-01-01", &ArrowDataType::Date32, "America/Los_Angeles")?,
+            ScalarValue::Date32(Some(19_723))
+        );
         Ok(())
     }
 

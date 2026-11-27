@@ -38,7 +38,9 @@ use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use crate::conversion::ScalarConverter;
 use crate::datasource::deletion_vector::{DeltaFileDeletionVector, DeltaParquetSource};
 use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
-use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
+use crate::datasource::{
+    DeltaScanConfig, create_object_store_url, partition_value_parsers, partitioned_file_from_action,
+};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::utils::decode_path;
@@ -239,6 +241,11 @@ pub async fn build_file_scan_config(
     };
     let config = scan_config.clone();
     let partition_columns_mapped = snapshot.physical_partition_columns();
+    let partition_parsers = partition_value_parsers(
+        &partition_columns_mapped,
+        &complete_schema,
+        snapshot.partition_time_zone(),
+    )?;
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
         &file_schema,
@@ -262,8 +269,7 @@ pub async fn build_file_scan_config(
             action,
             location,
             &partition_columns_mapped,
-            &complete_schema,
-            snapshot.partition_time_zone(),
+            &partition_parsers,
         )?;
         let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {

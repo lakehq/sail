@@ -928,34 +928,42 @@ impl ExecutionPlan for DeltaCommitExec {
                     .transpose()
                     .map_err(|error| DataFusionError::External(Box::new(error)))?
                     .unwrap_or_else(|| snapshot.schema().clone());
+                let time_zone =
+                    crate::snapshot::partition_time_zone(context.session_config().options());
                 let partition_fields = snapshot
                     .physical_partition_columns()
                     .into_iter()
                     .map(|column| {
                         let field = partition_schema.field_with_name(&column.logical_name)?;
-                        Ok((column.physical_name, field.data_type().clone()))
+                        let parser = crate::conversion::PartitionValueParser::try_new(
+                            field.data_type(),
+                            &time_zone,
+                        )
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                        Ok((column.physical_name, parser))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let time_zone =
-                    crate::snapshot::partition_time_zone(context.session_config().options());
                 let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
                     partition_fields
                         .iter()
-                        .map(|(name, data_type)| {
-                            crate::conversion::parse_optional_partition_value(
-                                add.partition_values
-                                    .get(name)
-                                    .and_then(|value| value.as_deref()),
-                                data_type,
-                                &time_zone,
-                            )
-                            // ScalarValue compares float bits, while Spark equates signed zeros.
-                            .map(|value| match value {
-                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
-                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
-                                value => value,
-                            })
-                            .map_err(|error| DataFusionError::External(Box::new(error)))
+                        .map(|(name, parser)| {
+                            parser
+                                .parse(
+                                    add.partition_values
+                                        .get(name)
+                                        .and_then(|value| value.as_deref()),
+                                )
+                                // ScalarValue compares float bits, while Spark equates signed zeros.
+                                .map(|value| match value {
+                                    ScalarValue::Float32(Some(0.0)) => {
+                                        ScalarValue::Float32(Some(0.0))
+                                    }
+                                    ScalarValue::Float64(Some(0.0)) => {
+                                        ScalarValue::Float64(Some(0.0))
+                                    }
+                                    value => value,
+                                })
+                                .map_err(|error| DataFusionError::External(Box::new(error)))
                         })
                         .collect()
                 };
