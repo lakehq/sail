@@ -375,7 +375,10 @@ impl ScalarExt for ScalarValue {
             ScalarValue::Float32(Some(v)) => Cow::Owned(v.to_string()),
             ScalarValue::Float64(Some(v)) => Cow::Owned(v.to_string()),
             ScalarValue::Boolean(Some(v)) => Cow::Owned(v.to_string()),
-            ScalarValue::TimestampMicrosecond(Some(ts), _) => Cow::Owned(format_timestamp(*ts)),
+            ScalarValue::TimestampMicrosecond(Some(ts), Some(_)) => {
+                Cow::Owned(format_utc_timestamp(*ts))
+            }
+            ScalarValue::TimestampMicrosecond(Some(ts), None) => Cow::Owned(format_timestamp(*ts)),
             ScalarValue::Date32(Some(days)) => Cow::Owned(format_date(*days)),
             ScalarValue::Decimal128(Some(bits), _, scale) => {
                 Cow::Owned(serialize_decimal(*bits, *scale))
@@ -397,7 +400,14 @@ impl ScalarExt for ScalarValue {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        encode_partition_value(self.serialize().as_ref())
+        match self {
+            // The directory keeps the wall clock in UTC without an offset, which is the format
+            // of the log value before it named the offset. The log value is what readers use.
+            ScalarValue::TimestampMicrosecond(Some(ts), _) => {
+                encode_partition_value(&format_timestamp(*ts))
+            }
+            _ => encode_partition_value(self.serialize().as_ref()),
+        }
     }
 
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self> {
@@ -470,6 +480,16 @@ fn format_timestamp(value: i64) -> String {
     Utc.timestamp_micros(value)
         .single()
         .map(|ts| ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
+/// Formats a timestamp partition value as UTC with an explicit offset, as Delta writes it with
+/// `spark.databricks.delta.write.utcTimestampPartitionValues` (the default), so that every reader
+/// gets the same instant whatever its session time zone.
+fn format_utc_timestamp(value: i64) -> String {
+    Utc.timestamp_micros(value)
+        .single()
+        .map(|ts| ts.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string())
         .unwrap_or_else(|| value.to_string())
 }
 
@@ -569,12 +589,71 @@ pub fn scalar_value_to_array(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
     use datafusion::common::ScalarValue;
 
     use super::{
-        NULL_PARTITION_VALUE_DATA_PATH, parse_optional_partition_value, parse_partition_value,
+        NULL_PARTITION_VALUE_DATA_PATH, ScalarExt, parse_optional_partition_value,
+        parse_partition_value,
     };
+
+    fn timestamp(micros: i64, time_zone: Option<&str>) -> ScalarValue {
+        ScalarValue::TimestampMicrosecond(Some(micros), time_zone.map(Into::into))
+    }
+
+    fn timestamp_type(time_zone: &str) -> ArrowDataType {
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(time_zone.into()))
+    }
+
+    #[test]
+    fn timestamp_partition_values_are_utc_with_an_offset() {
+        for time_zone in ["UTC", "America/Los_Angeles"] {
+            let value = timestamp(1_704_099_600_000_000, Some(time_zone));
+            assert_eq!(value.serialize(), "2024-01-01T09:00:00.000000Z");
+        }
+        assert_eq!(
+            timestamp(1_705_314_600_123_456, Some("UTC")).serialize(),
+            "2024-01-15T10:30:00.123456Z"
+        );
+        assert_eq!(
+            timestamp(-2_083_172_400_000_000, Some("UTC")).serialize(),
+            "1903-12-28T05:00:00.000000Z"
+        );
+    }
+
+    #[test]
+    fn timestamp_ntz_partition_values_are_unchanged() {
+        assert_eq!(
+            timestamp(1_704_099_600_000_000, None).serialize(),
+            "2024-01-01 09:00:00.000000"
+        );
+    }
+
+    #[test]
+    fn timestamp_partition_directories_are_unchanged() {
+        assert_eq!(
+            timestamp(1_704_099_600_000_000, Some("America/Los_Angeles")).serialize_encoded(),
+            "2024-01-01%2009%3A00%3A00.000000"
+        );
+    }
+
+    #[test]
+    fn timestamp_partition_values_parse_as_the_same_instant()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for time_zone in ["UTC", "America/Los_Angeles"] {
+            let data_type = timestamp_type(time_zone);
+            assert_eq!(
+                parse_partition_value("2024-01-01T09:00:00.000000Z", &data_type)?,
+                timestamp(1_704_099_600_000_000, Some(time_zone))
+            );
+        }
+        // Values written without an offset parse as before.
+        assert_eq!(
+            parse_partition_value("2024-01-01 09:00:00.000000", &timestamp_type("UTC"))?,
+            timestamp(1_704_099_600_000_000, Some("UTC"))
+        );
+        Ok(())
+    }
 
     #[test]
     fn incomplete_required_struct_statistics_return_error() {

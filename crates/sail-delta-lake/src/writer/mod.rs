@@ -1114,7 +1114,7 @@ mod tests {
         let mut writer = DeltaWriter::new(Arc::clone(&object_store), table_path.clone(), config);
 
         use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
-        let ts_us: i64 = 1_705_283_400_i64 * 1_000_000; // 2024-01-15 02:30:00 UTC
+        let ts_us: i64 = 1_705_283_400_i64 * 1_000_000; // 2024-01-15 01:50:00 UTC
         let id_arr: ArrayRef = Arc::new(Int32Array::from(vec![1_i32]));
         let ts_arr: ArrayRef = Arc::new(
             TimestampMicrosecondArray::from(vec![ts_us]).with_timezone(Arc::<str>::from("UTC")),
@@ -1125,6 +1125,10 @@ mod tests {
         let adds = writer.close().await?;
 
         assert_eq!(adds.len(), 1);
+        assert_eq!(
+            adds[0].partition_values["ts"].as_deref(),
+            Some("2024-01-15T01:50:00.000000Z")
+        );
         let path = &adds[0].path;
 
         // Hive partition escaping is part of the physical filename. URI encoding
