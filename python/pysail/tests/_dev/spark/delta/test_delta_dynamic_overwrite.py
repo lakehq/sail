@@ -302,14 +302,13 @@ def test_timestamp_partitions_match_spark_in_session_time_zone(spark, delta_jvm_
     _ = session_timezone
 
     def rows(session):
-        session.read.format("delta").load(str(tmp_path)).createOrReplaceTempView("timestamp_partitions")
-        query = "SELECT id, unix_micros(ts) AS micros FROM timestamp_partitions ORDER BY id"
-        return [(r.id, r.micros) for r in session.sql(query).collect()]
+        frame = session.read.format("delta").load(str(tmp_path)).selectExpr("id", "unix_micros(ts) AS micros")
+        return sorted((r.id, r.micros) for r in frame.collect())
 
     # 09:00 and 10:00 UTC
     first, second = 1704099600000000, 1704103200000000
     previous = delta_jvm_spark.conf.get("spark.sql.session.timeZone")
-    delta_jvm_spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    delta_jvm_spark.conf.set("spark.sql.session.timeZone", spark.conf.get("spark.sql.session.timeZone"))
     try:
         spark.sql(
             "SELECT 1 AS id, TIMESTAMP '2024-01-01 01:00:00' AS ts UNION ALL SELECT 2, TIMESTAMP '2024-01-01 02:00:00'"
