@@ -1143,6 +1143,85 @@ mod tests {
         assert!(live_row_selection(&fragmented, 20_000).is_none());
     }
 
+    #[tokio::test]
+    async fn delete_files_use_the_session_metadata_size_hint() -> Result<()> {
+        use datafusion::datasource::memory::MemorySourceConfig;
+
+        use crate::io::test_store::TestStore;
+
+        let delete_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(POS_DELETE_FILE_PATH_COL, DataType::Utf8, false),
+            Field::new(POS_DELETE_POS_COL, DataType::Int64, false),
+        ]));
+        let data_file_path = "memory://iceberg/table/data.parquet";
+        let deletes = RecordBatch::try_new(
+            delete_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![data_file_path; 2])),
+                Arc::new(Int64Array::from(vec![1, 3])),
+            ],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), delete_schema, None)?;
+        writer.write(&deletes)?;
+        let bytes = writer.into_inner()?;
+        let size = bytes.len() as u64;
+        let store = Arc::new(TestStore::new(Arc::new(InMemory::new())));
+        store
+            .put(&ObjectPath::from("table/deletes.parquet"), bytes.into())
+            .await?;
+
+        // A hint covering the whole file reads it with a single request.
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.parquet.metadata_size_hint = Some(size as usize);
+        let ctx = SessionContext::new_with_config(config);
+        let table_url = Url::parse("memory://iceberg/table/").unwrap();
+        ctx.register_object_store(&table_url, store.clone());
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values(0..5))],
+        )?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
+        let apply = Arc::new(IcebergDeleteApplyExec::new(
+            input,
+            data_file_path.to_string(),
+            vec![PositionDeleteFile::File {
+                path: "memory://iceberg/table/deletes.parquet".to_string(),
+                size,
+                file_format: DataFileFormat::Parquet,
+            }],
+            vec![],
+            table_url.to_string(),
+            IcebergSchema::builder().build().unwrap(),
+        ));
+        let batches = collect(apply, ctx.task_ctx()).await?;
+        let ids = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![0, 2, 4]);
+        assert_eq!(
+            store
+                .largest_read
+                .load(std::sync::atomic::Ordering::Relaxed),
+            size as usize
+        );
+        Ok(())
+    }
+
     async fn scan_vector(
         positions: RoaringTreemap,
         known_rows: bool,
