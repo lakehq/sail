@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
@@ -216,11 +218,16 @@ impl PlanResolver<'_> {
                 .map(|(name, value)| (name.as_ref().to_string(), value))
                 .collect(),
         )?;
+        let session = self.ctx.state();
+        let context = SimplifyContext::builder()
+            .with_config_options(Arc::clone(session.config_options()))
+            .with_query_execution_start_time(session.execution_props().query_execution_start_time)
+            .build();
         let mut values = Vec::with_capacity(bound.len());
         for (parameter, argument) in procedure.parameters.iter().zip(bound) {
             values.push(match argument {
                 Some(argument) => {
-                    self.evaluate_procedure_argument(argument, parameter.data_type, state)
+                    self.evaluate_procedure_argument(argument, parameter.data_type, &context, state)
                         .await?
                 }
                 None => LakeProcedureValue::Null,
@@ -364,7 +371,7 @@ impl PlanResolver<'_> {
                 };
                 let metadata = registry
                     .get_lake_source(&call.lake_source)?
-                    .infer_metadata(&self.ctx.state(), *info.clone())
+                    .infer_metadata(&session, *info.clone())
                     .await?;
                 let names = state.register_fields(metadata.schema.fields());
                 let schema = Arc::new(DFSchema::try_from(
@@ -389,7 +396,6 @@ impl PlanResolver<'_> {
                 ))
                 .filter(expr)?
                 .build()?;
-                let session = self.ctx.state();
                 let analyzed = session.analyzer().execute_and_check(
                     plan,
                     session.config_options().as_ref(),
@@ -428,7 +434,6 @@ impl PlanResolver<'_> {
                 );
             }
         }
-        let session = self.ctx.state();
         let plan = provider
             .plan_procedure(&session, planning_target, &call)
             .await?;
@@ -521,17 +526,18 @@ impl PlanResolver<'_> {
         &self,
         argument: spec::Expr,
         data_type: LakeProcedureDataType,
+        context: &SimplifyContext,
         state: &mut PlanResolverState,
     ) -> PlanResult<LakeProcedureValue> {
-        let schema = Arc::new(DFSchema::empty());
+        let schema = context.schema();
         if matches!(
             data_type,
             LakeProcedureDataType::Boolean | LakeProcedureDataType::Utf8
         ) {
             let expression = self
-                .resolve_expression(argument.clone(), &schema, state)
+                .resolve_expression(argument.clone(), schema, state)
                 .await?;
-            let source = expression.get_type(&schema)?;
+            let source = expression.get_type(schema)?;
             if data_type == LakeProcedureDataType::Boolean {
                 validate_procedure_boolean_argument_type(&source)?;
             } else if source.is_nested() {
@@ -542,10 +548,10 @@ impl PlanResolver<'_> {
         }
         if data_type == LakeProcedureDataType::Int64Array {
             let expression = self
-                .resolve_expression(argument.clone(), &schema, state)
+                .resolve_expression(argument.clone(), schema, state)
                 .await?;
             if !matches!(
-                expression.get_type(&schema)?,
+                expression.get_type(schema)?,
                 DataType::Null
                     | DataType::List(_)
                     | DataType::LargeList(_)
@@ -586,12 +592,13 @@ impl PlanResolver<'_> {
                     naming: spec::CastNaming::Cast,
                     is_try: false,
                 },
-                &schema,
+                schema,
                 state,
             )
             .await?;
-        let value = LiteralEvaluator::new()
-            .evaluate(&expression)
+        let value = ExprSimplifier::new(context.clone())
+            .simplify(expression)
+            .and_then(|expr| LiteralEvaluator::new().evaluate(&expr))
             .map_err(|error| {
                 PlanError::invalid(format!(
                     "Procedure arguments must be foldable constants: {error}"
