@@ -198,12 +198,11 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
-        // Coordinated fallback shares state across partitions in one process.
         if matches!(
             self.config.mode,
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
         ) {
-            execution.enable_nlj_coordinated_fallback = false;
+            super::apply_cluster_constraints(config.options_mut());
         }
         Ok(())
     }
@@ -214,15 +213,6 @@ impl ServerSessionFactory {
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.enable_window_topn = self.config.optimizer.enable_window_topn;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
-        // process-local state. Cluster execution uses independently decoded task plans, so keep
-        // join filters disabled while allowing task-local TopK and aggregate filters.
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            optimizer.enable_join_dynamic_filter_pushdown = false;
-        }
         Ok(())
     }
 }

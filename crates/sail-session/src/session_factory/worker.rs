@@ -48,8 +48,8 @@ impl SessionFactory<()> for WorkerSessionFactory {
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =
             super::temporary_file_compression(self.config.runtime.temporary_files.compression);
-        execution.enable_nlj_coordinated_fallback = false;
         super::apply_parquet_config(&mut execution.parquet, &self.config.parquet)?;
+        super::apply_cluster_constraints(config.options_mut());
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -117,6 +117,19 @@ mod tests {
             parquet.created_by,
             sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn worker_applies_cluster_constraints() -> Result<(), Box<dyn std::error::Error>> {
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let session = WorkerSessionFactory::new(Arc::new(AppConfig::load()?), runtime).create(())?;
+        let state = session.state_ref();
+        let state = state.read();
+        let options = state.config_options();
+        assert!(!options.execution.enable_nlj_coordinated_fallback);
+        assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
         Ok(())
     }
 }
