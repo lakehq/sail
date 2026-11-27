@@ -189,7 +189,9 @@ impl DriverActor {
             );
 
             let message = "task failed for lost worker".to_string();
-            let keys = self.task_assigner.find_worker_tasks(worker_id);
+            let keys = self.task_assigner.find_worker_tasks(worker_id, |key| {
+                self.job_scheduler.has_completed_materialized_output(key)
+            });
             self.task_assigner.deactivate_worker(worker_id);
             for key in keys.iter() {
                 self.job_scheduler.update_task(

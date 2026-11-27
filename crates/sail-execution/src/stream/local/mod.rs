@@ -5,6 +5,7 @@ pub(crate) mod memory;
 mod options;
 mod process_memory;
 pub(crate) mod queue;
+mod spill;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -35,6 +36,9 @@ pub enum LocalStreamState {
     },
     Created {
         stream: memory::MemoryStream,
+    },
+    Materialized {
+        stream: spill::SpillStream,
     },
     Failed {
         cause: CommonErrorCause,

@@ -93,7 +93,18 @@ message ExtendedPhysicalPlanNode {
     RangeResampleExecNode range_resample = 76;
     RangeResampleDecisionExecNode range_resample_decision = 77;
     HivePartitionWriteExecNode hive_partition_write = 78;
+    PartitionPairJoinExecNode partition_pair_join = 79;
+    ReplayExecNode replay = 80;
   }
+}
+
+message PartitionPairJoinExecNode {
+  // A DataFusion inner NLJ preserves filter, projection, input schemas and expressions.
+  bytes join = 1;
+}
+
+message ReplayExecNode {
+  bytes input = 1;
 }
 
 message HivePartitionWriteExecNode {

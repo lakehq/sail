@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::fmt::Formatter;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,8 +15,9 @@ use datafusion::physical_plan::coalesce::LimitedBatchCoalescer;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::BoxFuture;
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, warn};
+use sail_physical_plan::partition_pair_join::PairInputOpens;
 use tokio::runtime::Handle;
 
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
@@ -26,6 +28,7 @@ pub struct ShuffleReadExec {
     reader: Arc<dyn TaskStreamReader>,
     replicated: bool,
     executed: Arc<[AtomicBool]>,
+    pair_inputs: Option<Arc<PairInputOpens>>,
 }
 
 impl ShuffleReadExec {
@@ -39,6 +42,7 @@ impl ShuffleReadExec {
             properties,
             reader,
             replicated,
+            pair_inputs: None,
             executed: (0..partitions).map(|_| AtomicBool::new(false)).collect(),
         }
     }
@@ -164,6 +168,13 @@ impl ExecutionPlan for ShuffleReadExec {
         Ok(self)
     }
 
+    fn with_new_state(&self, state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            pair_inputs: Some(state.downcast::<PairInputOpens>().ok()?),
+            ..self.clone()
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -172,18 +183,25 @@ impl ExecutionPlan for ShuffleReadExec {
         if let Some(executed) = self.executed.get(partition) {
             executed.store(true, Ordering::Relaxed);
         }
-        let output = futures::stream::once(ShuffleReadOpen {
+        let open = ShuffleReadOpen {
             reader: self.reader.clone(),
             partition,
             open: None,
             opened: false,
-        })
-        .map_ok(|source| {
-            source.map(|item| {
-                item.map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))
+        };
+        let open = match &self.pair_inputs {
+            Some(inputs) => inputs.register(open).left_future(),
+            None => open.right_future(),
+        };
+        let output = futures::stream::once(open)
+            .map_ok(|source| {
+                source.map(|item| {
+                    item.map_err(|error| {
+                        datafusion::error::DataFusionError::External(Box::new(error))
+                    })
+                })
             })
-        })
-        .try_flatten();
+            .try_flatten();
         let output: SendableRecordBatchStream =
             Box::pin(RecordBatchStreamAdapter::new(self.schema(), output));
         // Unbounded inputs must emit partial batches promptly.

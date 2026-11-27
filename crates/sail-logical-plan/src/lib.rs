@@ -3,6 +3,7 @@
 pub mod barrier;
 pub mod check_constraints;
 pub mod identity_generate;
+pub mod join_hint;
 pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;

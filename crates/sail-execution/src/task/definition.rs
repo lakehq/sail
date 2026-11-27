@@ -101,6 +101,7 @@ pub enum TaskOutputLocator {
         bounded: bool,
     },
     Blocking,
+    MaterializedLocal,
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -544,6 +545,11 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
+            TaskOutputLocator::MaterializedLocal => {
+                r#gen::task_output_locator::Kind::MaterializedLocal(
+                    r#gen::TaskOutputMaterializedLocalLocator {},
+                )
+            }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
     }
@@ -561,6 +567,9 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
                 bounded,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
+            Some(r#gen::task_output_locator::Kind::MaterializedLocal(_)) => {
+                Ok(TaskOutputLocator::MaterializedLocal)
+            }
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),

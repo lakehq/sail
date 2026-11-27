@@ -328,6 +328,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_pair_join::PartitionPairJoinExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec};
 use sail_physical_plan::range_split::{
@@ -337,6 +338,7 @@ use sail_physical_plan::range_split::{
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
+use sail_physical_plan::replay::ReplayExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
@@ -1705,6 +1707,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     columns,
                     Arc::new(schema),
+                )?))
+            }
+            NodeKind::Replay(r#gen::ReplayExecNode { input }) => Ok(Arc::new(ReplayExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+            )?)),
+            NodeKind::PartitionPairJoin(r#gen::PartitionPairJoinExecNode { join }) => {
+                let plan =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &join)?;
+                let join = plan
+                    .downcast_ref::<datafusion::physical_plan::joins::NestedLoopJoinExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("partition-pair join requires an inner NLJ")
+                    })?;
+                if *join.join_type() != datafusion::common::JoinType::Inner {
+                    return Err(plan_datafusion_err!(
+                        "partition-pair join requires an inner NLJ"
+                    ));
+                }
+                Ok(Arc::new(PartitionPairJoinExec::try_new(
+                    join.left().clone(),
+                    join.right().clone(),
+                    join.filter().cloned(),
+                    join.projection().as_ref().map(|p| p.to_vec()),
                 )?))
             }
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
@@ -3404,6 +3429,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 split_points,
                 ordering: Some(self.try_encode_lex_ordering(channel.ordering(), proto_converter)?),
+            })
+        } else if let Some(replay) = node.downcast_ref::<ReplayExec>() {
+            NodeKind::Replay(r#gen::ReplayExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    replay.input().clone(),
+                )?,
+            })
+        } else if let Some(pair) = node.downcast_ref::<PartitionPairJoinExec>() {
+            let join = Arc::new(
+                datafusion::physical_plan::joins::NestedLoopJoinExec::try_new(
+                    pair.left().clone(),
+                    pair.right().clone(),
+                    pair.filter().cloned(),
+                    &datafusion::common::JoinType::Inner,
+                    pair.projection().clone(),
+                )?,
+            );
+            NodeKind::PartitionPairJoin(r#gen::PartitionPairJoinExecNode {
+                join: try_encode_physical_plan_with_converter(self, proto_converter, join)?,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -7761,6 +7807,60 @@ mod tests {
         assert!(projection_references_input_file_metadata(
             source.metadata_projection()
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn replay_and_pair_codec_preserves_semantics() -> Result<()> {
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::BinaryExpr;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::union::UnionExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let input: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![empty; 3])?;
+        let replay = Arc::new(ReplayExec::try_new(input.clone())?);
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("l", 0)),
+                Operator::IsNotDistinctFrom,
+                Arc::new(Column::new("r", 1)),
+            )),
+            JoinFilter::build_column_indices(vec![0], vec![0]),
+            Arc::new(Schema::new(vec![
+                Field::new("l", DataType::Int64, true),
+                Field::new("r", DataType::Int64, true),
+            ])),
+        );
+        let pair = Arc::new(PartitionPairJoinExec::try_new(
+            replay.clone(),
+            replay.clone(),
+            Some(filter),
+            Some(vec![1]),
+        )?);
+        let plans: Vec<Arc<dyn ExecutionPlan>> = vec![replay, pair];
+        let codec = RemoteExecutionCodec;
+        for plan in plans {
+            let bytes = try_encode_physical_plan(&codec, plan.clone())?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), plan.schema());
+            assert_eq!(
+                decoded.output_partitioning().partition_count(),
+                plan.output_partitioning().partition_count()
+            );
+            assert_eq!(
+                format!(
+                    "{}",
+                    datafusion::physical_plan::displayable(decoded.as_ref()).indent(true)
+                ),
+                format!(
+                    "{}",
+                    datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+                )
+            );
+        }
         Ok(())
     }
 

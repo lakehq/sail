@@ -19,7 +19,7 @@ use crate::stream::local::process_memory::available_memory;
 use crate::stream::local::queue::{QueueLimit, StreamMemory};
 use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamSink;
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 /// The share of the memory available to the process that its task streams can hold
@@ -99,7 +99,7 @@ impl LocalStreamManager {
             .collect::<Vec<_>>();
         for key in &keys {
             match self.streams.get(key) {
-                Some(LocalStreamState::Created { .. }) => {
+                Some(LocalStreamState::Created { .. } | LocalStreamState::Materialized { .. }) => {
                     return Err(ExecutionError::InternalError(format!(
                         "local stream {} is already created",
                         TaskStreamKeyDisplay(key)
@@ -146,6 +146,24 @@ impl LocalStreamManager {
         Ok(sink)
     }
 
+    pub fn create_materialized_stream(
+        &mut self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        context: std::sync::Arc<datafusion::execution::TaskContext>,
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+        if self.streams.contains_key(&key) {
+            return Err(ExecutionError::InternalError(format!(
+                "materialized stream {} already exists or was read before its producer completed",
+                TaskStreamKeyDisplay(&key)
+            )));
+        }
+        let (stream, sink) = super::spill::SpillStream::try_new(schema, context)?;
+        self.streams
+            .insert(key, LocalStreamState::Materialized { stream });
+        Ok(sink)
+    }
+
     pub fn fetch_stream(
         &mut self,
         ctx: &mut ActorContext<TaskRunnerActor>,
@@ -154,6 +172,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Materialized { stream } => Ok(stream.subscribe()),
                 LocalStreamState::Pending { waiters, probes } => {
                     // There is no need to probe the pending stream again, unless all
                     // earlier readers have left. The earlier probes are then ignored.
@@ -213,6 +232,16 @@ impl LocalStreamManager {
             }
             return Ok(Box::pin(futures::stream::empty()));
         }
+        // A partition-pair input selects a single producer and channel. Reserve
+        // its committed reader at open, before the join consumes the memory pool.
+        // Merges still open each reader as they poll its stream.
+        let mut selected = keys.keys();
+        if let (Some(key), None) = (selected.next(), selected.next())
+            && let Some(LocalStreamState::Materialized { stream }) = self.streams.get(&key)
+            && let Some(source) = stream.open_committed()
+        {
+            return Ok(source?);
+        }
         let mut sources = vec![];
         let mut error = None;
         for key in keys.keys() {
@@ -242,7 +271,7 @@ impl LocalStreamManager {
                     let _ = stream.subscribe();
                 }
                 LocalStreamState::Pending { waiters, .. } => waiters.push(waiter),
-                LocalStreamState::Failed { .. } => {}
+                LocalStreamState::Failed { .. } | LocalStreamState::Materialized { .. } => {}
             },
             Entry::Vacant(entry) => {
                 entry.insert(LocalStreamState::Pending {

@@ -255,19 +255,28 @@ impl TaskAssigner {
         }
     }
 
-    pub fn find_worker_tasks(&self, worker_id: WorkerId) -> Vec<TaskKey> {
+    /// Includes tasks still occupying a slot and the owners of retained streams
+    /// whose loss must also be reported to the scheduler.
+    pub fn find_worker_tasks(
+        &self,
+        worker_id: WorkerId,
+        include_stream: impl Fn(&TaskKey) -> bool,
+    ) -> IndexSet<TaskKey> {
         let Some(worker) = self.workers.get(&worker_id) else {
             warn!("worker {worker_id} not found");
-            return vec![];
+            return IndexSet::new();
         };
         match worker {
             WorkerResource::Active {
-                task_slots: slots, ..
-            } => slots
+                task_slots,
+                local_streams,
+            } => task_slots
                 .iter()
-                .flat_map(|x| x.list_tasks().cloned().collect::<Vec<_>>())
+                .flat_map(TaskSlot::list_tasks)
+                .chain(local_streams.iter().filter(|key| include_stream(key)))
+                .cloned()
                 .collect(),
-            WorkerResource::Inactive => vec![],
+            WorkerResource::Inactive => IndexSet::new(),
         }
     }
 
@@ -465,7 +474,12 @@ mod tests {
             assert_eq!(assigner.assign_tasks().len(), 2);
         }
         for id in 1..=4 {
-            assert_eq!(assigner.find_worker_tasks(WorkerId::from(id)).len(), 2);
+            assert_eq!(
+                assigner
+                    .find_worker_tasks(WorkerId::from(id), |_| false)
+                    .len(),
+                2
+            );
         }
     }
 
@@ -494,7 +508,12 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(slots.len(), 8);
         for id in 1..=2 {
-            assert_eq!(assigner.find_worker_tasks(WorkerId::from(id)).len(), 7);
+            assert_eq!(
+                assigner
+                    .find_worker_tasks(WorkerId::from(id), |_| false)
+                    .len(),
+                7
+            );
         }
     }
 
@@ -504,7 +523,11 @@ mod tests {
         assigner.activate_worker(WorkerId::from(1));
         assert!(assigner.enqueue_tasks(&worker_region(4)).is_ok());
         assert!(assigner.assign_tasks().is_empty());
-        assert!(assigner.find_worker_tasks(WorkerId::from(1)).is_empty());
+        assert!(
+            assigner
+                .find_worker_tasks(WorkerId::from(1), |_| false)
+                .is_empty()
+        );
 
         assigner.activate_worker(WorkerId::from(2));
         assert_eq!(assigner.assign_tasks().len(), 4);

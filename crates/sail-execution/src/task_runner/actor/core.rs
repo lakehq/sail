@@ -65,6 +65,12 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_create_local_stream(key, channels, replicas, bounded, schema, result),
+            TaskRunnerMessage::CreateMaterializedStream {
+                key,
+                schema,
+                context,
+                result,
+            } => self.handle_create_materialized_stream(key, schema, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,

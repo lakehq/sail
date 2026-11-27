@@ -25,6 +25,7 @@ pub mod metadata_aggregate;
 pub mod min_max;
 pub mod parquet_schema;
 pub mod rename;
+pub mod replay;
 pub mod scan;
 pub mod schema;
 pub mod schema_evolution;

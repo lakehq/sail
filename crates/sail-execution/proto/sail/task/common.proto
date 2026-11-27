@@ -119,6 +119,7 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
+    TaskOutputMaterializedLocalLocator materialized_local = 3;
   }
 }
 
@@ -128,4 +129,7 @@ message TaskOutputPipelinedLocator {
 }
 
 message TaskOutputBlockingLocator {
+}
+
+message TaskOutputMaterializedLocalLocator {
 }

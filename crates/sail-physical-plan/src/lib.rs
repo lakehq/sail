@@ -5,16 +5,19 @@ pub mod catalog_command;
 pub mod coalesce;
 pub mod data_source;
 pub mod identity_generate;
+pub mod join_hint;
 pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
+pub mod partition_pair_join;
 pub mod range;
 pub mod range_repartition;
 pub mod range_sample;
 pub mod range_split;
 pub mod remote_checkpoint;
 pub mod repartition;
+pub mod replay;
 pub mod scalar_subquery;
 pub mod schema_pivot;
 pub mod seeded_random;
@@ -23,3 +26,6 @@ pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;
 pub mod tail;
+
+#[cfg(test)]
+mod replay_tests;
