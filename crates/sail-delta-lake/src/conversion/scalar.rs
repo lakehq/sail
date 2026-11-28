@@ -526,7 +526,8 @@ fn number_from_f64(value: f64) -> Value {
 }
 
 /// Parses the partition values of one column. The log uses empty strings for NULL; directory
-/// markers remain literal values.
+/// markers remain literal values. A value that does not parse is NULL, as Delta-Spark reads
+/// partition values with a cast that is not ANSI.
 ///
 /// A TIMESTAMP value (a type with a time zone) is parsed as `CAST(value AS TIMESTAMP)` in the
 /// session time zone, as Delta-Spark reads partition values: a value without an offset is a wall
@@ -556,21 +557,23 @@ impl PartitionValueParser {
     }
 
     pub fn parse(&self, raw: Option<&str>) -> DeltaResultLocal<ScalarValue> {
-        let raw = match raw {
-            Some(raw) if !raw.is_empty() => raw,
-            _ => {
-                return ScalarValue::try_new_null(&self.field_dt).map_err(|e| {
-                    DeltaTableError::generic(format!("Failed to create null scalar: {e}"))
-                });
+        let value = match (raw, &self.session_zone, &self.field_dt) {
+            (None | Some(""), _, _) => None,
+            (Some(raw), Some(zone), ArrowDataType::Timestamp(unit, label)) => {
+                parse_timestamp(raw, zone, *unit)
+                    .ok()
+                    .map(|value| timestamp_scalar(value, *unit, label))
+            }
+            (Some(raw), _, _) => {
+                ScalarConverter::string_to_arrow_scalar_value(raw, &self.field_dt).ok()
             }
         };
-        match (&self.session_zone, &self.field_dt) {
-            (Some(zone), ArrowDataType::Timestamp(unit, label)) => {
-                parse_timestamp(raw, zone, *unit).map(|value| timestamp_scalar(value, *unit, label))
-            }
-            _ => ScalarConverter::string_to_arrow_scalar_value(raw, &self.field_dt),
+        match value {
+            Some(value) => Ok(value),
+            None => ScalarValue::try_new_null(&self.field_dt).map_err(|e| {
+                DeltaTableError::generic(format!("Failed to create null scalar: {e}"))
+            }),
         }
-        .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
     }
 
     /// Parses values that are not empty, where a value that does not parse is null.
@@ -778,6 +781,44 @@ mod tests {
                 .parse(Some("2024-01-01"))?,
             ScalarValue::Date32(Some(19_723))
         );
+        Ok(())
+    }
+
+    /// A partition value that does not parse is a NULL of the column type, as Delta-Spark reads
+    /// it with a cast that is not ANSI.
+    #[test]
+    fn partition_values_that_do_not_parse_are_typed_nulls() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for (data_type, raw) in [
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                "2024-01-01t09:00:00z",
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                "not a timestamp",
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                "not a timestamp",
+            ),
+            (ArrowDataType::Date32, "2024-02-30"),
+            (ArrowDataType::Int32, "abc"),
+            (ArrowDataType::Int64, "1.5"),
+            (ArrowDataType::Float64, "abc"),
+            (ArrowDataType::Boolean, "maybe"),
+            (ArrowDataType::Decimal128(5, 2), "abc"),
+        ] {
+            let parser = PartitionValueParser::try_new(&data_type, "America/Los_Angeles")?;
+            let null = ScalarValue::try_new_null(&data_type)?;
+            assert_eq!(parser.parse(Some(raw))?, null, "{raw} as {data_type}");
+            let array = parser.parse_array(&[Some(raw)])?;
+            assert_eq!(
+                ScalarValue::try_from_array(&array, 0)?,
+                null,
+                "{raw} as {data_type}"
+            );
+        }
         Ok(())
     }
 

@@ -11,7 +11,7 @@ use datafusion::common::{
 };
 use datafusion::functions::core::expr_fn::nullif;
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
+use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList, TryCast};
 use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunction};
 use datafusion::logical_expr::{Expr, Operator, ScalarUDF, lit};
 use datafusion::physical_plan::ExecutionPlan;
@@ -103,12 +103,13 @@ fn type_partition_columns(
                 .data_type()
                 .clone();
             let mut value = nullif(expr, lit(""));
-            // Parse a TIMESTAMP value as `PartitionValueParser` does, in the session time zone.
+            // Parse a value as `PartitionValueParser` does: a TIMESTAMP value in the session time
+            // zone, and a value that does not parse as NULL.
             if let ArrowDataType::Timestamp(_, Some(_)) = data_type {
-                let parse = Timestamp::try_new(Some(Arc::from(time_zone)), true, false)?;
+                let parse = Timestamp::try_new(Some(Arc::from(time_zone)), false, false)?;
                 value = ScalarUDF::from(parse).call(vec![value]);
             }
-            Ok(Transformed::yes(Expr::Cast(Cast::new(
+            Ok(Transformed::yes(Expr::TryCast(TryCast::new(
                 Box::new(value),
                 data_type,
             ))))
@@ -710,7 +711,8 @@ mod tests {
     }
 
     /// TIMESTAMP partition values parse as the scans parse them: without an offset, as a wall
-    /// clock in the session time zone, the first instant when it occurs twice.
+    /// clock in the session time zone, the first instant when it occurs twice, and as NULL when
+    /// they do not parse.
     #[test]
     fn replay_timestamp_partition_values_use_the_session_time_zone() -> Result<()> {
         let batch = RecordBatch::try_from_iter(vec![(
@@ -721,6 +723,8 @@ mod tests {
                 "2024-01-01 09:00:00.000000",
                 "2024-11-03 01:30:00",
                 "",
+                "2024-01-01t09:00:00z",
+                "not a timestamp",
             ])) as Arc<_>,
         )])?;
         let logical_schema = ArrowSchema::new(vec![Field::new(
@@ -757,8 +761,46 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
+                None,
+                None,
             ])
         );
+        Ok(())
+    }
+
+    /// Partition values of other types that do not parse are NULL, as the scans read them.
+    #[test]
+    fn replay_partition_values_that_do_not_parse_are_null() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "n",
+                Arc::new(StringArray::from(vec!["1", "abc", ""])) as Arc<_>,
+            ),
+            (
+                "d",
+                Arc::new(StringArray::from(vec!["2024-02-28", "2024-02-30", ""])) as Arc<_>,
+            ),
+        ])?;
+        let logical_schema = ArrowSchema::new(vec![
+            Field::new("n", ArrowDataType::Int32, true),
+            Field::new("d", ArrowDataType::Date32, true),
+        ]);
+        for column in ["n", "d"] {
+            let predicate = type_partition_columns(
+                Expr::Column(LogicalColumn::new_unqualified(column)).is_null(),
+                &["n".to_string(), "d".to_string()],
+                &logical_schema,
+                "UTC",
+            )?;
+            let ctx = SessionContext::new();
+            let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
+            let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                actual.as_ref(),
+                &datafusion::arrow::array::BooleanArray::from(vec![false, true, true]),
+                "{column}"
+            );
+        }
         Ok(())
     }
 

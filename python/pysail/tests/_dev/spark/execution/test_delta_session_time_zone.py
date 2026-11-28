@@ -324,3 +324,58 @@ def test_delta_checkpoint_parses_timestamp_partition_values_in_session_time_zone
         "2024-01-01T10:00:00.000000Z": read[2],
         "2024-01-01T11:00:00.000000Z": read[3],
     }
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "table"
+    june = int(datetime(2024, 6, 1, 7, tzinfo=UTC).timestamp()) * 1_000_000
+    spark.sql(
+        "CREATE TABLE unparsed (id INT, ts TIMESTAMP) USING delta PARTITIONED BY (ts) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ('delta.checkpointInterval' = '7')"
+    )
+    try:
+        for id_, value in [(1, "2024-01-01 09:00:00"), (2, "2024-01-01 09:00:00"), (7, "2024-01-01 09:00:00")] + [
+            (id_, "2024-06-01 07:00:00") for id_ in [3, 4, 5]
+        ]:
+            spark.sql(f"SELECT {id_} AS id, TIMESTAMP '{value}' AS ts").write.format("delta").mode("append").save(
+                str(path)
+            )
+    finally:
+        spark.sql("DROP TABLE IF EXISTS unparsed").collect()
+    # Spark's cast rejects a lowercase `t` or `z`, so Delta Lake on Spark reads the value as NULL.
+    for log in (path / "_delta_log").glob("*.json"):
+        log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', '"2024-01-01t09:00:00z"'))
+
+    def rows():
+        frame = spark.read.format("delta").load(str(path)).selectExpr("id", "unix_micros(ts) AS micros")
+        return sorted((row.id, row.micros) for row in frame.collect())
+
+    for metadata_as_data in ["false", "true"]:
+        frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+        assert sorted(row.id for row in frame.where("ts IS NULL").collect()) == [1, 2, 7]
+        assert sorted(row.id for row in frame.where("ts >= TIMESTAMP '2024-06-01 07:00:00' OR id = 1").collect()) == [
+            1,
+            3,
+            4,
+            5,
+        ]
+        (row,) = frame.selectExpr("count(ts) AS n", "unix_micros(max(ts)) AS m").collect()
+        assert (row.n, row.m) == (3, june)
+    # The DELETE commits version 7, which writes a checkpoint. Like Delta Lake on Spark, its typed copy
+    # of the value is NULL.
+    spark.sql(f"DELETE FROM delta.`{path}` WHERE ts IS NULL AND id = 7").collect()  # noqa: S608
+    checkpoint = pq.read_table(path / "_delta_log" / f"{7:020}.checkpoint.parquet").to_pylist()
+    parsed = {
+        dict(row["add"]["partitionValues"])["ts"]: row["add"]["partitionValues_parsed"]["ts"]
+        for row in checkpoint
+        if row["add"]
+    }
+    assert parsed == {"2024-01-01t09:00:00z": None, "2024-06-01T07:00:00.000000Z": datetime(2024, 6, 1, 7, tzinfo=UTC)}
+    spark.sql(f"OPTIMIZE delta.`{path}`").collect()
+    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june)]
+    spark.sql("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts").write.format("delta").mode("overwrite").option(
+        "partitionOverwriteMode", "dynamic"
+    ).save(str(path))
+    assert rows() == [(1, None), (2, None), (6, june)]

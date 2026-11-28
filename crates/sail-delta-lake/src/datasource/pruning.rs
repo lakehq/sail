@@ -571,9 +571,15 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
 
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_count_array(column, |a, s| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                if pv.as_deref().is_none_or(str::is_empty) {
+                // A value that does not parse is NULL too.
+                if pv.as_deref().is_none_or(str::is_empty)
+                    || parser.as_ref().is_some_and(|parser| {
+                        parser.parse(pv.as_deref()).is_ok_and(|v| v.is_null())
+                    })
+                {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
