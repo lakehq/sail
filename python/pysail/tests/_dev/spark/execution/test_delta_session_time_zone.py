@@ -104,21 +104,28 @@ def test_delta_append_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, 
 
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 @pytest.mark.parametrize("partitioned", [False, True], ids=["flat", "partitioned"])
-@pytest.mark.parametrize("write", ["insert", "save-as-table"])
+# A path append into a NOT NULL column is cast by the plan that checks the constraint, while a
+# path append into a nullable column is cast by the Delta writer (tested above).
+@pytest.mark.parametrize("write", ["insert", "insert-into", "save-as-table", "save-not-null"])
 def test_delta_insert_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, session_timezone, partitioned, write):
     _ = session_timezone
     path = tmp_path / "table"
     partition = "PARTITIONED BY (ts)" if partitioned else ""
+    column = "TIMESTAMP NOT NULL" if write == "save-not-null" else "TIMESTAMP"
     spark.sql(
-        f"CREATE TABLE ntz_insert (id INT, ts TIMESTAMP) USING delta {partition} "
+        f"CREATE TABLE ntz_insert (id INT, ts {column}) USING delta {partition} "
         f"LOCATION '{escape_sql_string_literal(str(path))}'"
     )
     try:
         if write == "insert":
             ntz_rows(spark).createOrReplaceTempView("ntz_rows")
             spark.sql("INSERT INTO ntz_insert SELECT * FROM ntz_rows").collect()
-        else:
+        elif write == "insert-into":
+            ntz_rows(spark).write.insertInto("ntz_insert")
+        elif write == "save-as-table":
             ntz_rows(spark).write.format("delta").mode("append").saveAsTable("ntz_insert")
+        else:
+            ntz_rows(spark).write.format("delta").mode("append").save(str(path))
         rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_insert ORDER BY id").collect()
         # The wall clock is read in the session time zone (UTC-8), as Spark's cast reads it.
         assert [(row.id, row.micros) for row in rows] == [(1, utc_micros(9)), (2, utc_micros(10))]
