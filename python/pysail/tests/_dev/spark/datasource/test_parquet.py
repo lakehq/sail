@@ -1990,3 +1990,28 @@ def test_parquet_reads_legacy_map_child_names(spark, tmp_path, merge_schema):
     df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
     assert df.schema.simpleString() == "struct<id:bigint,m:map<string,bigint>>"
     assert df.orderBy("id").collect() == [(0, {"x": 0}), (1, {"x": 1})]
+
+
+@pytest.mark.parametrize("timestamp_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_table_reads_not_null_struct_of_timestamps(spark, tmp_path, timestamp_type):
+    # The struct column is written to the file as a column that allows nulls, and its
+    # timestamp field needs a cast when the file is read.
+    table_name = "parquet_not_null_struct_of_timestamps"
+    location = escape_sql_string_literal(str(tmp_path / "table"))
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} (k INT, c STRUCT<y: {timestamp_type}, z: INT> NOT NULL) "
+            f"USING parquet LOCATION '{location}'"
+        )
+        for k in range(2):
+            spark.sql(
+                f"INSERT INTO {table_name} "  # noqa: S608
+                f"VALUES ({k}, named_struct('y', {timestamp_type} '2020-01-0{k + 1} 00:00:00', 'z', {k}))"
+            )
+        expected = spark.sql(
+            f"SELECT {timestamp_type} '2020-01-01 00:00:00' AS y0, {timestamp_type} '2020-01-02 00:00:00' AS y1"
+        ).first()
+        rows = spark.sql(f"SELECT k, c FROM {table_name} ORDER BY k").collect()  # noqa: S608
+        assert rows == [Row(k=0, c=Row(y=expected.y0, z=0)), Row(k=1, c=Row(y=expected.y1, z=1))]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

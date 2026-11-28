@@ -858,8 +858,14 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 self.matching,
             )?;
         }
+        // The nullability of the column itself is not part of its type: a column that the
+        // file allows to have nulls is read as a column without nulls, as when no cast is
+        // needed.
+        let physical = physical_field
+            .clone()
+            .with_nullable(logical_field.is_nullable());
         if !can_cast_field_with_schema_evolution(
-            physical_field,
+            &physical,
             logical_field,
             self.matching,
             self.cast_mode,
@@ -2302,6 +2308,53 @@ mod tests {
                 SchemaEvolutionCastMode::Strict,
             )?);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn cast_column_reads_a_nullable_file_column_without_nulls() -> Result<()> {
+        let timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let file_fields = |nullable: bool| {
+            Fields::from(vec![
+                Field::new("y", timestamp.clone(), nullable).with_metadata(HashMap::from([(
+                    crate::parquet_schema::SAIL_PARQUET_STORAGE_METADATA_KEY.to_string(),
+                    "INT64".to_string(),
+                )])),
+            ])
+        };
+        let table_fields =
+            |nullable: bool| Fields::from(vec![Field::new("y", timestamp.clone(), nullable)]);
+        let read = |file: Fields, table: Fields| {
+            let physical = Schema::new(vec![Field::new("c", DataType::Struct(file), true)]);
+            let logical = Schema::new(vec![Field::new("c", DataType::Struct(table), false)]);
+            create_schema_evolution_adapter(
+                Arc::new(logical),
+                Arc::new(physical),
+                StructFieldMatching::CaseInsensitiveName,
+                SchemaEvolutionCastMode::Parquet,
+            )?
+            .rewrite(Arc::new(Column::new("c", 0)))
+        };
+        // The column of the file allows nulls and the column of the table does not, and the
+        // fields of the struct need a cast.
+        let column = read(file_fields(true), table_fields(true))?;
+        let file_column = Field::new("c", DataType::Struct(file_fields(true)), true);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![file_column])),
+            vec![Arc::new(StructArray::new(
+                file_fields(true),
+                vec![Arc::new(
+                    TimestampMicrosecondArray::from(vec![1]).with_timezone("UTC"),
+                )],
+                None,
+            ))],
+        )?;
+        let values = column.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(values.data_type(), &DataType::Struct(table_fields(true)));
+        assert_eq!(values.null_count(), 0);
+        // A field of the struct that allows nulls in the file is still not read as a field
+        // without nulls.
+        assert!(read(file_fields(true), table_fields(false)).is_err());
         Ok(())
     }
 
