@@ -586,12 +586,6 @@ pub struct DataSourceRegistry {
     sources: RwLock<HashMap<String, Arc<dyn DataSource>>>,
 }
 
-impl std::fmt::Debug for DataSourceRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DataSourceRegistry").finish_non_exhaustive()
-    }
-}
-
 impl DataSourceRegistry {
     pub fn new() -> Self {
         Self {

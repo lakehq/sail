@@ -1508,13 +1508,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
-                table,
             }) => {
                 let object_store_url =
                     datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
                 let path = object_store::path::Path::parse(path)
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
-                Ok(Arc::new(FileDeleteExec::new(object_store_url, path, table)))
+                Ok(Arc::new(FileDeleteExec::new(object_store_url, path, None)))
             }
             NodeKind::HivePartitionWrite(r#gen::HivePartitionWriteExecNode { input }) => {
                 let input =
@@ -3906,7 +3905,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
                 path: file_delete_exec.path().to_string(),
-                table: file_delete_exec.table().map(str::to_string),
             })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
