@@ -2198,15 +2198,17 @@ def test_view_resolved_again_in_a_table_argument_resolves_as_when_it_was_created
             yield row["id"], str(row["r"])
 
     spark.udtf.register("view_rows", udtf(Rows, returnType="id int, r string"))
-    table = tables("parquet")
-    table.insert("(1)")
-    view = table.create_view(kind, f"SELECT id, conv(CAST(id AS STRING), 10, 2) AS r FROM {table.name}")
     key = "spark.sql.execution.arrow.useLargeVarTypes"
     previous = spark.conf.get(key)
     spark.conf.set(key, "true")
     try:
+        table = tables("parquet", columns="id INT")
+        table.insert("(1)")
+        view = table.create_view(kind, f"SELECT id, conv(CAST(id AS STRING), 10, 2) AS r FROM {table.name}")
+        assert rows(spark, f"SELECT * FROM view_rows(TABLE({view}))") == [(1, "1")]
         # The table gains a column, so the view resolves its query again inside the argument.
         spark.sql(f"ALTER TABLE {table.name} ADD COLUMNS (x INT)")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1, "1")]
         assert rows(spark, f"SELECT * FROM view_rows(TABLE({view}))") == [(1, "1")]
     finally:
         spark.conf.set(key, previous)
