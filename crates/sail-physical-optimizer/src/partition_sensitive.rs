@@ -17,6 +17,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, replace_children_if_necessary,
@@ -175,6 +176,9 @@ fn round_robin_input(plan: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn Execution
 /// keeps the order of the probe rows, as the streamed side of a broadcast hash join in Spark.
 /// The partitions and the order of the rows are execution-dependent for other joins, such as
 /// partitioned hash joins and nested loop joins, so their inputs are kept.
+///
+/// A union returns the partitions of its inputs one input after another, as Spark does, so
+/// the repartitions are removed in each input in which they can be.
 fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(input) = round_robin_input(&plan) {
         let input = Arc::clone(input);
@@ -192,6 +196,24 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
         return Ok(Transformed::yes(replace_children_if_necessary(
             plan,
             vec![left, right.data],
+        )?));
+    }
+    if let Some(union) = plan.downcast_ref::<UnionExec>() {
+        let mut transformed = false;
+        let inputs = union
+            .inputs()
+            .iter()
+            .map(|input| {
+                let input = remove_round_robin(Arc::clone(input))?;
+                transformed |= input.transformed;
+                Ok(input.data)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !transformed {
+            return Ok(Transformed::no(plan));
+        }
+        return Ok(Transformed::yes(replace_children_if_necessary(
+            plan, inputs,
         )?));
     }
     if let Some(scan) = declare_file_scan_partitions(&plan) {
@@ -248,11 +270,10 @@ mod tests {
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
     use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::physical_expr::expressions::{col, lit};
-    use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion::physical_expr::expressions::{Column, col, lit};
+    use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::displayable;
     use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-    use datafusion::physical_plan::union::UnionExec;
 
     use super::*;
 
@@ -332,18 +353,21 @@ mod tests {
         Arc::new(DataSourceExec::new(Arc::new(config)))
     }
 
+    /// Whether the plan has file scans, and all of them declare their partitions.
     fn declares_file_scan_partitions(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-        let mut declared = false;
+        let mut scans = 0;
+        let mut declared = 0;
         plan.apply(|plan| {
             if let Some(config) = plan
                 .downcast_ref::<DataSourceExec>()
                 .and_then(|scan| scan.data_source().downcast_ref::<FileScanConfig>())
             {
-                declared = config.output_partitioning.is_some();
+                scans += 1;
+                declared += usize::from(config.output_partitioning.is_some());
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        Ok(declared)
+        Ok(scans > 0 && declared == scans)
     }
 
     fn spark_partition_id(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -383,6 +407,76 @@ mod tests {
         let plan = KeepPartitionSensitiveInputs
             .optimize(filter(file_scan(3))?, &ConfigOptions::default())?;
         assert!(!declares_file_scan_partitions(&plan)?);
+        Ok(())
+    }
+
+    /// A partitioned hash join of two sources, with the one column of its left input.
+    fn partitioned_join() -> Result<Arc<dyn ExecutionPlan>> {
+        let join = hash_join(
+            source(2)?,
+            source(2)?,
+            JoinType::Inner,
+            PartitionMode::Partitioned,
+        )?;
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![(column, "a".to_string())],
+            join,
+        )?))
+    }
+
+    fn display(plan: &Arc<dyn ExecutionPlan>) -> String {
+        displayable(plan.as_ref()).indent(false).to_string()
+    }
+
+    #[test]
+    fn file_scans_in_union_inputs_declare_their_partitions_beside_other_inputs() -> Result<()> {
+        let other = partitioned_join()?;
+        let union = UnionExec::try_new(vec![filter(file_scan(3))?, Arc::clone(&other)])?;
+        let plan = KeepPartitionSensitiveInputs
+            .optimize(spark_partition_id(union)?, &ConfigOptions::default())?;
+        let text = display(&plan);
+        assert!(declares_file_scan_partitions(&plan)?, "{text}");
+        let children = plan.children();
+        let union = children[0];
+        assert!(union.is::<UnionExec>(), "{text}");
+        // The input that is not walked is kept as it is.
+        assert_eq!(display(union.children()[1]), display(&other), "{text}");
+        assert_eq!(
+            plan.output_partitioning().partition_count(),
+            3 + 2,
+            "{text}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unions_without_inputs_that_change_are_kept() -> Result<()> {
+        let union = UnionExec::try_new(vec![source(1)?, partitioned_join()?])?;
+        let plan = spark_partition_id(union)?;
+        let expected = display(&plan);
+        let plan = KeepPartitionSensitiveInputs.optimize(plan, &ConfigOptions::default())?;
+        assert_eq!(display(&plan), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_in_union_inputs_move_above_partition_sensitive_operators()
+    -> Result<()> {
+        let union = UnionExec::try_new(vec![round_robin(filter(file_scan(2))?, 8)?, source(1)?])?;
+        let plan = KeepPartitionSensitiveInputs
+            .optimize(spark_partition_id(union)?, &ConfigOptions::default())?;
+        let text = display(&plan);
+        let lines = text.lines().map(str::trim_start).collect::<Vec<_>>();
+        assert!(
+            lines[0].starts_with(
+                "RepartitionExec: partitioning=RoundRobinBatch(9), input_partitions=3"
+            ),
+            "{text}"
+        );
+        assert!(lines[1].starts_with("SparkPartitionIdExec"), "{text}");
+        assert_eq!(text.matches("RepartitionExec").count(), 1, "{text}");
+        assert!(declares_file_scan_partitions(&plan)?, "{text}");
         Ok(())
     }
 

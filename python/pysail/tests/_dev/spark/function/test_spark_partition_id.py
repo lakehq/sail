@@ -161,3 +161,69 @@ def test_partition_dependent_id_without_other_columns_over_files(spark, tmp_path
         assert sorted(row[0] for row in frame.select(getattr(F, function)()).collect()) == expected
     finally:
         spark.sql("DROP TABLE IF EXISTS partition_dependent_ids")
+
+
+@pytest.fixture
+def union_inputs(tmp_path):
+    """Writes the Parquet directories `a`, `b` and `c`, with a file for each of the row counts."""
+    paths = {}
+    start = 0
+    for name, counts in {"a": [100, 500, 2000, 50, 1000, 300], "b": [700, 40, 1500], "c": [250, 900]}.items():
+        path = tmp_path / name
+        path.mkdir()
+        for i, count in enumerate(counts):
+            ids = pa.array(range(start, start + count), pa.int64())
+            pq.write_table(pa.table({"id": ids}), path / f"{name}{i}.parquet")
+            start += count
+        paths[name] = f"parquet.`{path}`"
+    return paths
+
+
+def partitions_of_files(spark, query):
+    """Returns the partition and the row count of each file that the query reads, by its file name."""
+    rows = spark.sql(
+        f"SELECT f, p, count(*) AS n FROM ({query}) AS q GROUP BY f, p"  # noqa: S608
+    ).collect()
+    return sorted((row.f.rsplit("/", 1)[-1], row.p, row.n) for row in rows)
+
+
+def select_files(relation, where=""):
+    return f"SELECT input_file_name() AS f, spark_partition_id() AS p, id FROM {relation}{where}"  # noqa: S608
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail groups the files of a scan in its own way")
+@pytest.mark.parametrize(
+    "inputs", [["a", "b"], ["b", "a"], ["a", ["b", "c"]], [["a", "b"], "c"]], ids=["ab", "ba", "a(bc)", "(ab)c"]
+)
+@pytest.mark.parametrize("where", ["", " WHERE id % 2 = 0"], ids=["all", "filtered"])
+def test_spark_partition_id_over_a_union_follows_the_partitions_of_its_inputs(spark, union_inputs, inputs, where):
+    def union(inputs):
+        if isinstance(inputs, str):
+            return f"SELECT * FROM {union_inputs[inputs]}"  # noqa: S608
+        return " UNION ALL ".join(f"SELECT * FROM ({union(x)}) AS u" for x in inputs)  # noqa: S608
+
+    def flatten(inputs):
+        return [inputs] if isinstance(inputs, str) else [y for x in inputs for y in flatten(x)]
+
+    # A union returns the partitions of its inputs one input after another.
+    expected = []
+    offset = 0
+    for name in flatten(inputs):
+        alone = partitions_of_files(spark, select_files(union_inputs[name], where))
+        expected.extend((f, p + offset, n) for f, p, n in alone)
+        offset += max(p for _, p, _ in alone) + 1
+    expected.sort()
+    query = select_files(f"({union(inputs)}) AS u", where)
+    for _ in range(5):
+        assert partitions_of_files(spark, query) == expected
+    projected = f"SELECT f, p, id + 1 AS id FROM ({query}) AS q"  # noqa: S608
+    assert partitions_of_files(spark, projected) == expected
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail groups the files of a scan in its own way")
+def test_spark_partition_id_inside_union_inputs_follows_the_partitions_of_each_input(spark, union_inputs):
+    alone = partitions_of_files(spark, select_files(union_inputs["b"]))
+    query = f"{select_files(union_inputs['a'])} UNION ALL {select_files(union_inputs['b'])}"
+    for _ in range(5):
+        rows = partitions_of_files(spark, query)
+        assert [x for x in rows if x[0].startswith("b")] == alone
