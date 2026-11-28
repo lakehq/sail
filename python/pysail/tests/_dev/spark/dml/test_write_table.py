@@ -4,6 +4,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.types import StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -134,6 +135,27 @@ def test_save_as_table(spark, tmp_path):
     df.write.saveAsTable("t2", mode="overwrite", path=location)
     actual = spark.sql("SELECT * FROM t2").toPandas()
     assert_frame_equal(actual, expected(1))
+
+
+@pytest.mark.parametrize("table_format", ["parquet", "csv", "json"])
+def test_sql_writes_return_no_columns_and_no_rows(spark, tmp_path, table_format):
+    location = {name: escape_sql_string_literal(str(tmp_path / name)) for name in ["t2", "t3", "t4", "out"]}
+    spark.sql(f"CREATE TABLE t2 (id LONG) USING {table_format} LOCATION '{location['t2']}'")
+    spark.sql(f"CREATE TABLE t4 (id LONG, p INT) USING {table_format} PARTITIONED BY (p) LOCATION '{location['t4']}'")
+    for query in [
+        "INSERT INTO t2 VALUES (1)",
+        "INSERT INTO t2 SELECT 2 WHERE false",
+        "INSERT OVERWRITE t2 VALUES (3)",
+        f"CREATE TABLE t3 USING {table_format} LOCATION '{location['t3']}' AS SELECT CAST(4 AS LONG) AS id",
+        f"INSERT OVERWRITE DIRECTORY '{location['out']}' USING {table_format} SELECT 5 AS id",
+        "INSERT INTO t4 SELECT 6 AS id, 1 AS p",
+    ]:
+        result = spark.sql(query)
+        assert result.schema == StructType([])
+        assert result.collect() == []
+    assert spark.table("t2").collect() == [(3,)]
+    assert spark.table("t3").collect() == [(4,)]
+    assert spark.table("t4").collect() == [(6, 1)]
 
 
 def test_insert_into_parquet_table_with_schema_inferred_from_files(spark, tmp_path):
