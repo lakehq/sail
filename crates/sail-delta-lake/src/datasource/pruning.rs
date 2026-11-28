@@ -274,14 +274,21 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .filter_map(|name| {
                 let column = Column::from_name(name.clone());
                 self.field_for(&column).map(|_| {
-                    (
-                        name.clone(),
-                        MaterializedColumnStats {
+                    // The partition values of a column are parsed once for its bounds and null
+                    // counts.
+                    let stats = match self.build_partition_array(&column) {
+                        Some(values) => MaterializedColumnStats {
+                            min_values: Some(Arc::clone(&values)),
+                            null_counts: self.partition_null_counts(&values),
+                            max_values: Some(values),
+                        },
+                        None => MaterializedColumnStats {
                             min_values: self.compute_min_values(&column),
                             max_values: self.compute_max_values(&column),
                             null_counts: self.compute_null_counts(&column),
                         },
-                    )
+                    };
+                    (name.clone(), stats)
                 })
             })
             .collect();
@@ -513,9 +520,6 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
     }
 
     fn compute_min_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some(array) = self.build_partition_array(column) {
-            return Some(array);
-        }
         if let Some(array) =
             self.build_json_column_stat_array(column, |stats, name| stats.min_values.get(name))
         {
@@ -541,9 +545,6 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
     }
 
     fn compute_max_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some(array) = self.build_partition_array(column) {
-            return Some(array);
-        }
         if let Some(array) =
             self.build_json_column_stat_array(column, |stats, name| stats.max_values.get(name))
         {
@@ -567,6 +568,27 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             Self::null_scalar(dt)
         })
         .map(widen_timestamp_max_stat)
+    }
+
+    /// The null counts of a partition column with the parsed `values`, where a value that does
+    /// not parse is NULL.
+    fn partition_null_counts(&self, values: &ArrayRef) -> Option<ArrayRef> {
+        let mut has_value = false;
+        let counts: Vec<Option<u64>> = self
+            .stats
+            .iter()
+            .enumerate()
+            .map(|(index, stats)| {
+                let count = if values.is_null(index) {
+                    stats.as_ref().map(|stats| stats.num_records.max(0) as u64)
+                } else {
+                    Some(0)
+                };
+                has_value |= count.is_some();
+                count
+            })
+            .collect();
+        has_value.then(|| Arc::new(UInt64Array::from(counts)) as ArrayRef)
     }
 
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
