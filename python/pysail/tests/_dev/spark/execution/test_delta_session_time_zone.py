@@ -323,7 +323,9 @@ def test_delta_delete_in_another_session_time_zone_removes_the_rows_that_select_
 
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles", "UTC"], indirect=True)
 @pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
-@pytest.mark.parametrize("condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'"])
+@pytest.mark.parametrize(
+    "condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'", "year(ts) = 2024"]
+)
 def test_delta_delete_by_date_in_session_time_zone_removes_the_rows_that_select_returns(
     spark, tmp_path, session_timezone, partition, condition
 ):
@@ -357,7 +359,8 @@ def test_delta_delete_by_date_in_session_time_zone_removes_the_rows_that_select_
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles", "UTC"], indirect=True)
 @pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
 @pytest.mark.parametrize(
-    "condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'", "hour(ts) = 4"]
+    "condition",
+    ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'", "hour(ts) = 4", "year(ts) = 2024"],
 )
 @pytest.mark.parametrize("statement", ["option", "sql"])
 def test_delta_replace_where_in_session_time_zone_replaces_the_rows_that_select_returns(

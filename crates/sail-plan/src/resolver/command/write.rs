@@ -40,7 +40,7 @@ use sail_function::scalar::datetime::timestamp_cast::{
     cast_timestamp_ntz_to_ltz, session_wall_clock,
 };
 use sail_function::scalar::misc::raise_error::RaiseError;
-use sail_logical_optimizer::convert_session_timestamp_casts_in_predicate;
+use sail_logical_optimizer::type_coercion::coerce_predicate;
 use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
@@ -828,8 +828,8 @@ impl PlanResolver<'_> {
                 let expr = self
                     .resolve_expression(condition.expr, &schema, state)
                     .await?;
-                // The condition is not part of a plan that the analyzer converts.
-                let expr = convert_session_timestamp_casts_in_predicate(
+                // The condition is not part of a plan that the analyzer coerces.
+                let expr = coerce_predicate(
                     expr,
                     LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,

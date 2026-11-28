@@ -64,10 +64,10 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    AsOfJoin, AsOfMatch, Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, MaterializedCte,
-    MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator, Projection, Union,
-    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    AsOfJoin, AsOfMatch, Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, LogicalPlanBuilder,
+    MaterializedCte, MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
+    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
@@ -138,6 +138,21 @@ impl AnalyzerRule for TypeCoercion {
 
     fn name(&self) -> &str {
         "type_coercion"
+    }
+}
+
+/// Coerces a predicate over `input` as [`TypeCoercion`] coerces the predicate of a filter, for a
+/// predicate that the analyzer does not see, such as a DELETE condition.
+pub fn coerce_predicate(
+    predicate: Expr,
+    input: LogicalPlan,
+    config: &ConfigOptions,
+) -> Result<Expr> {
+    let filter = LogicalPlanBuilder::from(input).filter(predicate)?.build()?;
+    let filter = coerce_plan_and_subqueries(filter, config)?;
+    match convert_session_timestamp_casts(filter, config)? {
+        LogicalPlan::Filter(filter) => Ok(filter.predicate),
+        _ => internal_err!("expected a filter after coercing a predicate"),
     }
 }
 

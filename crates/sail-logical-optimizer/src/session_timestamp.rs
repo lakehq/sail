@@ -11,13 +11,12 @@ use datafusion::arrow::datatypes::{DataType, FieldRef, TimeUnit};
 use datafusion::common::config::ConfigOptions;
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchema, Result, ScalarValue, internal_err};
+use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::expr::{Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF,
-    Volatility, cast, lit,
+    BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, Volatility, cast, lit,
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_common_datafusion::session::time_zone::session_time_zone;
@@ -86,20 +85,6 @@ pub(crate) fn convert_session_timestamp_casts(
         })
     })
     .data()
-}
-
-/// Converts the casts of a predicate over `input` as [`convert_session_timestamp_casts`] converts
-/// those of a plan, for a predicate that the analyzer does not see, such as a DELETE condition.
-pub fn convert_session_timestamp_casts_in_predicate(
-    predicate: Expr,
-    input: LogicalPlan,
-    config: &ConfigOptions,
-) -> Result<Expr> {
-    let filter = LogicalPlanBuilder::from(input).filter(predicate)?.build()?;
-    match convert_session_timestamp_casts(filter, config)? {
-        LogicalPlan::Filter(filter) => Ok(filter.predicate),
-        _ => internal_err!("expected a filter after converting the session time zone casts"),
-    }
 }
 
 struct Rewriter<'a> {
