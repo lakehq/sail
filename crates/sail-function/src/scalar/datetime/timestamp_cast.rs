@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{Expr, ScalarUDF, cast, lit};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, cast, lit};
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 
 use crate::scalar::datetime::convert_tz::ConvertTz;
@@ -30,6 +32,20 @@ pub fn cast_timestamp_ntz_to_ltz(expression: Expr, timezone: &Arc<str>, is_try: 
         lit("UTC"),
         cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
     ])
+}
+
+/// Casts the TIMESTAMP_NTZ values of `array` to TIMESTAMP values labelled with UTC, as
+/// [`cast_timestamp_ntz_to_ltz`] does in `timezone`.
+pub fn cast_timestamp_ntz_array_to_ltz(array: &ArrayRef, timezone: &str) -> Result<ArrayRef> {
+    let args = [
+        ColumnarValue::Scalar(ScalarValue::from(timezone)),
+        ColumnarValue::Scalar(ScalarValue::from("UTC")),
+        ColumnarValue::Array(Arc::clone(array)),
+    ];
+    ConvertTz::cast(false)
+        .with_output_timezone(Some(Arc::from("UTC")))
+        .invoke_cast(&args)?
+        .into_array(array.len())
 }
 
 /// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in

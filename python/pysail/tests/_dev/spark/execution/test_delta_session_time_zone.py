@@ -65,6 +65,43 @@ def test_delta_append_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, 
         spark.sql("DROP TABLE IF EXISTS ntz_append").collect()
 
 
+@pytest.mark.parametrize(
+    ("session_timezone", "wall_clock", "micros"),
+    [
+        # Like Spark's cast, a wall clock that occurs twice is the first instant (PDT), and a wall
+        # clock that does not occur moves forward by the length of the gap.
+        ("America/Los_Angeles", "2024-11-03 01:30:00", 1730622600000000),
+        ("America/Los_Angeles", "2024-03-10 02:30:00", 1710066600000000),
+        ("+05:30:15", "2024-01-01 09:00:00", 1704079785000000),
+    ],
+    indirect=["session_timezone"],
+    ids=["repeated-hour", "skipped-hour", "offset-with-seconds"],
+)
+@pytest.mark.parametrize("partitioned", [False, True], ids=["flat", "partitioned"])
+def test_delta_append_casts_timestamp_ntz_as_spark_casts(
+    spark, tmp_path, session_timezone, wall_clock, micros, partitioned
+):
+    _ = session_timezone
+    path = tmp_path / "table"
+    partition = "PARTITIONED BY (ts)" if partitioned else ""
+    spark.sql(
+        f"CREATE TABLE ntz_cast (id INT, ts TIMESTAMP) USING delta {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        cast = f"CAST(TIMESTAMP_NTZ '{wall_clock}' AS TIMESTAMP)"
+        assert spark.sql(f"SELECT unix_micros({cast}) AS micros").collect()[0].micros == micros
+        # Two input partitions make a worker run the Delta writer.
+        spark.sql(
+            f"SELECT * FROM VALUES (1, TIMESTAMP_NTZ '{wall_clock}'), (2, TIMESTAMP_NTZ '{wall_clock}') AS t(id, ts)"  # noqa: S608
+        ).repartition(2).write.format("delta").mode("append").save(str(path))
+        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_cast ORDER BY id").collect()
+        assert [(row.id, row.micros) for row in rows] == [(1, micros), (2, micros)]
+        assert spark.sql(f"SELECT id FROM ntz_cast WHERE ts = {cast}").count() == 2  # noqa: S608
+    finally:
+        spark.sql("DROP TABLE IF EXISTS ntz_cast").collect()
+
+
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 def test_delta_timestamp_partition_values_are_utc(spark, tmp_path, session_timezone):
     _ = session_timezone

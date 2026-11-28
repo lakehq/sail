@@ -42,6 +42,9 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
 };
+use sail_common_datafusion::session::time_zone::session_time_zone;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_array_to_ltz;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
@@ -704,12 +707,8 @@ impl DeltaWriterExec {
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let write_context = self.write_context.clone();
-        let session_timezone = context
-            .session_config()
-            .options()
-            .execution
-            .time_zone
-            .clone();
+        let session_timezone =
+            session_time_zone(context.session_config().options()).map(ToOwned::to_owned);
 
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -898,7 +897,7 @@ impl DeltaWriterExec {
                             &change_data_schema(&writer_schema),
                             logical_cdc_schema.as_ref(),
                             kernel_mode,
-                            timezone.as_ref().map(|tz| tz.as_str()),
+                            timezone.as_deref(),
                         )?;
                         change_writer
                             .write(&change)
@@ -942,7 +941,7 @@ impl DeltaWriterExec {
                     &writer_schema,
                     logical_schema_for_mapping.as_ref(),
                     kernel_mode,
-                    timezone.as_ref().map(|tz| tz.as_str()),
+                    timezone.as_deref(),
                 )?;
 
                 writer
@@ -1385,22 +1384,16 @@ impl DeltaWriterExec {
                                     Some(target_tz.clone()),
                                 )?,
                                 (
-                                    DataType::Timestamp(unit_from, None),
-                                    DataType::Timestamp(_unit_to, Some(_)),
+                                    DataType::Timestamp(_, None),
+                                    DataType::Timestamp(_, Some(_)),
                                     Some(session_tz),
                                 ) => {
-                                    // Interpret NTZ as local time in session timezone before converting
-                                    let session_type = DataType::Timestamp(
-                                        *unit_from,
-                                        Some(Arc::<str>::from(session_tz)),
-                                    );
-                                    let with_session_tz = datafusion::arrow::compute::cast(
-                                        batch_column,
-                                        &session_type,
-                                    )
-                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                                    // Read the wall clock in the session time zone, as Spark's cast
+                                    // does.
+                                    let instants =
+                                        cast_timestamp_ntz_array_to_ltz(batch_column, session_tz)?;
                                     datafusion::arrow::compute::cast(
-                                        &with_session_tz,
+                                        &instants,
                                         final_field.data_type(),
                                     )
                                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
@@ -1413,7 +1406,7 @@ impl DeltaWriterExec {
                                     // Convert to session timezone before dropping timezone info
                                     let session_type = DataType::Timestamp(
                                         *unit_from,
-                                        Some(Arc::<str>::from(session_tz)),
+                                        Some(Arc::from(arrow_timezone_label(session_tz).as_ref())),
                                     );
                                     let session_aligned = datafusion::arrow::compute::cast(
                                         batch_column,
@@ -1568,7 +1561,8 @@ mod tests {
     use std::collections::HashMap;
 
     use datafusion::arrow::array::{
-        Array, ArrayRef, Int32Array, StructArray, TimestampSecondArray,
+        Array, ArrayRef, AsArray, Int32Array, StructArray, TimestampMicrosecondArray,
+        TimestampSecondArray,
     };
     use datafusion::arrow::compute::cast;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -1746,6 +1740,57 @@ mod tests {
                     assert_eq!(actual, expected, "{source_type} to {target}");
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Adapts TIMESTAMP_NTZ values (microseconds of the wall clock) to a TIMESTAMP column in a
+    /// session with time zone `time_zone`, and returns the instants.
+    fn adapt_timestamp_ntz(wall_clocks: Vec<i64>, time_zone: &str) -> Result<Vec<i64>> {
+        let values = Arc::new(TimestampMicrosecondArray::from(wall_clocks)) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "ts",
+                values.data_type().clone(),
+                true,
+            )])),
+            vec![values],
+        )?;
+        let target = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let final_schema = Arc::new(Schema::new(vec![Field::new("ts", target.clone(), true)]));
+        let batch = DeltaWriterExec::validate_and_adapt_batch(
+            batch,
+            &final_schema,
+            None,
+            ColumnMappingMode::None,
+            Some(time_zone),
+        )?;
+        assert_eq!(batch.column(0).data_type(), &target);
+        Ok(batch
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .values()
+            .to_vec())
+    }
+
+    /// TIMESTAMP_NTZ values written to a TIMESTAMP column are cast in the session time zone as
+    /// Spark casts them: a repeated wall clock is the earlier instant, a skipped one moves
+    /// forward, and an offset keeps its seconds.
+    #[test]
+    fn timestamp_ntz_values_are_cast_in_the_session_time_zone() -> Result<()> {
+        for (time_zone, wall_clock, instant) in [
+            // 2024-11-03 01:30 occurs twice in Los Angeles and is 08:30Z (PDT).
+            ("America/Los_Angeles", 1_730_597_400, 1_730_622_600),
+            // 2024-03-10 02:30 does not occur in Los Angeles and is 03:30 PDT.
+            ("America/Los_Angeles", 1_710_037_800, 1_710_066_600),
+            ("+05:30:15", 1_704_099_600, 1_704_079_785),
+            ("-03:30:45", 1_704_070_800, 1_704_083_445),
+        ] {
+            assert_eq!(
+                adapt_timestamp_ntz(vec![wall_clock * 1_000_000], time_zone)?,
+                vec![instant * 1_000_000],
+                "{time_zone}"
+            );
         }
         Ok(())
     }
