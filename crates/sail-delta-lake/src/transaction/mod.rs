@@ -30,9 +30,9 @@ use crate::delta_log::{
 use crate::options::session_user_metadata;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
-    Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
-    temp_commit_path,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, SaveMode,
+    TableFeature, Transaction, VersionChecksum, checksum_path, logical_file_key,
+    staged_commit_path, temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::table::DeltaSnapshot;
@@ -1352,11 +1352,19 @@ impl std::future::IntoFuture for PreparedCommit {
                     _ => None,
                 })
                 .unwrap_or(false);
-            // OPTIMIZE can reuse completed rewrites after checking intervening commits.
+            // OPTIMIZE can reuse completed rewrites after checking intervening commits, and an
+            // overwrite checks intervening commits against what it read.
             let effective_max_retries = if creation_intent
                 || current_is_blind_append
-                || matches!(this.data.operation, DeltaOperation::Optimize { .. })
-            {
+                || matches!(
+                    this.data.operation,
+                    DeltaOperation::Optimize { .. }
+                        | DeltaOperation::Write {
+                            mode: SaveMode::Overwrite,
+                            ..
+                        }
+                        | DeltaOperation::DynamicPartitionOverwrite { .. }
+                ) {
                 this.max_retries
             } else {
                 0
@@ -1481,7 +1489,7 @@ impl std::future::IntoFuture for PreparedCommit {
                                 let transaction_info = TransactionInfo::try_new(
                                     snapshot,
                                     &local_actions,
-                                    this.data.operation.read_whole_table(),
+                                    &this.data.operation,
                                 )?;
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,
@@ -3102,6 +3110,15 @@ mod tests {
                 assert_eq!(result.metrics.num_retries, 1);
                 assert_eq!(result.snapshot.unwrap().version(), version + 1);
                 version + 1
+            } else if matches!(case, CommitCase::Overwrite) {
+                // An overwrite reads the whole table, to which the blind append that won added.
+                assert!(matches!(
+                    result,
+                    Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                        CommitConflictError::ConcurrentAppend
+                    )))
+                ));
+                version
             } else {
                 assert!(matches!(
                     result,

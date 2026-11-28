@@ -364,6 +364,33 @@ Feature: Unity Catalog managed Delta table operations
       | 4  | new  |
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_overwrite_corrupt_published_t version 2 references staged Delta commit in location
 
+  Scenario: INSERT OVERWRITE on managed Delta table that reads the table uses Unity ratified commit when published commit is corrupted
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_self_overwrite_corrupt_published_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'old'),
+        (2, 'old')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_self_overwrite_corrupt_published_t
+    Given published Delta commit for version 1 in location is invalid JSON
+    Given statement
+      """
+      INSERT OVERWRITE TABLE unity_table_test.managed_delta_self_overwrite_corrupt_published_t
+      SELECT id + 10, 'new' FROM unity_table_test.managed_delta_self_overwrite_corrupt_published_t
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_self_overwrite_corrupt_published_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 11 | new  |
+      | 12 | new  |
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_self_overwrite_corrupt_published_t version 2 references staged Delta commit in location
+
   Scenario: DELETE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
       """

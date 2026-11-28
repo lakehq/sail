@@ -29,8 +29,8 @@ use sail_common_datafusion::column_features::{
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     BucketBy, CATALOG_TABLE_OPTION, DataSource, DeltaCheckConstraintExpr, DeltaConstraintViolation,
-    OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
-    find_path_in_options,
+    LakeSnapshotPins, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
@@ -68,9 +68,11 @@ use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
-    DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
-    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
-    load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
+    create_delta_table_with_object_store, create_logstore_with_object_store,
+    infer_delta_logical_metadata, infer_delta_logical_schema,
+    load_catalog_managed_commits_for_snapshot, load_pinned_version,
+    open_table_with_object_store_and_table_config,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 use crate::{DeltaTableError, create_delta_source};
@@ -151,6 +153,7 @@ impl DataSource for DeltaLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            snapshot_pins,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
@@ -189,6 +192,7 @@ impl DataSource for DeltaLakeSource {
                     sort_order,
                     options,
                     lakehouse_table,
+                    snapshot_pins,
                 },
             )),
         }))
@@ -734,8 +738,8 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
     }
 }
 
-#[derive(Clone, Debug, Educe)]
-#[educe(PartialEq, Eq, Hash, PartialOrd)]
+#[derive(Clone, Educe)]
+#[educe(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
     pub identity_columns_to_track: Vec<String>,
     pub output: CommandOutput,
@@ -747,6 +751,8 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    #[educe(Debug(ignore), PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
+    pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -819,6 +825,7 @@ pub(crate) async fn plan_delta_write(
         sort_order,
         options,
         lakehouse_table,
+        snapshot_pins,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -874,20 +881,40 @@ pub(crate) async fn plan_delta_write(
                     LakehouseOperation::Create | LakehouseOperation::Register
                 )
         });
-    let table = match open_delta_write_planning_table(
-        ctx,
-        table_url.clone(),
-        object_store,
-        lakehouse_planning_context,
-        delta_options.txn_app_id.is_some(),
-    )
-    .await
-    {
-        Ok(table) => Some(table),
-        Err(DeltaTableError::InvalidTableLocation(_)) | Err(DeltaTableError::FileNotFound(_)) => {
-            None
-        }
-        Err(err) => return Err(DataFusionError::External(Box::new(err))),
+    // An overwrite that reads its own table writes on the snapshot that the statement read, as
+    // one Delta transaction does, so that it removes the files that it read and commits on the
+    // version that it read. Reads that travel in time do not record their snapshots.
+    let pinned = snapshot_pins
+        .map(|pins| {
+            pins.get::<DeltaSnapshot>(table_url.as_str(), lakehouse_planning_context.is_some())
+        })
+        .transpose()?
+        .flatten()
+        .filter(|pinned| writes_on_read_snapshot(&mode, pinned.metadata().partition_columns()));
+    let table = match pinned {
+        Some(pinned) => Some(
+            open_delta_write_base_table(
+                table_url.clone(),
+                object_store,
+                &pinned,
+                delta_options.txn_app_id.is_some(),
+            )
+            .await?,
+        ),
+        None => match open_delta_write_planning_table(
+            ctx,
+            table_url.clone(),
+            object_store,
+            lakehouse_planning_context,
+            delta_options.txn_app_id.is_some(),
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::InvalidTableLocation(_))
+            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        },
     };
     let table_exists = table.is_some();
     let table_snapshot = table
@@ -1086,6 +1113,50 @@ async fn open_delta_write_planning_table(
         )
         .await
     }
+}
+
+/// Whether an overwrite that reads its own table writes on the snapshot that it read. The commit
+/// of an overwrite with a condition that selects partitions would have to check the files that
+/// concurrent commits add against the selected partitions only, which it does not, so such an
+/// overwrite writes on the latest snapshot.
+fn writes_on_read_snapshot(mode: &PhysicalSinkMode, partition_columns: &[String]) -> bool {
+    match mode {
+        PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwritePartitions => true,
+        PhysicalSinkMode::OverwriteIf {
+            condition: Some(condition),
+            ..
+        } => !split_conjunction(&condition.expr).into_iter().any(|expr| {
+            let columns = expr.column_refs();
+            !columns.is_empty()
+                && columns.iter().all(|column| {
+                    partition_columns
+                        .iter()
+                        .any(|partition| partition.eq_ignore_ascii_case(&column.name))
+                })
+        }),
+        _ => false,
+    }
+}
+
+/// Opens the version of the table that the statement read, with the commits that the catalog
+/// ratified for the read.
+async fn open_delta_write_base_table(
+    table_url: Url,
+    object_store: Arc<dyn object_store::ObjectStore>,
+    pinned: &DeltaSnapshot,
+    require_transactions: bool,
+) -> Result<DeltaTable> {
+    let table_config = DeltaSnapshotConfig {
+        require_files: false,
+        require_transactions,
+        catalog_managed_commits: pinned.load_config().catalog_managed_commits.clone(),
+        ..Default::default()
+    };
+    let log_store =
+        create_logstore_with_object_store(object_store, table_url.clone(), StorageConfig)?;
+    let mut table = DeltaTable::new(log_store, table_config);
+    load_pinned_version(&mut table, pinned, &table_url).await?;
+    Ok(table)
 }
 
 impl DeltaLakeSource {

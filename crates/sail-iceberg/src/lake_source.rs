@@ -125,6 +125,7 @@ impl DataSource for IcebergLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            snapshot_pins: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");

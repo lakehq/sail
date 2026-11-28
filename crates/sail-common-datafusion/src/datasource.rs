@@ -325,6 +325,9 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The table snapshots that the reads of the statement read, so that a write that reads
+    /// its own table writes on the snapshot that it read.
+    pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
 }
 
 impl SinkInfo {

@@ -2670,10 +2670,35 @@ def planning_hook(name, signals):
     return Hook
 
 
+def execution_hook(tmp_path):
+    """Returns a function that returns its argument and that, at its first call, signals `fire` to
+    `run_while_planning` and waits for `done`."""
+    directory = str(tmp_path / "signals")
+
+    @udf("int")
+    def hook(x):
+        import pathlib
+        import time
+
+        path = pathlib.Path(directory)
+        try:
+            (path / "armed").unlink()
+        except FileNotFoundError:
+            return x
+        (path / "fire").write_text("1")
+        deadline = time.time() + 60
+        while not (path / "done").exists() and time.time() < deadline:
+            time.sleep(0.02)
+        return x
+
+    return hook
+
+
 @pytest.fixture
 def run_while_planning(spark, tmp_path):
-    """Returns a function that runs a statement and runs an action in another thread while the statement
-    is planned, between its reads before and after a read of the table `hook`."""
+    """Returns a function that runs a statement, or calls a function that runs one, and runs an action in
+    another thread while the statement is planned, between its reads before and after a read of the table
+    `hook`, or while the statement runs, at the first call of the function of `execution_hook`."""
     from concurrent.futures import ThreadPoolExecutor
 
     signals = tmp_path / "signals"
@@ -2686,7 +2711,7 @@ def run_while_planning(spark, tmp_path):
         deadline = time.time() + 60
         while not (signals / "fire").exists():
             if time.time() > deadline:
-                pytest.fail("the statement did not plan the hook")
+                pytest.fail("the statement did not reach the hook")
             time.sleep(0.02)
         (signals / "fire").unlink()
         try:
@@ -2701,7 +2726,7 @@ def run_while_planning(spark, tmp_path):
         with ThreadPoolExecutor(max_workers=1) as executor:
             watched = executor.submit(watch, action)
             try:
-                return rows(spark, sql)
+                return sql() if callable(sql) else rows(spark, sql)
             finally:
                 watched.result(60)
 
@@ -2788,6 +2813,164 @@ def test_statement_that_persists_its_reads_reads_one_definition_of_a_view(
         observer.sql(f"DROP VIEW IF EXISTS global_temp.{name}")
         spark.sql(f"DROP VIEW IF EXISTS {name}")
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+APPENDED = "a concurrent transactions added new data"
+METADATA_CHANGED = "Metadata changed since last commit"
+CONCURRENT = "a concurrent transaction"
+
+# Overwrites of the Delta Lake table `t` (rows 1 and 2) while another session appends a row to `t`, with the
+# error of the overwrite and the rows of `t` after it. The other session appends while the overwrite is
+# planned, or while it runs for `running`. An overwrite that reads `t` writes on the version of `t` that it
+# read, so it does not remove the row that it did not read: as in Delta Lake, it reads all the rows of the
+# table, which an append conflicts with. An overwrite that does not read the current `t`, and starts after
+# the append, replaces all the rows of `t`.
+OVERWRITES_WHILE_APPENDED = [
+    ("sql", "SELECT x + 10 FROM t WHERE x < (SELECT count(*) + 100 FROM hook)", 100, APPENDED, [1, 2, 100]),
+    ("sql", "SELECT x + 10 FROM t UNION ALL SELECT h + 20 FROM hook", 100, APPENDED, [1, 2, 100]),
+    ("dataframe", "t", 100, APPENDED, [1, 2, 100]),
+    ("replace_where", "t", 100, APPENDED, [1, 2, 100]),
+    ("replace_where", "t", 5, APPENDED, [1, 2, 5]),
+    ("overwrite_schema", "t", 100, APPENDED, [1, 2, 100]),
+    ("running", "o", 100, APPENDED, [1, 2, 100]),
+    ("sql", "SELECT x + 10 FROM t VERSION AS OF 1 WHERE x < (SELECT count(*) + 100 FROM hook)", 100, None, [11, 12]),
+    ("sql", "SELECT x + 10 FROM o WHERE x < (SELECT count(*) + 100 FROM hook)", 100, None, [11, 12]),
+    ("dataframe", "o", 100, None, [11, 12]),
+]
+
+
+def create_delta_tables(spark, tmp_path):
+    for name in ["t", "o"]:
+        spark.sql(f"CREATE TABLE {name} (x INT) USING delta LOCATION '{tmp_path / name}'")
+        spark.sql(f"INSERT INTO {name} VALUES (1), (2)")
+
+
+def drop_delta_tables(spark):
+    spark.sql("DROP TABLE IF EXISTS t")
+    spark.sql("DROP TABLE IF EXISTS o")
+
+
+def overwrite_with(spark, tmp_path, source, column=None, *, planned=True, **options):
+    """Returns a function that overwrites the table `t` with the rows of the table `source` plus 10, by path,
+    reading the table `hook` if `planned`."""
+    column = column if column is not None else col("x")
+
+    def overwrite():
+        frame = spark.read.format("delta").load(str(tmp_path / source))
+        if planned:
+            frame = frame.crossJoin(spark.table("hook"))
+        writer = frame.select((column + 10).alias("x")).write.format("delta").mode("overwrite")
+        writer.options(**options).save(str(tmp_path / "t"))
+
+    return overwrite
+
+
+def run_expecting(run_while_planning, statement, action, error):
+    if error is None:
+        run_while_planning(statement, action)
+    else:
+        with pytest.raises(Exception, match=error):
+            run_while_planning(statement, action)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize(("writer", "query", "appended", "error", "expected"), OVERWRITES_WHILE_APPENDED)
+def test_delta_overwrite_keeps_a_row_that_another_session_appended(
+    spark, observer, tmp_path, run_while_planning, writer, query, appended, error, expected
+):
+    create_delta_tables(spark, tmp_path)
+    if writer == "sql":
+        statement = f"INSERT OVERWRITE t {query}"
+    elif writer == "replace_where":
+        statement = overwrite_with(spark, tmp_path, query, replaceWhere="x < 50")
+    elif writer == "overwrite_schema":
+        statement = overwrite_with(spark, tmp_path, query, column=col("x").cast("long"), overwriteSchema="true")
+    elif writer == "running":
+        statement = overwrite_with(spark, tmp_path, query, column=execution_hook(tmp_path)(col("x")), planned=False)
+    else:
+        statement = overwrite_with(spark, tmp_path, query)
+
+    def append():
+        frame = observer.createDataFrame([(appended,)], "x INT")
+        frame.write.format("delta").mode("append").save(str(tmp_path / "t"))
+
+    try:
+        run_expecting(run_while_planning, statement, append, error)
+        assert rows(spark, "SELECT * FROM t") == [(x,) for x in expected]
+    finally:
+        drop_delta_tables(spark)
+
+
+# Overwrites of the rows of partition 1 of the Delta Lake table `t` (partition 1 with the rows 1 and 2, and
+# partition 2 with the row 3) that read the partition, with a condition or dynamically, while another session
+# changes `t`, with the error of the overwrite and the rows of `t` after it. An overwrite that reads `t`
+# conflicts with a change of the rows that it read, which are all the rows for a condition on the data, and
+# the rows of the partitions that it writes for a dynamic overwrite.
+PARTITION_OVERWRITES = [
+    ({"replaceWhere": "x < 50"}, (2, 100), APPENDED, [(1, 1), (1, 2), (2, 3), (2, 100)]),
+    ({"replaceWhere": "p = 1"}, (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
+    ({"partitionOverwriteMode": "dynamic"}, (1, 100), APPENDED, [(1, 1), (1, 2), (1, 100), (2, 3)]),
+    ({"partitionOverwriteMode": "dynamic"}, (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
+    ({"partitionOverwriteMode": "dynamic"}, "DELETE FROM delta.`{t}` WHERE x = 2", CONCURRENT, [(1, 1), (2, 3)]),
+]
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize(("options", "change", "error", "expected"), PARTITION_OVERWRITES)
+def test_delta_partition_overwrite_keeps_the_rows_that_another_session_changed(
+    spark, observer, tmp_path, run_while_planning, options, change, error, expected
+):
+    path = str(tmp_path / "t")
+    spark.createDataFrame([(1, 1), (1, 2), (2, 3)], "p INT, x INT").write.format("delta").partitionBy("p").save(path)
+
+    def overwrite():
+        frame = spark.read.format("delta").load(path).where("p = 1").crossJoin(spark.table("hook"))
+        writer = frame.select("p", (col("x") + 10).alias("x")).write.format("delta").mode("overwrite")
+        writer.options(**options).save(path)
+
+    def act():
+        if isinstance(change, str):
+            observer.sql(change.format(t=path)).collect()
+        else:
+            observer.createDataFrame([change], "p INT, x INT").write.format("delta").mode("append").save(path)
+
+    run_expecting(run_while_planning, overwrite, act, error)
+    assert rows(spark, spark.read.format("delta").load(path).select("p", "x")) == expected
+
+
+# Changes of the Delta Lake table `t` (rows 1 and 2) by another session while an overwrite that reads `t` is
+# planned, with the error of the overwrite and the rows of `t` after the change.
+CHANGES_WHILE_OVERWRITTEN = [
+    ("UPDATE delta.`{t}` SET x = x + 1000 WHERE x = 2", APPENDED, [(1,), (1002,)]),
+    (
+        "MERGE INTO delta.`{t}` AS t USING (SELECT 1 AS x) AS s ON t.x = s.x WHEN MATCHED THEN UPDATE SET x = 1001",
+        APPENDED,
+        [(2,), (1001,)],
+    ),
+    ("ALTER TABLE delta.`{t}` SET TBLPROPERTIES ('k' = 'v')", METADATA_CHANGED, [(1,), (2,)]),
+    ("overwrite_schema", METADATA_CHANGED, [("a",)]),
+]
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize(("change", "error", "expected"), CHANGES_WHILE_OVERWRITTEN)
+def test_delta_overwrite_that_reads_its_table_fails_after_another_session_changed_it(
+    spark, observer, tmp_path, run_while_planning, change, error, expected
+):
+    create_delta_tables(spark, tmp_path)
+
+    def act():
+        if change == "overwrite_schema":
+            writer = observer.createDataFrame([("a",)], "x STRING").write.format("delta").mode("overwrite")
+            writer.option("overwriteSchema", "true").save(str(tmp_path / "t"))
+        else:
+            observer.sql(change.format(t=tmp_path / "t")).collect()
+
+    try:
+        run_expecting(run_while_planning, overwrite_with(spark, tmp_path, "t"), act, error)
+        assert rows(spark, spark.read.format("delta").load(str(tmp_path / "t"))) == expected
+    finally:
+        drop_delta_tables(spark)
 
 
 PATH_KINDS = [*KINDS, "using"]

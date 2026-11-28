@@ -31,6 +31,7 @@ use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
+use crate::datasource::actions::PartitionKeys;
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
@@ -847,10 +848,12 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
             };
 
+            // A dynamic partition overwrite removes the files of the partitions that it writes.
             let needs_full_snapshot = final_actions
                 .iter()
                 .any(|action| matches!(action, CommitAction::Remove(_)))
-                || operation.read_whole_table();
+                || operation.read_whole_table()
+                || matches!(sink_mode, PhysicalSinkMode::OverwritePartitions);
 
             let table = create_delta_table_with_object_store(
                 table_url.clone(),
@@ -918,43 +921,11 @@ impl ExecutionPlan for DeltaCommitExec {
             if matches!(sink_mode, PhysicalSinkMode::OverwritePartitions)
                 && let Some(snapshot) = &reference
             {
-                let partition_schema = final_actions
-                    .iter()
-                    .rev()
-                    .find_map(|action| match action {
-                        CommitAction::Metadata(metadata) => Some(metadata.parse_schema_arrow()),
-                        _ => None,
-                    })
-                    .transpose()
-                    .map_err(|error| DataFusionError::External(Box::new(error)))?
-                    .unwrap_or_else(|| snapshot.schema().clone());
-                let partition_fields = snapshot
-                    .physical_partition_columns()
-                    .into_iter()
-                    .map(|column| {
-                        let field = partition_schema.field_with_name(&column.logical_name)?;
-                        Ok((column.physical_name, field.data_type().clone()))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let keys = PartitionKeys::try_new(snapshot, &final_actions)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
                 let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
-                    partition_fields
-                        .iter()
-                        .map(|(name, data_type)| {
-                            crate::conversion::parse_optional_partition_value(
-                                add.partition_values
-                                    .get(name)
-                                    .and_then(|value| value.as_deref()),
-                                data_type,
-                            )
-                            // ScalarValue compares float bits, while Spark equates signed zeros.
-                            .map(|value| match value {
-                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
-                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
-                                value => value,
-                            })
-                            .map_err(|error| DataFusionError::External(Box::new(error)))
-                        })
-                        .collect()
+                    keys.key(add)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))
                 };
                 let partitions = final_actions
                     .iter()

@@ -311,6 +311,7 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            snapshot_pins: Some(state.lake_snapshot_pins()),
         };
         let mut preconditions = vec![];
         let mut skip_preconditions_on_empty_exec = false;

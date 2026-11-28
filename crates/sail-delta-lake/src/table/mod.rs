@@ -811,6 +811,28 @@ where
     }
 }
 
+/// Loads the version of the table that the statement read earlier. A table that was created
+/// again at the location has another ID, and the statement would read two tables.
+pub(crate) async fn load_pinned_version(
+    table: &mut DeltaTable,
+    pinned: &DeltaSnapshot,
+    table_url: &Url,
+) -> Result<()> {
+    let id = pinned.metadata().id();
+    let version = pinned.version();
+    let loaded = table.load_version(version).await;
+    if loaded.is_err() || table.snapshot()?.metadata().id() != id {
+        let cause = loaded.err().map(|e| format!(" ({e})")).unwrap_or_default();
+        return Err(DataFusionError::Plan(format!(
+            "The Delta Lake table at {table_url} was replaced by another table, \
+            or no longer has the version {version} that the statement read \
+            earlier, while the statement was planned{cause}. Run the statement \
+            again."
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) async fn load_delta_read_state(
     ctx: &dyn Session,
     table_url: Url,
@@ -867,22 +889,9 @@ pub(crate) async fn load_delta_read_state(
             }
             let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
             match pinned {
+                // The read loads the files of the version that the statement read.
                 Some(pinned) => {
-                    // The read loads the files of the version of the same table that the
-                    // statement read. A table that was created again at the location has
-                    // another ID, and the statement would read two tables.
-                    let id = pinned.metadata().id();
-                    let version = pinned.version();
-                    let loaded = deltalake_table.load_version(version).await;
-                    if loaded.is_err() || deltalake_table.snapshot()?.metadata().id() != id {
-                        let cause = loaded.err().map(|e| format!(" ({e})")).unwrap_or_default();
-                        return Err(DataFusionError::Plan(format!(
-                            "The Delta Lake table at {table_url} was replaced by another table, \
-                            or no longer has the version {version} that the statement read \
-                            earlier, while the statement was planned{cause}. Run the statement \
-                            again."
-                        )));
-                    }
+                    load_pinned_version(&mut deltalake_table, &pinned, &table_url).await?
                 }
                 // Load the table state according to the provided time travel options.
                 None => load_table_by_options(&mut deltalake_table, &options).await?,
