@@ -1990,3 +1990,44 @@ def test_parquet_reads_legacy_map_child_names(spark, tmp_path, merge_schema):
     df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
     assert df.schema.simpleString() == "struct<id:bigint,m:map<string,bigint>>"
     assert df.orderBy("id").collect() == [(0, {"x": 0}), (1, {"x": 1})]
+
+
+@pytest.mark.parametrize("timestamp_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_table_reads_not_null_struct_of_timestamps(spark, tmp_path, timestamp_type):
+    # The file stores the struct column as a column that allows nulls, and the timestamp
+    # field of the struct needs a cast when the file is read.
+    path = tmp_path / "table"
+    struct = f"named_struct('y', {timestamp_type} '2020-01-01 00:00:00' + make_interval(0, 0, 0, k), 'z', k)"
+    spark.sql(f"SELECT k, IF(k >= 0, {struct}, NULL) AS c FROM VALUES (0), (1) AS v(k)").write.parquet(str(path))  # noqa: S608
+    table_name = "parquet_not_null_struct_of_timestamps"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} (k INT, c STRUCT<y: {timestamp_type}, z: INT> NOT NULL) "
+            f"USING parquet LOCATION '{escape_sql_string_literal(str(path))}'"
+        )
+        expected = spark.sql(
+            f"SELECT {timestamp_type} '2020-01-01 00:00:00' AS y0, {timestamp_type} '2020-01-02 00:00:00' AS y1"
+        ).first()
+        rows = spark.sql(f"SELECT k, c FROM {table_name} ORDER BY k").collect()  # noqa: S608
+        assert rows == [Row(k=0, c=Row(y=expected.y0, z=0)), Row(k=1, c=Row(y=expected.y1, z=1))]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize("query", ["SELECT c FROM {t}", "SELECT c.s FROM {t}"])
+def test_parquet_table_rejects_nullable_struct_field_as_not_null(spark, tmp_path, query):
+    # The file stores the struct field `s` as a field that allows nulls, and the timestamp
+    # field inside `s` needs a cast when the file is read.
+    path = tmp_path / "table"
+    struct = "named_struct('s', IF(k >= 0, named_struct('y', TIMESTAMP '2020-01-01 00:00:00'), NULL))"
+    spark.sql(f"SELECT k, {struct} AS c FROM VALUES (0), (1) AS v(k)").write.parquet(str(path))  # noqa: S608
+    table_name = "parquet_nullable_struct_field_as_not_null"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} (k INT, c STRUCT<s: STRUCT<y: TIMESTAMP> NOT NULL> NOT NULL) "
+            f"USING parquet LOCATION '{escape_sql_string_literal(str(path))}'"
+        )
+        with pytest.raises(Exception, match="Cannot cast"):
+            spark.sql(query.format(t=table_name)).collect()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
