@@ -181,42 +181,49 @@ def test_delta_timestamp_partition_values_without_offset_are_in_session_time_zon
         spark.sql("DROP TABLE IF EXISTS without_offsets").collect()
 
 
-@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
-def test_delta_timestamp_partition_value_without_offset_in_a_repeated_hour(spark, tmp_path, session_timezone):
-    _ = session_timezone
-    path = tmp_path / "table"
-    # 01:30 occurs twice in Los Angeles on 2024-11-03. Like Spark, the literal is the first (PDT).
-    spark.sql("SELECT 1 AS id, TIMESTAMP '2024-11-03 01:30:00' AS ts").write.format("delta").partitionBy("ts").save(
-        str(path)
-    )
+def remove_offset(path, value, legacy):
+    """Rewrites the partition value `value` in the log without an offset, as older writers wrote it."""
     for log in (path / "_delta_log").glob("*.json"):
-        log.write_text(log.read_text().replace('"2024-11-03T08:30:00.000000Z"', '"2024-11-03 01:30:00.000000"'))
-    assert partition_values((path / "_delta_log").glob("*.json")) == {"2024-11-03 01:30:00.000000"}
-    frame = spark.read.format("delta").load(str(path))
-    # Like Delta Lake on Spark, the value without an offset is the same instant as the literal.
-    assert [row.micros for row in frame.selectExpr("unix_micros(ts) AS micros").collect()] == [1730622600000000]
-    assert [row.id for row in frame.where("ts = TIMESTAMP '2024-11-03 01:30:00'").collect()] == [1]
-    spark.sql(f"DELETE FROM delta.`{path}` WHERE ts = TIMESTAMP '2024-11-03 01:30:00'").collect()  # noqa: S608
-    assert spark.read.format("delta").load(str(path)).count() == 0
+        log.write_text(log.read_text().replace(f'"{value}"', f'"{legacy}"'))
+    assert partition_values((path / "_delta_log").glob("*.json")) == {legacy}
 
 
-@pytest.mark.parametrize("session_timezone", ["+05:30:15"], indirect=True)
-def test_delta_timestamp_partition_value_without_offset_in_an_offset_with_seconds(spark, tmp_path, session_timezone):
+@pytest.mark.parametrize(
+    ("session_timezone", "value", "written", "legacy", "micros"),
+    [
+        # 01:30 occurs twice in Los Angeles on 2024-11-03. Like Spark, the literal is the first (PDT).
+        (
+            "America/Los_Angeles",
+            "TIMESTAMP '2024-11-03 01:30:00'",
+            "2024-11-03T08:30:00.000000Z",
+            "2024-11-03 01:30:00.000000",
+            1730622600000000,
+        ),
+        # TODO: Use a TIMESTAMP literal, which Sail does not resolve yet in an offset with seconds.
+        (
+            "+05:30:15",
+            "CAST('2024-01-01 09:00:00' AS TIMESTAMP)",
+            "2024-01-01T03:29:45.000000Z",
+            "2024-01-01 09:00:00.000000",
+            1704079785000000,
+        ),
+    ],
+    indirect=["session_timezone"],
+    ids=["repeated-hour", "offset-with-seconds"],
+)
+def test_delta_timestamp_partition_value_without_offset(
+    spark, tmp_path, session_timezone, value, written, legacy, micros
+):
     _ = session_timezone
     path = tmp_path / "table"
-    # TODO: Use a TIMESTAMP literal, which Sail does not resolve yet in an offset with seconds.
-    value = "CAST('2024-01-01 09:00:00' AS TIMESTAMP)"
     spark.sql(f"SELECT 1 AS id, {value} AS ts").write.format("delta").partitionBy("ts").save(str(path))
-    for log in (path / "_delta_log").glob("*.json"):
-        log.write_text(log.read_text().replace('"2024-01-01T03:29:45.000000Z"', '"2024-01-01 09:00:00.000000"'))
-    assert partition_values((path / "_delta_log").glob("*.json")) == {"2024-01-01 09:00:00.000000"}
+    remove_offset(path, written, legacy)
     # Like Delta Lake on Spark, the value without an offset is read as the cast of the string in the
-    # session time zone, including the seconds of the offset.
-    (cast,) = spark.sql(f"SELECT unix_micros({value}) AS micros").collect()
-    assert cast.micros == 1704079785000000
+    # session time zone.
+    assert spark.sql(f"SELECT unix_micros({value}) AS micros").collect()[0].micros == micros
     for metadata_as_data in ["false", "true"]:
         frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
-        assert [row.micros for row in frame.selectExpr("unix_micros(ts) AS micros").collect()] == [cast.micros]
+        assert [row.micros for row in frame.selectExpr("unix_micros(ts) AS micros").collect()] == [micros]
         assert [row.id for row in frame.where(f"ts = {value}").collect()] == [1]
     spark.sql(f"DELETE FROM delta.`{path}` WHERE ts = {value}").collect()  # noqa: S608
     assert spark.read.format("delta").load(str(path)).count() == 0
@@ -230,8 +237,7 @@ def test_delta_checkpoint_parses_timestamp_partition_values_in_session_time_zone
         "delta.checkpointInterval", "2"
     ).save(str(path))
     # Older writers wrote the value without an offset.
-    for log in (path / "_delta_log").glob("*.json"):
-        log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', '"2024-01-01 09:00:00.000000"'))
+    remove_offset(path, "2024-01-01T09:00:00.000000Z", "2024-01-01 09:00:00.000000")
     for id_ in [2, 3]:
         spark.sql(f"SELECT {id_} AS id, TIMESTAMP '2024-01-01 0{id_}:00:00' AS ts").write.format("delta").mode(
             "append"
