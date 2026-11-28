@@ -182,6 +182,7 @@ use sail_function::scalar::collection::element::CollectionElement;
 use sail_function::scalar::collection::reverse::Reverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
+use sail_function::scalar::conversion::float_to_decimal::FloatToDecimal;
 use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
 use sail_function::scalar::correlation_cast::CorrelationCast;
 use sail_function::scalar::csv::SchemaOfCsv;
@@ -4084,6 +4085,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 return Ok(Arc::new(udf));
             }
+            UdfKind::SparkFloatToDecimal(r#gen::SparkFloatToDecimalUdf {
+                precision,
+                scale,
+                null_on_overflow,
+            }) => {
+                let precision = u8::try_from(precision)
+                    .map_err(|_| plan_datafusion_err!("invalid decimal precision: {precision}"))?;
+                let scale = i8::try_from(scale)
+                    .map_err(|_| plan_datafusion_err!("invalid decimal scale: {scale}"))?;
+                let udf = FloatToDecimal::new(precision, scale, null_on_overflow);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
                 let udf = DateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -4756,6 +4769,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkSequence(r#gen::SparkSequenceUdf {
                 session_timezone,
                 ansi_mode,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<FloatToDecimal>() {
+            UdfKind::SparkFloatToDecimal(r#gen::SparkFloatToDecimalUdf {
+                precision: u32::from(func.precision()),
+                scale: i32::from(func.scale()),
+                null_on_overflow: func.null_on_overflow(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<DateFormat>() {
             let session_timezone = func.session_timezone().to_string();
@@ -11123,6 +11142,18 @@ mod tests {
                 .downcast_ref::<DayTimeIntervalToCalendarInterval>()
                 .is_some()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_float_to_decimal_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(FloatToDecimal::new(38, -2, true)))?;
+
+        let decoded = downcast_udf::<FloatToDecimal>(&decoded, "FloatToDecimal")?;
+        assert_eq!(decoded.precision(), 38);
+        assert_eq!(decoded.scale(), -2);
+        assert!(decoded.null_on_overflow());
+
         Ok(())
     }
 

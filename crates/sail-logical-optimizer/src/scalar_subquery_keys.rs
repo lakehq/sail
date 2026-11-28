@@ -9,7 +9,7 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet, TryCast};
+use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet, ScalarFunction, TryCast};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
 use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
 use datafusion_expr::utils::{
@@ -21,7 +21,10 @@ use datafusion_expr::{
 };
 use projection::project_with_keys;
 use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
+use sail_function::scalar::conversion::float_to_decimal::FloatToDecimal;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
+
+use crate::float_decimal_keys::restore_cast_keys;
 
 mod projection;
 
@@ -64,8 +67,9 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
                     if query.outer_ref_columns.is_empty() {
                         return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                     }
-                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved).map(
-                        |result| {
+                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved)?
+                        .transform_data(|plan| restore_cast_keys(&plan))
+                        .map(|result| {
                             if result.transformed {
                                 query.subquery = Arc::new(result.data);
                             }
@@ -73,8 +77,7 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
                                 Expr::ScalarSubquery(query),
                                 result.transformed,
                             )
-                        },
-                    )
+                        })
                 })
                 .map(|result| result.update_data(|expression| name.restore(expression)))
         })
@@ -92,6 +95,9 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
         matches!(expression, Expr::Column(_))
             || matches!(expression, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
             || matches!(expression, Expr::TryCast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
+            || matches!(expression, Expr::ScalarFunction(function)
+                if function.func.inner().is::<FloatToDecimal>()
+                    && matches!(function.args.as_slice(), [Expr::Column(_)]))
     };
     let (left, right) = (
         strip_identity_cast(&binary.left),
@@ -501,12 +507,14 @@ fn lift_keys(
 enum KeyCast {
     Cast(FieldRef),
     TryCast(FieldRef),
+    /// A FLOAT or DOUBLE to DECIMAL cast that Sail plans as a function rounding like Spark.
+    FloatToDecimal(FieldRef, Arc<ScalarUDF>),
 }
 
 impl KeyCast {
     fn field(&self) -> &FieldRef {
         match self {
-            Self::Cast(field) | Self::TryCast(field) => field,
+            Self::Cast(field) | Self::TryCast(field) | Self::FloatToDecimal(field, _) => field,
         }
     }
 
@@ -515,6 +523,9 @@ impl KeyCast {
             Self::Cast(field) => Expr::Cast(Cast::new_from_field(Box::new(expression), field)),
             Self::TryCast(field) => {
                 Expr::TryCast(TryCast::new_from_field(Box::new(expression), field))
+            }
+            Self::FloatToDecimal(_, function) => {
+                Expr::ScalarFunction(ScalarFunction::new_udf(function, vec![expression]))
             }
         }
     }
@@ -548,6 +559,25 @@ fn lifted_key<'a>(
                 column,
                 outer,
             ))
+        }
+        Expr::ScalarFunction(function) => {
+            let decimal = function.func.inner().downcast_ref::<FloatToDecimal>()?;
+            let [Expr::Column(column)] = function.args.as_slice() else {
+                return None;
+            };
+            let field = Arc::new(Field::new(
+                "",
+                DataType::Decimal128(decimal.precision(), decimal.scale()),
+                true,
+            ));
+            // The null-on-overflow form is a key like TRY_CAST, the strict form like CAST.
+            (decimal.null_on_overflow() || !pinned.contains(&column.name)).then(|| {
+                (
+                    Some(KeyCast::FloatToDecimal(field, Arc::clone(&function.func))),
+                    column,
+                    outer,
+                )
+            })
         }
         _ => None,
     }

@@ -328,6 +328,7 @@ message ExtendedScalarUdf {
     SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
     SparkToJsonUdf spark_to_json = 44;
     SparkToJsonUdf variant_to_json = 45;
+    SparkFloatToDecimalUdf spark_float_to_decimal = 46;
   }
 }
 
@@ -436,6 +437,12 @@ message SparkSequenceUdf {
 
 message SparkToStringUdf {
   optional string timezone = 1;
+}
+
+message SparkFloatToDecimalUdf {
+  uint32 precision = 1;
+  int32 scale = 2;
+  bool null_on_overflow = 3;
 }
 
 message SparkDateFormatUdf {
