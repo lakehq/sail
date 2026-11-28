@@ -328,6 +328,8 @@ pub struct SinkInfo {
     /// The table snapshots that the reads of the statement read, so that a write that reads
     /// its own table writes on the snapshot that it read.
     pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
+    /// The fully qualified name of the target table when the write targets a catalog table.
+    pub target_table: Option<Vec<String>>,
 }
 
 impl SinkInfo {

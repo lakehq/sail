@@ -154,6 +154,7 @@ impl DataSource for DeltaLakeSource {
             options,
             lakehouse_table,
             snapshot_pins,
+            target_table: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");

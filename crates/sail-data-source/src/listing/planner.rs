@@ -250,6 +250,7 @@ async fn plan_file_write(
         overwrite,
         partition_by,
         sort_by,
+        target_table,
     } = node.options();
     let table_path = ListingTableUrl::try_new(url.clone(), None)?;
     let object_store_url = table_path.object_store();
@@ -338,9 +339,17 @@ async fn plan_file_write(
         Arc::new(HivePartitionWriteExec::new(plan))
     };
     let plan: Arc<dyn ExecutionPlan> = if *overwrite {
+        let table = target_table.as_ref().map(|table| {
+            table
+                .iter()
+                .map(|part| format!("`{}`", part.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join(".")
+        });
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
+            table,
         ));
         Arc::new(BarrierExec::new(vec![delete], plan))
     } else {

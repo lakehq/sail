@@ -20,11 +20,13 @@ use object_store::path::Path;
 pub struct FileDeleteExec {
     object_store_url: ObjectStoreUrl,
     path: Path,
+    /// The quoted name of the catalog table stored at the path, if any.
+    table: Option<String>,
     properties: Arc<PlanProperties>,
 }
 
 impl FileDeleteExec {
-    pub fn new(object_store_url: ObjectStoreUrl, path: Path) -> Self {
+    pub fn new(object_store_url: ObjectStoreUrl, path: Path, table: Option<String>) -> Self {
         let schema = Arc::new(Schema::empty());
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -35,6 +37,7 @@ impl FileDeleteExec {
         Self {
             object_store_url,
             path,
+            table,
             properties,
         }
     }
@@ -45,6 +48,10 @@ impl FileDeleteExec {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn table(&self) -> Option<&str> {
+        self.table.as_deref()
     }
 }
 
