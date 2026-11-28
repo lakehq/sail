@@ -323,7 +323,10 @@ pub(super) async fn finish(
         ] {
             metrics.insert(key.to_string(), json!(value));
         }
-        CommitBuilder::from(CommitProperties::default().with_operation_metrics(metrics))
+        let properties = CommitProperties::default()
+            .with_operation_metrics(metrics)
+            .with_partition_time_zone(snapshot.partition_time_zone().into());
+        CommitBuilder::from(properties)
             .with_actions(actions)
             .build(Some(snapshot.clone()), log_store, operation)
             .await?;

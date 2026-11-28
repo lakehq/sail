@@ -214,6 +214,7 @@ impl ReconciledCheckpointState {
     fn into_checkpoint_batch_iter(
         self,
         batch_size: usize,
+        partition_time_zone: &str,
     ) -> DeltaResult<(CheckpointBatchIter, i64)> {
         let protocol = self.protocol.ok_or_else(|| {
             DeltaTableError::generic("Cannot create checkpoint without protocol action")
@@ -229,7 +230,7 @@ impl ReconciledCheckpointState {
 
         let add_count = i64::try_from(self.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
-        let augment = AddAugmentationConfig::from_metadata(&metadata)?;
+        let augment = AddAugmentationConfig::from_metadata(&metadata, partition_time_zone)?;
 
         Ok((
             CheckpointBatchIter {
@@ -593,13 +594,15 @@ fn ensure_schema_supported_for_parquet(batch: &RecordBatch) -> DeltaResult<()> {
 struct CheckpointManager<'a> {
     log_store: &'a dyn LogStore,
     operation_id: Uuid,
+    partition_time_zone: &'a str,
 }
 
 impl<'a> CheckpointManager<'a> {
-    fn new(log_store: &'a dyn LogStore, operation_id: Uuid) -> Self {
+    fn new(log_store: &'a dyn LogStore, operation_id: Uuid, partition_time_zone: &'a str) -> Self {
         Self {
             log_store,
             operation_id,
+            partition_time_zone,
         }
     }
 
@@ -671,7 +674,8 @@ impl<'a> CheckpointManager<'a> {
         store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<()> {
         let (file_meta, checkpoint_row_count, checkpoint_add_count) =
-            write_classic_checkpoint_file(version, state, store.clone()).await?;
+            write_classic_checkpoint_file(version, state, store.clone(), self.partition_time_zone)
+                .await?;
         let last_checkpoint_path = last_checkpoint_path();
         let hint = LastCheckpointHint {
             version,
@@ -704,7 +708,8 @@ impl<'a> CheckpointManager<'a> {
         let metadata = state.metadata.ok_or_else(|| {
             DeltaTableError::generic("Cannot create checkpoint without metadata action")
         })?;
-        let sidecar_augment = AddAugmentationConfig::from_metadata(&metadata)?;
+        let sidecar_augment =
+            AddAugmentationConfig::from_metadata(&metadata, self.partition_time_zone)?;
 
         // Step 1: Write add/remove actions into a sidecar file using batched writes.
         const SIDECAR_WRITE_BATCH_SIZE: usize = 16_384;
@@ -847,10 +852,11 @@ pub(crate) async fn write_classic_checkpoint_file(
     version: i64,
     state: ReconciledCheckpointState,
     store: Arc<dyn ObjectStore>,
+    partition_time_zone: &str,
 ) -> DeltaResult<(ObjectMeta, i64, i64)> {
     const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
     let (checkpoint_batches, checkpoint_add_count) =
-        state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
+        state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE, partition_time_zone)?;
     let cp_path = checkpoint_path(version);
     let Some((file_meta, checkpoint_row_count)) =
         write_checkpoint_batches(store, cp_path, checkpoint_batches).await?
@@ -864,13 +870,14 @@ pub(crate) async fn write_classic_checkpoint_from_v2_checkpoint(
     store: Arc<dyn ObjectStore>,
     version: i64,
     checkpoint_meta: ObjectMeta,
+    partition_time_zone: &str,
 ) -> DeltaResult<()> {
     let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), checkpoint_meta).await?;
     let mut state = ReconciledCheckpointState::default();
     for row in rows {
         state.apply_checkpoint_row(row)?;
     }
-    let _ = write_classic_checkpoint_file(version, state, store).await?;
+    let _ = write_classic_checkpoint_file(version, state, store, partition_time_zone).await?;
     Ok(())
 }
 
@@ -1430,13 +1437,15 @@ fn build_replay_sequence<'a>(
     sequence
 }
 
-/// Creates a checkpoint for the given table version.
+/// Creates a checkpoint for the given table version. TIMESTAMP partition values without an offset
+/// are parsed in `partition_time_zone`, the time zone of the session that writes the checkpoint.
 pub(crate) async fn create_checkpoint_for(
     version: i64,
     log_store: &dyn LogStore,
     operation_id: Uuid,
+    partition_time_zone: &str,
 ) -> DeltaResult<()> {
-    CheckpointManager::new(log_store, operation_id)
+    CheckpointManager::new(log_store, operation_id, partition_time_zone)
         .create_checkpoint(version)
         .await
 }
@@ -1634,7 +1643,7 @@ mod tests {
         configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
     ) -> DeltaResult<RecordBatch> {
         let metadata = test_metadata(configuration)?;
-        let augment = AddAugmentationConfig::from_metadata(&metadata)?;
+        let augment = AddAugmentationConfig::from_metadata(&metadata, "UTC")?;
         encode_checkpoint_rows(rows, &augment)
     }
 
@@ -2318,7 +2327,7 @@ mod tests {
             )
             .await?;
 
-            CheckpointManager::new(log_store.as_ref(), Uuid::nil())
+            CheckpointManager::new(log_store.as_ref(), Uuid::nil(), "UTC")
                 .create_checkpoint(0)
                 .await?;
 
@@ -2862,7 +2871,7 @@ mod tests {
             default_row_commit_version: None,
         }));
 
-        CheckpointManager::new(log_store.as_ref(), Uuid::nil())
+        CheckpointManager::new(log_store.as_ref(), Uuid::nil(), "UTC")
             .write_v2_checkpoint(5, state, store.clone())
             .await?;
 

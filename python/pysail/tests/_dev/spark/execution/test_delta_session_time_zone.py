@@ -5,6 +5,7 @@ import re
 import shutil
 from datetime import UTC, datetime
 
+import pyarrow.parquet as pq
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
@@ -219,3 +220,36 @@ def test_delta_timestamp_partition_value_without_offset_in_an_offset_with_second
         assert [row.id for row in frame.where(f"ts = {value}").collect()] == [1]
     spark.sql(f"DELETE FROM delta.`{path}` WHERE ts = {value}").collect()  # noqa: S608
     assert spark.read.format("delta").load(str(path)).count() == 0
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_delta_checkpoint_parses_timestamp_partition_values_in_session_time_zone(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "table"
+    spark.sql("SELECT 1 AS id, TIMESTAMP '2024-01-01 01:00:00' AS ts").write.format("delta").partitionBy("ts").option(
+        "delta.checkpointInterval", "2"
+    ).save(str(path))
+    # Older writers wrote the value without an offset.
+    for log in (path / "_delta_log").glob("*.json"):
+        log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', '"2024-01-01 09:00:00.000000"'))
+    for id_ in [2, 3]:
+        spark.sql(f"SELECT {id_} AS id, TIMESTAMP '2024-01-01 0{id_}:00:00' AS ts").write.format("delta").mode(
+            "append"
+        ).save(str(path))
+    frame = spark.read.format("delta").load(str(path)).selectExpr("id", "unix_micros(ts) AS micros")
+    read = {row.id: row.micros for row in frame.collect()}
+    assert read == {1: utc_micros(17), 2: utc_micros(10), 3: utc_micros(11)}
+    # The commit of version 2 writes a checkpoint. Like Delta Lake on Spark, it parses the values in the
+    # session time zone, so its typed copy holds the instants that the session reads.
+    rows = pq.read_table(path / "_delta_log" / f"{2:020}.checkpoint.parquet").to_pylist()
+    parsed = {
+        dict(row["add"]["partitionValues"])["ts"]: int(row["add"]["partitionValues_parsed"]["ts"].timestamp())
+        * 1_000_000
+        for row in rows
+        if row["add"]
+    }
+    assert parsed == {
+        "2024-01-01 09:00:00.000000": read[1],
+        "2024-01-01T10:00:00.000000Z": read[2],
+        "2024-01-01T11:00:00.000000Z": read[3],
+    }

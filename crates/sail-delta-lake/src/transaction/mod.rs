@@ -28,7 +28,7 @@ use crate::delta_log::{
     resolve_version_timestamp,
 };
 use crate::options::session_user_metadata;
-use crate::snapshot::DeltaSnapshotConfig;
+use crate::snapshot::{DeltaSnapshotConfig, partition_time_zone};
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
     Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
@@ -1024,12 +1024,14 @@ pub trait CustomExecuteHandler: Send + Sync {
     ) -> DeltaResult<()>;
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 /// Properties for post commit hook.
 pub struct PostCommitHookProperties {
     create_checkpoint: bool,
     /// Override the EnableExpiredLogCleanUp setting, if None config setting is used
     cleanup_expired_logs: Option<bool>,
+    /// The time zone in which checkpoints parse TIMESTAMP partition values without an offset
+    partition_time_zone: Arc<str>,
 }
 
 #[derive(Clone, Debug)]
@@ -1043,6 +1045,7 @@ pub struct CommitProperties {
     max_retries: usize,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
+    partition_time_zone: Arc<str>,
 }
 
 impl Default for CommitProperties {
@@ -1055,6 +1058,7 @@ impl Default for CommitProperties {
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
+            partition_time_zone: "UTC".into(),
         }
     }
 }
@@ -1062,7 +1066,9 @@ impl Default for CommitProperties {
 impl CommitProperties {
     /// Captures current session metadata for this commit and its retries.
     pub(crate) fn from_session_config(config: &SessionConfig) -> datafusion_common::Result<Self> {
-        Ok(Self::default().with_user_metadata(session_user_metadata(config)?))
+        Ok(Self::default()
+            .with_user_metadata(session_user_metadata(config)?)
+            .with_partition_time_zone(partition_time_zone(config.options())))
     }
 
     /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
@@ -1078,6 +1084,14 @@ impl CommitProperties {
     /// Set the user-defined commit metadata string written to `commitInfo.userMetadata`.
     pub(crate) fn with_user_metadata(mut self, user_metadata: Option<String>) -> Self {
         self.user_metadata = user_metadata;
+        self
+    }
+
+    /// Set the time zone of the committing session (see [`partition_time_zone`]), in which a
+    /// checkpoint written after this commit parses TIMESTAMP partition values without an offset,
+    /// as Delta-Spark does. The default is UTC.
+    pub(crate) fn with_partition_time_zone(mut self, partition_time_zone: Arc<str>) -> Self {
+        self.partition_time_zone = partition_time_zone;
         self
     }
 }
@@ -1132,6 +1146,7 @@ impl From<CommitProperties> for CommitBuilder {
             post_commit_hook: Some(PostCommitHookProperties {
                 create_checkpoint: value.create_checkpoint,
                 cleanup_expired_logs: value.cleanup_expired_logs,
+                partition_time_zone: value.partition_time_zone,
             }),
             app_transaction: value.app_transaction,
             user_metadata: value.user_metadata,
@@ -1535,12 +1550,18 @@ impl std::future::IntoFuture for PreparedCommit {
                             },
                             create_checkpoint: this
                                 .post_commit
+                                .as_ref()
                                 .map(|v| v.create_checkpoint)
                                 .unwrap_or_default(),
                             cleanup_expired_logs: this
                                 .post_commit
+                                .as_ref()
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
+                            partition_time_zone: this
+                                .post_commit
+                                .as_ref()
+                                .map_or_else(|| "UTC".into(), |v| v.partition_time_zone.clone()),
                             log_store: this.log_store,
                             table_data: read_snapshot,
                             custom_execute_handler: this.post_commit_hook_handler,
@@ -1683,6 +1704,7 @@ pub struct PostCommit {
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
+    partition_time_zone: Arc<str>,
     log_store: LogStoreRef,
     table_data: Option<Arc<DeltaSnapshot>>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -2220,6 +2242,7 @@ impl std::future::IntoFuture for PostCommit {
                     this.version,
                     this.log_store.as_ref(),
                     post_commit_operation_id,
+                    &this.partition_time_zone,
                 )
                 .await
                 {
@@ -2250,6 +2273,7 @@ impl std::future::IntoFuture for PostCommit {
                     this.log_store.as_ref(),
                     cutoff_timestamp,
                     Some(post_commit_operation_id),
+                    &this.partition_time_zone,
                 )
                 .await
                 {
@@ -4125,5 +4149,148 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_parses_timestamp_partition_values_in_the_session_time_zone() {
+        use datafusion::arrow::array::{Array, AsArray, RecordBatch};
+        use datafusion::arrow::datatypes::{
+            DataType as ArrowDataType, TimeUnit, TimestampMicrosecondType,
+        };
+        use datafusion::common::ScalarValue;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
+
+        use crate::conversion::PartitionValueParser;
+        use crate::spec::checkpoint_path;
+
+        // Older writers wrote values without an offset. 01:30 occurs twice in Los Angeles on
+        // 2024-11-03, and Delta-Spark reads it as the earlier instant (PDT).
+        for (session_time_zone, legacy, repeated) in [
+            (
+                "America/Los_Angeles",
+                1_704_128_400_000_000,
+                1_730_622_600_000_000,
+            ),
+            ("+05:30:15", 1_704_079_785_000_000, 1_730_577_585_000_000),
+        ] {
+            let mut config = SessionConfig::new();
+            set_spark_session_time_zone(config.options_mut(), session_time_zone).unwrap();
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let log_store = test_log_store(store.clone());
+            let protocol = Protocol::new(1, 2, None, None);
+            let metadata = Metadata::try_new(
+                None,
+                None,
+                StructType::try_new([
+                    StructField::nullable("id", DataType::LONG),
+                    StructField::nullable("ts", DataType::TIMESTAMP),
+                ])
+                .unwrap(),
+                vec!["ts".to_string()],
+                0,
+                HashMap::from([("delta.checkpointInterval".to_string(), "1".to_string())]),
+            )
+            .unwrap();
+            let add = |path: &str, ts: &str| {
+                CommitAction::Add(Add {
+                    path: path.to_string(),
+                    partition_values: HashMap::from([("ts".to_string(), Some(ts.to_string()))]),
+                    size: 5,
+                    data_change: true,
+                    ..Default::default()
+                })
+            };
+            let created = CommitBuilder::from(CommitProperties::default())
+                .with_actions(vec![
+                    CommitAction::Protocol(protocol.clone()),
+                    CommitAction::Metadata(metadata.clone()),
+                    add("legacy.parquet", "2024-01-01 09:00:00.000000"),
+                    add("repeated.parquet", "2024-11-03 01:30:00.000000"),
+                ])
+                .build(
+                    None,
+                    log_store.clone(),
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: "memory:///".to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
+                    },
+                )
+                .await
+                .unwrap();
+            let appended =
+                CommitBuilder::from(CommitProperties::from_session_config(&config).unwrap())
+                    .with_actions(vec![add("offset.parquet", "2024-01-01T09:00:00.000000Z")])
+                    .build(
+                        created.snapshot,
+                        log_store.clone(),
+                        DeltaOperation::Write {
+                            mode: SaveMode::Append,
+                            partition_by: None,
+                            predicate: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            assert!(appended.metrics.new_checkpoint_created);
+
+            let checkpoint = store
+                .get(&checkpoint_path(1))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let batches = ParquetRecordBatchReaderBuilder::try_new(checkpoint)
+                .unwrap()
+                .build()
+                .unwrap()
+                .collect::<Result<Vec<RecordBatch>, _>>()
+                .unwrap();
+            let mut parsed = HashMap::new();
+            for batch in &batches {
+                let adds = batch.column_by_name("add").unwrap().as_struct();
+                let paths = adds.column_by_name("path").unwrap().as_string::<i32>();
+                let values = adds
+                    .column_by_name("partitionValues_parsed")
+                    .unwrap()
+                    .as_struct()
+                    .column_by_name("ts")
+                    .unwrap()
+                    .as_primitive::<TimestampMicrosecondType>();
+                for row in (0..adds.len()).filter(|row| adds.is_valid(*row)) {
+                    parsed.insert(paths.value(row).to_string(), values.value(row));
+                }
+            }
+            // The legacy values are wall clocks in the session time zone. The value with an
+            // offset is that instant.
+            assert_eq!(
+                parsed,
+                HashMap::from([
+                    ("legacy.parquet".to_string(), legacy),
+                    ("repeated.parquet".to_string(), repeated),
+                    ("offset.parquet".to_string(), 1_704_099_600_000_000),
+                ]),
+                "{session_time_zone}"
+            );
+            // These are the instants that Sail reads in that session.
+            let parser = PartitionValueParser::try_new(
+                &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                &partition_time_zone(config.options()),
+            )
+            .unwrap();
+            for (path, value) in [
+                ("legacy.parquet", "2024-01-01 09:00:00.000000"),
+                ("repeated.parquet", "2024-11-03 01:30:00.000000"),
+                ("offset.parquet", "2024-01-01T09:00:00.000000Z"),
+            ] {
+                assert!(matches!(
+                    parser.parse(Some(value)).unwrap(),
+                    ScalarValue::TimestampMicrosecond(Some(micros), _) if micros == parsed[path]
+                ));
+            }
+        }
     }
 }

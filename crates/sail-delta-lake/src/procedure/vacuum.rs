@@ -134,7 +134,10 @@ pub(super) async fn execute(
         ("sizeOfDataToDelete".to_string(), json!(bytes)),
     ]);
     if logging {
-        CommitBuilder::from(CommitProperties::default().with_operation_metrics(start_metrics))
+        let properties = CommitProperties::default()
+            .with_operation_metrics(start_metrics)
+            .with_partition_time_zone(snapshot.partition_time_zone().into());
+        CommitBuilder::from(properties)
             .build(
                 Some(snapshot.clone()),
                 log_store.clone(),
@@ -183,7 +186,10 @@ pub(super) async fn execute(
             ("numDeletedFiles".to_string(), json!(deleted)),
             ("numVacuumedDirectories".to_string(), json!(directory_count)),
         ]);
-        CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
+        let properties = CommitProperties::default()
+            .with_operation_metrics(end_metrics)
+            .with_partition_time_zone(latest.partition_time_zone().into());
+        CommitBuilder::from(properties)
             .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
             .await?;
     }

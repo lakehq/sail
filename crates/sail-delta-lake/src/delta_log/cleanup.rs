@@ -119,11 +119,14 @@ impl RetentionCleanupBoundary {
     }
 }
 
+/// `partition_time_zone` is the time zone of the session that cleans up, in which a classic
+/// checkpoint written for a V2 checkpoint parses its partition values.
 pub(crate) async fn cleanup_expired_delta_log_files(
     table_state: &DeltaSnapshot,
     log_store: &dyn LogStore,
     cutoff_timestamp: i64,
     operation_id: Option<Uuid>,
+    partition_time_zone: &str,
 ) -> DeltaResult<usize> {
     let latest_version = table_state.version();
     let object_store = log_store.object_store(operation_id);
@@ -138,7 +141,12 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 
     // Before deleting any log files, ensure a classic checkpoint exists at the retention
     // boundary version when the table uses V2 (UUID-named) checkpoints.
-    ensure_v2_compat_classic_checkpoint(object_store.clone(), retention_checkpoint_version).await?;
+    ensure_v2_compat_classic_checkpoint(
+        object_store.clone(),
+        retention_checkpoint_version,
+        partition_time_zone,
+    )
+    .await?;
 
     // Validate every checkpoint that will remain after cleanup and collect its sidecar references
     // before deleting any log file. A damaged retained checkpoint must fail closed while the
@@ -164,6 +172,7 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
+    partition_time_zone: &str,
 ) -> DeltaResult<()> {
     // Check whether a classic checkpoint already exists at this version.
     let classic_path = checkpoint_path(version);
@@ -180,7 +189,13 @@ async fn ensure_v2_compat_classic_checkpoint(
                 "V2 checkpoint named by _last_checkpoint is not readable at {hinted_path}: {error}"
             ))
         })?;
-        write_classic_checkpoint_from_v2_checkpoint(object_store, version, checkpoint_meta).await?;
+        write_classic_checkpoint_from_v2_checkpoint(
+            object_store,
+            version,
+            checkpoint_meta,
+            partition_time_zone,
+        )
+        .await?;
         debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
         return Ok(());
     }
@@ -205,7 +220,13 @@ async fn ensure_v2_compat_classic_checkpoint(
         return Ok(());
     };
 
-    write_classic_checkpoint_from_v2_checkpoint(object_store, version, uuid_meta).await?;
+    write_classic_checkpoint_from_v2_checkpoint(
+        object_store,
+        version,
+        uuid_meta,
+        partition_time_zone,
+    )
+    .await?;
     debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
 
     Ok(())
@@ -405,7 +426,7 @@ mod tests {
             metadata: Some(metadata),
             ..Default::default()
         };
-        write_classic_checkpoint_file(version, state, store.clone())
+        write_classic_checkpoint_file(version, state, store.clone(), "UTC")
             .await
             .unwrap();
     }
@@ -516,10 +537,15 @@ mod tests {
         put_log_file(&store, checkpoint_path(1)).await;
         put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
-        let deleted =
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
-                .await
-                .unwrap();
+        let deleted = cleanup_expired_delta_log_files(
+            snapshot.as_ref(),
+            log_store.as_ref(),
+            i64::MAX,
+            None,
+            "UTC",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, 4);
         assert_eq!(
@@ -555,10 +581,15 @@ mod tests {
         put_log_file(&store, checkpoint_path(2)).await;
         put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
 
-        let deleted =
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
-                .await
-                .unwrap();
+        let deleted = cleanup_expired_delta_log_files(
+            snapshot.as_ref(),
+            log_store.as_ref(),
+            i64::MAX,
+            None,
+            "UTC",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, 0);
         assert_eq!(
@@ -602,10 +633,15 @@ mod tests {
             .await;
         }
 
-        let deleted =
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
-                .await
-                .unwrap();
+        let deleted = cleanup_expired_delta_log_files(
+            snapshot.as_ref(),
+            log_store.as_ref(),
+            i64::MAX,
+            None,
+            "UTC",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, 0);
         assert_eq!(
@@ -646,10 +682,15 @@ mod tests {
             sidecar_file_path("00000000000000000002.checkpoint.0000000001.0000000001.uuid.parquet");
         put_log_file(&store, sidecar_path.clone()).await;
 
-        let deleted =
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
-                .await
-                .unwrap();
+        let deleted = cleanup_expired_delta_log_files(
+            snapshot.as_ref(),
+            log_store.as_ref(),
+            i64::MAX,
+            None,
+            "UTC",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, 0);
         for version in 0..=2 {
@@ -711,10 +752,15 @@ mod tests {
         put_log_file(&store, checkpoint_path(1)).await;
         put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
-        let deleted =
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), 350, None)
-                .await
-                .unwrap();
+        let deleted = cleanup_expired_delta_log_files(
+            snapshot.as_ref(),
+            log_store.as_ref(),
+            350,
+            None,
+            "UTC",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, 4);
         assert_eq!(
@@ -771,9 +817,15 @@ mod tests {
         put_log_file(&store, checkpoint_path(2)).await;
 
         assert!(
-            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None,)
-                .await
-                .is_err()
+            cleanup_expired_delta_log_files(
+                snapshot.as_ref(),
+                log_store.as_ref(),
+                i64::MAX,
+                None,
+                "UTC"
+            )
+            .await
+            .is_err()
         );
         for version in 0..=3 {
             store.head(&commit_path(version)).await.unwrap();

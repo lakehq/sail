@@ -651,6 +651,11 @@ impl ExecutionPlan for DeltaCommitExec {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
+            let partition_time_zone =
+                crate::snapshot::partition_time_zone(context.session_config().options());
+            let commit_properties = CommitProperties::default()
+                .with_user_metadata(user_metadata)
+                .with_partition_time_zone(Arc::clone(&partition_time_zone));
 
             let mut total_rows = 0u64;
             let mut has_data = false;
@@ -928,8 +933,6 @@ impl ExecutionPlan for DeltaCommitExec {
                     .transpose()
                     .map_err(|error| DataFusionError::External(Box::new(error)))?
                     .unwrap_or_else(|| snapshot.schema().clone());
-                let time_zone =
-                    crate::snapshot::partition_time_zone(context.session_config().options());
                 let partition_fields = snapshot
                     .physical_partition_columns()
                     .into_iter()
@@ -937,7 +940,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         let field = partition_schema.field_with_name(&column.logical_name)?;
                         let parser = crate::conversion::PartitionValueParser::try_new(
                             field.data_type(),
-                            &time_zone,
+                            &partition_time_zone,
                         )
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
                         Ok((column.physical_name, parser))
@@ -1052,14 +1055,12 @@ impl ExecutionPlan for DeltaCommitExec {
                                 )
                             }
                             _ => {
-                                let bootstrap_commit = CommitBuilder::from(
-                                    CommitProperties::default()
-                                        .with_user_metadata(user_metadata.clone()),
-                                )
-                                .with_actions(bootstrap_actions)
-                                .build(None, log_store.clone(), operation)
-                                .await
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                                let bootstrap_commit =
+                                    CommitBuilder::from(commit_properties.clone())
+                                        .with_actions(bootstrap_actions)
+                                        .build(None, log_store.clone(), operation)
+                                        .await
+                                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                                 let operation = Self::write_operation_for_sink_mode(
                                     &partition_columns,
                                     &sink_mode,
@@ -1093,15 +1094,11 @@ impl ExecutionPlan for DeltaCommitExec {
                     operation_metrics.finalize_for(&operation);
                     result =
                         commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
-                    CommitBuilder::from(
-                        CommitProperties::default()
-                            .with_operation_metrics(operation_metrics)
-                            .with_user_metadata(user_metadata),
-                    )
-                    .with_actions(final_actions)
-                    .build(reference, log_store.clone(), operation)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    CommitBuilder::from(commit_properties.with_operation_metrics(operation_metrics))
+                        .with_actions(final_actions)
+                        .build(reference, log_store.clone(), operation)
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
                 } else {
                     operation_metrics.finalize_for(&operation);
                     result =
@@ -1132,9 +1129,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         reference
                     };
                     let pre_commit = CommitBuilder::from(
-                        CommitProperties::default()
-                            .with_operation_metrics(operation_metrics)
-                            .with_user_metadata(user_metadata),
+                        commit_properties.with_operation_metrics(operation_metrics),
                     )
                     .with_actions(final_actions.clone())
                     .build(reference, log_store.clone(), operation);
@@ -1176,9 +1171,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 operation_metrics.finalize_for(&operation);
                 result = commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
                 let pre_commit = CommitBuilder::from(
-                    CommitProperties::default()
-                        .with_operation_metrics(operation_metrics)
-                        .with_user_metadata(user_metadata),
+                    commit_properties.with_operation_metrics(operation_metrics),
                 )
                 .with_actions(final_actions)
                 .build(reference.clone(), log_store.clone(), operation);

@@ -26,10 +26,16 @@ pub(crate) struct AddAugmentationConfig {
     stats_parsed_schema: Option<ArrowSchemaRef>,
     partition_values_parsed_schema: Option<StructType>,
     column_mapping_mode: ColumnMappingMode,
+    partition_time_zone: Arc<str>,
 }
 
 impl AddAugmentationConfig {
-    pub(crate) fn from_metadata(metadata: &Metadata) -> DeltaResult<Self> {
+    /// `partition_time_zone` is the time zone of the session that writes the checkpoint (see
+    /// [`crate::snapshot::partition_time_zone`]).
+    pub(crate) fn from_metadata(
+        metadata: &Metadata,
+        partition_time_zone: &str,
+    ) -> DeltaResult<Self> {
         let properties = TableProperties::from(metadata.configuration().iter());
         let write_stats_as_struct = properties.checkpoint_write_stats_as_struct.unwrap_or(true);
         let write_stats_as_json = properties.checkpoint_write_stats_as_json.unwrap_or(true);
@@ -81,6 +87,7 @@ impl AddAugmentationConfig {
             stats_parsed_schema,
             partition_values_parsed_schema,
             column_mapping_mode,
+            partition_time_zone: partition_time_zone.into(),
         })
     }
 
@@ -149,10 +156,9 @@ impl AddAugmentationConfig {
                 partition_schema,
                 "partitionValues",
                 self.column_mapping_mode,
-                // Delta-Spark parses these in the session time zone, but checkpoints are written
-                // without a session. Neither Sail nor Delta-Spark reads them back; both parse the
-                // partition value strings.
-                "UTC",
+                // Like Delta-Spark, a TIMESTAMP value without an offset is read in the time zone of
+                // the session that writes the checkpoint, with the same parse as Sail's reads.
+                &self.partition_time_zone,
             )?;
             add_fields.push(Arc::new(Field::new(
                 FIELD_NAME_PARTITION_VALUES_PARSED,
