@@ -123,7 +123,11 @@ impl PlanResolver<'_> {
         // The view resolves the query again when its plan no longer fits the tables that it
         // reads, in the scope that records what the query resolves now.
         let query = input.as_ref().clone();
-        let scope = Arc::new(ViewDefinitionScope::create());
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        // The query resolves its names, and resolves them again later, in the catalog and the
+        // database that are current now, even if the session changes them meanwhile.
+        let namespace = manager.current_namespace()?;
+        let scope = Arc::new(ViewDefinitionScope::create(namespace.clone()));
         state.begin_view_definition();
         let input = Arc::clone(&scope)
             .run(self.resolve_query_plan(*input, state))
@@ -159,15 +163,15 @@ impl PlanResolver<'_> {
         // The view reads its tables again at each read, so its plan does not keep the
         // table sources that the definition was resolved with.
         let (input, resolves_at_each_read) = Self::store_view_plan(input, &reads)?;
-        let manager = self.ctx.extension::<CatalogManager>()?;
+        let (catalog, database) = namespace;
         // A view that reads no table and no persistent view has a plan that always fits, and
         // keeps no query, which can hold the rows of a local relation.
         let definition = if reads.sources().next().is_some() || resolves_at_each_read {
             Some(Arc::new(TemporaryViewDefinition {
                 query,
                 output_names,
-                catalog: manager.default_catalog()?.to_string(),
-                database: manager.default_database()?.into(),
+                catalog: catalog.to_string(),
+                database: database.into(),
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,

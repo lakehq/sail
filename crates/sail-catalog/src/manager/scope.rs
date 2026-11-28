@@ -20,9 +20,13 @@ tokio::task_local! {
 /// a temporary function only if it referred to one when the view was created.
 #[derive(Debug)]
 pub enum ViewDefinitionScope {
-    /// The view is created, and the temporary views and the functions of the session that
-    /// the query resolves are recorded.
-    Create(Mutex<TemporaryViewObjects>),
+    /// The view is created in the catalog and the database that were current when the
+    /// creation began, and the temporary views and the functions of the session that the
+    /// query resolves are recorded.
+    Create {
+        namespace: (Arc<str>, Namespace),
+        objects: Mutex<TemporaryViewObjects>,
+    },
     /// The view resolves its query again. A name that referred to a temporary view or a
     /// function of the session refers to the one that it referred to then, which the plan of
     /// the view reads as well, and any other name refers to neither.
@@ -30,8 +34,11 @@ pub enum ViewDefinitionScope {
 }
 
 impl ViewDefinitionScope {
-    pub fn create() -> Self {
-        Self::Create(Mutex::default())
+    pub fn create(namespace: (Arc<str>, Namespace)) -> Self {
+        Self::Create {
+            namespace,
+            objects: Mutex::default(),
+        }
     }
 
     /// Runs the future in this scope.
@@ -43,7 +50,7 @@ impl ViewDefinitionScope {
     /// resolved when the view was created.
     pub fn recorded(&self) -> CatalogResult<TemporaryViewObjects> {
         match self {
-            Self::Create(objects) => Ok(objects
+            Self::Create { objects, .. } => Ok(objects
                 .lock()
                 .map_err(|e| CatalogError::Internal(e.to_string()))?
                 .clone()),
@@ -54,7 +61,7 @@ impl ViewDefinitionScope {
     /// Records an object that the query resolves when the view is created.
     fn record(record: impl FnOnce(&mut TemporaryViewObjects)) {
         if let Some(scope) = Self::current()
-            && let Self::Create(objects) = scope.as_ref()
+            && let Self::Create { objects, .. } = scope.as_ref()
             && let Ok(mut objects) = objects.lock()
         {
             record(&mut objects);
@@ -66,7 +73,7 @@ impl ViewDefinitionScope {
     fn pinned() -> Option<Arc<TemporaryViewDefinition>> {
         match Self::current()?.as_ref() {
             Self::Resolve(definition) => Some(Arc::clone(definition)),
-            Self::Create(_) => None,
+            Self::Create { .. } => None,
         }
     }
 
@@ -74,12 +81,17 @@ impl ViewDefinitionScope {
         VIEW_DEFINITION_SCOPE.try_with(Arc::clone).ok()
     }
 
-    /// The current catalog and database in which the query is resolved again, if it is.
-    /// They are those of a session, so they form a valid namespace.
+    /// The current catalog and database in which the query is resolved, while the view is
+    /// created or resolves its query again. They are those of a session, so they form a valid
+    /// namespace.
     pub(super) fn namespace() -> Option<(Arc<str>, Namespace)> {
-        let definition = Self::pinned()?;
-        let database = definition.database.clone().try_into().ok()?;
-        Some((definition.catalog.as_str().into(), database))
+        match Self::current()?.as_ref() {
+            Self::Create { namespace, .. } => Some(namespace.clone()),
+            Self::Resolve(definition) => {
+                let database = definition.database.clone().try_into().ok()?;
+                Some((definition.catalog.as_str().into(), database))
+            }
+        }
     }
 
     /// Returns the catalog of the name of the session that created the view while the query
