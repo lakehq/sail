@@ -143,6 +143,21 @@ mod tests {
             value,
             ScalarValue::TimestampMicrosecond(Some(1_704_079_755_000_000), Some("UTC".into()))
         );
+        // Values are parsed in other Spark spellings of a session time zone as Spark casts them.
+        for (session, seconds) in [
+            ("PST", 1_704_128_400),
+            ("GMT+8", 1_704_070_800),
+            ("Z", 1_704_099_600),
+        ] {
+            let mut options = ConfigOptions::default();
+            set_spark_session_time_zone(&mut options, session)?;
+            let parser = PartitionValueParser::try_new(&data_type, &partition_time_zone(&options))?;
+            assert_eq!(
+                parser.parse(Some("2024-01-01 09:00:00"))?,
+                ScalarValue::TimestampMicrosecond(Some(seconds * 1_000_000), Some("UTC".into())),
+                "{session}"
+            );
+        }
         Ok(())
     }
 }
