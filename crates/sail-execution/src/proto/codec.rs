@@ -4144,11 +4144,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = Timestamp::try_new(timezone.map(Arc::from), ansi_mode, is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::DeltaPartitionTimestamp(r#gen::DeltaPartitionTimestampUdf {
-                time_zone,
-                ansi_mode,
-            }) => {
-                let udf = DeltaPartitionTimestamp::new(Arc::from(time_zone), ansi_mode);
+            UdfKind::DeltaPartitionTimestamp(r#gen::DeltaPartitionTimestampUdf { time_zone }) => {
+                let udf = DeltaPartitionTimestamp::new(Arc::from(time_zone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDate(r#gen::SparkDateUdf { is_try }) => {
@@ -4816,7 +4813,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<DeltaPartitionTimestamp>() {
             UdfKind::DeltaPartitionTimestamp(r#gen::DeltaPartitionTimestampUdf {
                 time_zone: func.time_zone().to_string(),
-                ansi_mode: func.ansi_mode(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<Date>() {
             let is_try = func.is_try();
@@ -11078,13 +11074,12 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_delta_partition_timestamp_preserves_options() -> Result<()> {
-        let udf = DeltaPartitionTimestamp::new(Arc::from("+05:30:15"), true);
+    fn test_round_trip_delta_partition_timestamp_preserves_time_zone() -> Result<()> {
+        let udf = DeltaPartitionTimestamp::new(Arc::from("+05:30:15"));
         let decoded = round_trip_udf(ScalarUDF::from(udf))?;
 
         let decoded = downcast_udf::<DeltaPartitionTimestamp>(&decoded, "DeltaPartitionTimestamp")?;
         assert_eq!(decoded.time_zone(), "+05:30:15");
-        assert!(decoded.ansi_mode());
 
         Ok(())
     }

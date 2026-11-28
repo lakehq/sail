@@ -18,7 +18,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{DataFusionError, Result as DataFusionResult, exec_datafusion_err};
+use datafusion::common::{Result as DataFusionResult, exec_datafusion_err};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use sail_common::utils::datetime::civil_from_days;
 use sail_common_datafusion::utils::datetime::SparkZone;
@@ -594,44 +594,6 @@ impl PartitionValueParser {
         value.unwrap_or_else(|| self.null.clone())
     }
 
-    /// Parses a value as [`Self::parse`] does, except that a value that does not parse is an
-    /// error, as Delta-Spark casts partition values in the filters of a session in ANSI mode.
-    pub fn parse_strict(&self, column: &str, raw: Option<&str>) -> DataFusionResult<ScalarValue> {
-        let value = self.parse(raw);
-        match raw {
-            Some(raw) if !raw.is_empty() && value.is_null() => {
-                Err(self.malformed_value_error(column, raw))
-            }
-            _ => Ok(value),
-        }
-    }
-
-    /// Parses values as [`Self::parse_array`] does, except that a value that does not parse is
-    /// an error, as in [`Self::parse_strict`].
-    pub fn parse_array_strict(
-        &self,
-        column: &str,
-        values: &[Option<&str>],
-    ) -> DataFusionResult<ArrayRef> {
-        let array = self.parse_array(values)?;
-        match values
-            .iter()
-            .enumerate()
-            .find(|(index, raw)| raw.is_some() && array.is_null(*index))
-        {
-            Some((_, Some(raw))) => Err(self.malformed_value_error(column, raw)),
-            _ => Ok(array),
-        }
-    }
-
-    fn malformed_value_error(&self, column: &str, raw: &str) -> DataFusionError {
-        let sql_value = raw.replace('\\', "\\\\").replace('\'', "\\'");
-        exec_datafusion_err!(
-            "[CAST_INVALID_INPUT] The value '{sql_value}' of the partition column `{column}` cannot be cast to {} because it is malformed. Correct the value in the Delta log, or set \"spark.sql.ansi.enabled\" to \"false\" to read it as NULL.",
-            self.field_dt
-        )
-    }
-
     /// Parses values that are not empty, where a value that does not parse is null.
     pub fn parse_array(&self, values: &[Option<&str>]) -> DataFusionResult<ArrayRef> {
         let array: ArrayRef = match (&self.session_zone, &self.field_dt) {
@@ -827,46 +789,6 @@ mod tests {
                 "{expected} as {data_type}"
             );
         }
-    }
-
-    /// A value that does not parse is NULL, or an error when parsed strictly, as in the partition
-    /// filters of a session in ANSI mode. Empty and missing values are NULL either way.
-    #[test]
-    fn strict_partition_values_reject_values_that_do_not_parse()
-    -> Result<(), Box<dyn std::error::Error>> {
-        for (data_type, good, bad) in [
-            (ArrowDataType::Int32, "2", "abc"),
-            (ArrowDataType::Decimal128(5, 2), "2.50", "-1.-25"),
-            (
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                "2024-01-01t09:00:00z",
-                "2024-01-01T09:00:00 Q",
-            ),
-        ] {
-            let parser = PartitionValueParser::try_new(&data_type, "UTC")?;
-            assert!(parser.parse(Some(bad)).is_null(), "{data_type}");
-            assert!(parser.parse_strict("p", Some(bad)).is_err(), "{data_type}");
-            assert_eq!(
-                parser.parse_strict("p", Some(good))?,
-                parser.parse(Some(good))
-            );
-            for raw in [None, Some("")] {
-                assert!(parser.parse_strict("p", raw)?.is_null(), "{data_type}");
-            }
-            assert!(
-                parser
-                    .parse_array_strict("p", &[Some(good), None, Some(bad)])
-                    .is_err()
-            );
-            assert_eq!(
-                parser
-                    .parse_array_strict("p", &[Some(good), None])?
-                    .null_count(),
-                1,
-                "{data_type}"
-            );
-        }
-        Ok(())
     }
 
     #[test]

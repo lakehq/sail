@@ -13,7 +13,6 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
-use sail_common_datafusion::session::ansi_mode::spark_session_ansi_mode;
 use sail_data_source::options::ResolveOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -110,8 +109,7 @@ pub(crate) async fn plan(
     if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
         return plan_err!("OPTIMIZE maxDeletedRowsRatio must be between zero and one");
     }
-    let ansi_mode = spark_session_ansi_mode(session.config().options());
-    let candidates = select_files(&snapshot, filter.as_ref(), ansi_mode)?;
+    let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
     let partition_columns = bin_key_columns(&snapshot)?;
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
@@ -438,12 +436,9 @@ fn positive_size(options: &BTreeMap<String, String>, key: &str, default: i64) ->
     Ok(size)
 }
 
-/// Selects the files of the `WHERE` predicate. In ANSI mode, a partition value of a referenced
-/// column that does not parse is an error, as in the partition filters of a query.
 fn select_files(
     snapshot: &DeltaSnapshot,
     filter: Option<&DeltaMaintenancePredicate>,
-    ansi_mode: bool,
 ) -> Result<Vec<Add>> {
     let Some(filter) = filter else {
         return Ok(snapshot.adds().to_vec());
@@ -452,27 +447,18 @@ fn select_files(
         return plan_err!("OPTIMIZE table schema changed after predicate planning");
     }
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-    let mut referenced_columns = Vec::new();
     filter.expr.apply(|expr| {
         if let Some(column) = expr.downcast_ref::<datafusion::physical_expr::expressions::Column>()
-        {
-            if !snapshot
+            && !snapshot
                 .metadata()
                 .partition_columns()
                 .contains(&column.name().to_string())
-            {
-                return plan_err!("OPTIMIZE predicates may reference only partition columns");
-            }
-            referenced_columns.push(column.name().to_string());
+        {
+            return plan_err!("OPTIMIZE predicates may reference only partition columns");
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    let strict_columns = if ansi_mode {
-        referenced_columns.as_slice()
-    } else {
-        &[]
-    };
-    let batch = partition_values_batch(snapshot, &filter.schema, strict_columns)?;
+    let batch = partition_values_batch(snapshot, &filter.schema)?;
     let expr = reassign_expr_columns(filter.expr.clone(), &batch.schema())?;
     let values = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
     let mask = values
@@ -488,13 +474,7 @@ fn select_files(
         .collect())
 }
 
-/// Parses the partition values of every file. A value of a column in `strict_columns` that does
-/// not parse is an error rather than NULL.
-fn partition_values_batch(
-    snapshot: &DeltaSnapshot,
-    schema: &Schema,
-    strict_columns: &[String],
-) -> Result<RecordBatch> {
+fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<RecordBatch> {
     let schema = Arc::new(Schema::new(
         schema
             .fields()
@@ -516,22 +496,17 @@ fn partition_values_batch(
         );
         let parser =
             PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())?;
-        let strict = strict_columns.contains(field.name());
         let values = snapshot
             .adds()
             .iter()
             .map(|add| {
-                let raw = add
-                    .partition_values
-                    .get(physical)
-                    .and_then(Option::as_deref);
-                if strict {
-                    parser.parse_strict(field.name(), raw)
-                } else {
-                    Ok(parser.parse(raw))
-                }
+                parser.parse(
+                    add.partition_values
+                        .get(physical)
+                        .and_then(Option::as_deref),
+                )
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         columns.push(if values.is_empty() {
             datafusion::arrow::array::new_empty_array(field.data_type())
         } else {
@@ -727,7 +702,7 @@ mod tests {
         let mut memory = None;
         for data_columns in [1, 32] {
             let snapshot = predicate_snapshot(data_columns, true, 2).await?;
-            let batch = partition_values_batch(&snapshot, snapshot.schema(), &[])?;
+            let batch = partition_values_batch(&snapshot, snapshot.schema())?;
             assert_eq!(batch.num_rows(), 2);
             assert_eq!(batch.num_columns(), 2);
             assert_eq!(batch.schema().field(0).name(), "p");
@@ -766,7 +741,7 @@ mod tests {
                     lit(1_i64),
                 )),
             };
-            let selected = select_files(&snapshot, Some(&filter), false)?;
+            let selected = select_files(&snapshot, Some(&filter))?;
             assert_eq!(selected.len(), 1);
             assert_eq!(selected[0].path, "0.parquet");
         }
@@ -777,7 +752,7 @@ mod tests {
     async fn predicate_batch_preserves_zero_column_row_count() -> Result<()> {
         for num_files in [0, 2] {
             let snapshot = predicate_snapshot(1, false, num_files).await?;
-            let batch = partition_values_batch(&snapshot, snapshot.schema(), &[])?;
+            let batch = partition_values_batch(&snapshot, snapshot.schema())?;
             assert_eq!(batch.num_columns(), 0);
             assert_eq!(batch.num_rows(), num_files);
             assert_eq!(batch.get_array_memory_size(), 0);
@@ -786,10 +761,7 @@ mod tests {
                     schema: Arc::new(snapshot.schema().clone()),
                     expr: lit(ScalarValue::Boolean(value)),
                 };
-                assert_eq!(
-                    select_files(&snapshot, Some(&filter), false)?.len(),
-                    expected
-                );
+                assert_eq!(select_files(&snapshot, Some(&filter))?.len(), expected);
             }
         }
         Ok(())
@@ -807,7 +779,7 @@ mod tests {
             )),
         };
         assert!(
-            matches!(select_files(&snapshot, Some(&filter), false), Err(DataFusionError::Plan(message))
+            matches!(select_files(&snapshot, Some(&filter)), Err(DataFusionError::Plan(message))
             if message == "OPTIMIZE predicates may reference only partition columns")
         );
         filter.expr = lit(true);
@@ -815,7 +787,7 @@ mod tests {
         fields[0] = Arc::new(fields[0].as_ref().clone().with_nullable(true));
         filter.schema = Arc::new(Schema::new(fields));
         assert!(
-            matches!(select_files(&snapshot, Some(&filter), false), Err(DataFusionError::Plan(message))
+            matches!(select_files(&snapshot, Some(&filter)), Err(DataFusionError::Plan(message))
             if message == "OPTIMIZE table schema changed after predicate planning")
         );
         Ok(())

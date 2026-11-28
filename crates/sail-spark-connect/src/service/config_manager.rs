@@ -10,7 +10,6 @@ use datafusion::prelude::SessionContext;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::ansi_mode::set_spark_session_ansi_mode;
 use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
 use sail_plan::resolver::PlanResolver;
 use sail_sql_analyzer::parser::parse_native_config_value;
@@ -238,11 +237,9 @@ pub(crate) fn handle_config_set(
     let parquet_binary_as_string_key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
     let mut sets_parquet_binary_as_string = false;
     let mut sets_session_timezone = false;
-    let mut sets_ansi_mode = false;
     let result = kv.into_iter().try_for_each(|pair| {
         let is_parquet_binary_as_string = pair.key == parquet_binary_as_string_key;
         let is_session_timezone = pair.key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE;
-        let is_ansi_mode = pair.key == SparkConfigKey::SPARK_SQL_ANSI_ENABLED;
         if is_session_timezone
             && let Some(value) = &pair.value
             && !is_valid_time_zone(value)
@@ -255,7 +252,6 @@ pub(crate) fn handle_config_set(
         spark.set_config(vec![pair])?;
         sets_parquet_binary_as_string |= is_parquet_binary_as_string;
         sets_session_timezone |= is_session_timezone;
-        sets_ansi_mode |= is_ansi_mode;
         Ok(())
     });
     let mirrored = if sets_parquet_binary_as_string {
@@ -268,15 +264,7 @@ pub(crate) fn handle_config_set(
     } else {
         Ok(())
     };
-    let ansi_mode_mirrored = if sets_ansi_mode {
-        sync_session_ansi_mode(ctx, &spark)
-    } else {
-        Ok(())
-    };
-    result
-        .and(mirrored)
-        .and(timezone_mirrored)
-        .and(ansi_mode_mirrored)?;
+    result.and(mirrored).and(timezone_mirrored)?;
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
         server_side_session_id: spark.server_session_id().to_string(),
@@ -348,9 +336,6 @@ pub(crate) fn handle_config_unset(
         let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING.to_string();
         keys.iter().any(|k| k == &key)
     };
-    let unsets_ansi_mode = keys
-        .iter()
-        .any(|key| key == SparkConfigKey::SPARK_SQL_ANSI_ENABLED);
     spark.unset_config(keys)?;
     // Mirror before anything else can return an error, for the same reason as in
     // `handle_config_set`. Unsetting either removes every key or none of them, so there is no
@@ -362,9 +347,6 @@ pub(crate) fn handle_config_unset(
     };
     if unsets_session_timezone {
         sync_session_timezone(ctx, &spark)?;
-    }
-    if unsets_ansi_mode {
-        sync_session_ansi_mode(ctx, &spark)?;
     }
     mirrored?;
     Ok(ConfigResponse {
@@ -380,14 +362,6 @@ fn sync_session_timezone(ctx: &SessionContext, spark: &SparkSession) -> SparkRes
     let mut state = state.write();
     let config = spark.plan_config()?;
     set_spark_session_time_zone(state.config_mut().options_mut(), &config.session_timezone)?;
-    Ok(())
-}
-
-/// Mirrors `spark.sql.ansi.enabled` for planning code that reads it from the DataFusion options.
-fn sync_session_ansi_mode(ctx: &SessionContext, spark: &SparkSession) -> SparkResult<()> {
-    let ansi_mode = spark.plan_config()?.ansi_mode;
-    let state = ctx.state_ref();
-    set_spark_session_ansi_mode(state.write().config_mut().options_mut(), ansi_mode);
     Ok(())
 }
 

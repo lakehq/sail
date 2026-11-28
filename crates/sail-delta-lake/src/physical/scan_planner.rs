@@ -16,7 +16,6 @@ use datafusion::physical_expr::expressions::{CastExpr, Column};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::session::ansi_mode::spark_session_ansi_mode;
 use sail_data_source::options::ResolveOptions;
 
 use crate::datasource::pruning::{partition_filter_mask, select_files_for_limit};
@@ -209,7 +208,6 @@ pub(crate) async fn plan_delta_scan(
                     Arc::clone(predicate),
                     kmode,
                     snapshot.partition_time_zone(),
-                    spark_session_ansi_mode(session.config().options()),
                 )?;
                 let pruned_files = match Arc::try_unwrap(files) {
                     Ok(files) => files

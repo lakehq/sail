@@ -589,7 +589,8 @@ def test_delta_checkpoint_parses_timestamp_partition_values_in_session_time_zone
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
-def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_path, session_timezone):
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_path, session_timezone, ansi):
     _ = session_timezone
     path = tmp_path / "table"
     june = int(datetime(2024, 6, 1, 7, tzinfo=UTC).timestamp()) * 1_000_000
@@ -610,10 +611,7 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
     # Spark reads it as NULL.
     for log in (path / "_delta_log").glob("*.json"):
         log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', f'"{UNPARSED_TIMESTAMP}"'))
-    # Like Delta Lake on Spark, a partition filter in ANSI mode rejects the value.
-    with pytest.raises(Exception, match="CAST_INVALID_INPUT"):
-        spark.read.format("delta").load(str(path)).where("ts IS NULL").collect()
-    with ansi_mode(spark, enabled=False):
+    with ansi_mode(spark, enabled=ansi):
         check_timestamp_partition_values_that_do_not_parse(spark, path, june)
 
 
@@ -746,15 +744,16 @@ def write_partitioned_log(path, data_type, values, *, deletion_vectors=False, ro
     ],
     ids=["decimal", "integer", "timestamp"],
 )
-def test_delta_partition_filters_follow_ansi_mode_for_values_that_do_not_parse(
+def test_delta_partition_filters_read_values_that_do_not_parse_as_null(
     spark, tmp_path, session_timezone, ansi, data_type, bad, good, literal
 ):
-    """Like Delta Lake on Spark, a partition value that does not parse reads as NULL, and a partition
-    filter casts it as the session does: an error in ANSI mode, NULL otherwise."""
+    """Like Delta Lake on Spark, a partition value that does not parse reads as NULL, and partition
+    filters see the value that reads return, whatever the ANSI mode. In ANSI mode, Delta Lake on Spark
+    raises a cast error for partition filters instead, which it tracks as a bug
+    (https://github.com/delta-io/delta/issues/7930)."""
     _ = session_timezone
     path = tmp_path / "table"
     write_partitioned_log(path, data_type, [bad, bad, good, None])
-    log = sorted((path / "_delta_log").glob("*.json"))
     with ansi_mode(spark, enabled=ansi):
         frame = spark.read.format("delta").load(str(path))
         assert sorted((row.id, row.p is None) for row in frame.collect()) == [
@@ -766,20 +765,15 @@ def test_delta_partition_filters_follow_ansi_mode_for_values_that_do_not_parse(
         assert sorted(row.id for row in frame.where("v > 0").collect()) == [1, 2, 3, 4]
         for metadata_as_data in ["false", "true"]:
             frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
-            for condition, expected in [("p IS NULL", [1, 2, 4]), (f"p = {literal}", [3])]:
-                if ansi:
-                    with pytest.raises(Exception, match=re.escape(bad)):
-                        frame.where(condition).collect()
-                else:
-                    assert sorted(row.id for row in frame.where(condition).collect()) == expected
-        delete = f"DELETE FROM delta.`{path}` WHERE p IS NULL"  # noqa: S608
-        if ansi:
-            with pytest.raises(Exception, match=re.escape(bad)):
-                spark.sql(delete).collect()
-            assert sorted((path / "_delta_log").glob("*.json")) == log
-        else:
-            spark.sql(delete).collect()
-            assert [row.id for row in spark.read.format("delta").load(str(path)).collect()] == [3]
+            for condition, expected in [
+                ("p IS NULL", [1, 2, 4]),
+                (f"p = {literal}", [3]),
+                ("p IS NULL AND id = 1", [1]),
+                ("id = 3 OR p IS NULL", [1, 2, 3, 4]),
+            ]:
+                assert sorted(row.id for row in frame.where(condition).collect()) == expected, condition
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE p IS NULL").collect()  # noqa: S608
+        assert [row.id for row in spark.read.format("delta").load(str(path)).collect()] == [3]
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC", "America/Los_Angeles"], indirect=True)
@@ -888,11 +882,6 @@ def test_delta_deletes_that_rewrite_no_file_whose_partition_value_does_not_parse
         write_partitioned_log(path, data_type, [bad, bad, good, None], deletion_vectors=deletion_vectors)
         delete = f"DELETE FROM delta.`{path}` WHERE {condition}"  # noqa: S608
         with ansi_mode(spark, enabled=ansi):
-            if ansi and name == "partition":
-                # The partition filter casts the value as the session does.
-                with pytest.raises(Exception, match=re.escape(bad)):
-                    spark.sql(delete).collect()
-                continue
             spark.sql(delete).collect()
         assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == left, name
         assert active_partition_values(path, "p").count(bad) == 2, name

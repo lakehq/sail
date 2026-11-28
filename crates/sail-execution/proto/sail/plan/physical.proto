@@ -487,7 +487,6 @@ message SparkTimestampUdf {
 
 message DeltaPartitionTimestampUdf {
   string time_zone = 1;
-  bool ansi_mode = 2;
 }
 
 message SparkDateUdf {

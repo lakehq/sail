@@ -6,7 +6,7 @@ use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use datafusion::arrow::array::{Array, TimestampMicrosecondArray};
 use datafusion::arrow::compute::kernels::cast_utils::string_to_datetime;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{Result, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -49,33 +49,27 @@ pub fn parse_partition_timestamp(value: &str, session_zone: &SparkZone) -> Resul
 }
 
 /// Parses the raw values of a Delta TIMESTAMP partition column with [`parse_partition_timestamp`],
-/// for partition filters evaluated over the Delta log. A value that does not parse is NULL, or an
-/// error in ANSI mode, as Delta-Spark casts partition values in its filters.
+/// for partition filters evaluated over the Delta log. A value that does not parse is NULL, as the
+/// scans read it.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DeltaPartitionTimestamp {
     time_zone: Arc<str>,
     label: Arc<str>,
-    ansi_mode: bool,
     signature: Signature,
 }
 
 impl DeltaPartitionTimestamp {
-    pub fn new(time_zone: Arc<str>, ansi_mode: bool) -> Self {
+    pub fn new(time_zone: Arc<str>) -> Self {
         let label = Arc::from(arrow_timezone_label(&time_zone).as_ref());
         Self {
             time_zone,
             label,
-            ansi_mode,
             signature: Signature::string(1, Volatility::Immutable),
         }
     }
 
     pub fn time_zone(&self) -> &str {
         &self.time_zone
-    }
-
-    pub fn ansi_mode(&self) -> bool {
-        self.ansi_mode
     }
 }
 
@@ -102,22 +96,8 @@ impl ScalarUDFImpl for DeltaPartitionTimestamp {
         let array = args.one()?.into_array(number_rows)?;
         let zone = SparkZone::parse(&self.time_zone)?;
         let values = string_array_iter(array.as_ref())?
-            .map(|value| {
-                value
-                    .map(|value| match parse_partition_timestamp(value, &zone) {
-                        Ok(micros) => Ok(Some(micros)),
-                        Err(_) if self.ansi_mode => {
-                            let sql_value = value.replace('\\', "\\\\").replace('\'', "\\'");
-                            exec_err!(
-                                "[CAST_INVALID_INPUT] The value '{sql_value}' of the type \"STRING\" cannot be cast to \"TIMESTAMP\" because it is malformed. Correct the value as per the syntax, or set \"spark.sql.ansi.enabled\" to \"false\" to read it as NULL."
-                            )
-                        }
-                        Err(_) => Ok(None),
-                    })
-                    .transpose()
-                    .map(Option::flatten)
-            })
-            .collect::<Result<TimestampMicrosecondArray>>()?
+            .map(|value| value.and_then(|value| parse_partition_timestamp(value, &zone).ok()))
+            .collect::<TimestampMicrosecondArray>()
             .with_timezone(Arc::clone(&self.label));
         Ok(ColumnarValue::Array(Arc::new(values) as Arc<dyn Array>))
     }
