@@ -55,7 +55,7 @@ impl MemoryCatalogProvider {
         if options.mode.replace_requires_existing() && existing.is_none() {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
-        let location = options.location.ok_or_else(|| {
+        let mut location = options.location.ok_or_else(|| {
             CatalogError::InvalidArgument("replacement requires a table location".into())
         })?;
         let mut properties = Vec::new();
@@ -69,11 +69,14 @@ impl MemoryCatalogProvider {
                     properties: old_properties,
                     ..
                 } if format.eq_ignore_ascii_case(&options.format) => {
-                    if old_location.as_deref() != Some(location.as_str()) {
+                    let Some(old_location) = old_location.as_ref().filter(|old_location| {
+                        sail_common_datafusion::location::same_location(old_location, &location)
+                    }) else {
                         return Err(CatalogError::NotSupported(
                             "relocating a lakehouse table during replacement".into(),
                         ));
-                    }
+                    };
+                    location = old_location.clone();
                     properties = old_properties.clone();
                 }
                 _ => {

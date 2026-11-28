@@ -39,6 +39,13 @@ pub fn parse_absolute_url(raw: &str) -> Option<Url> {
     Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
 }
 
+/// Whether two location strings name the same directory, such as `/t` and `file:/t/`.
+pub fn same_location(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+        || parse_absolute_directory_url(a)
+            .is_some_and(|a| parse_absolute_directory_url(b).is_some_and(|b| a == b))
+}
+
 pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
     if std::path::Path::new(path).is_absolute() {
         return Url::from_file_path(path).ok();
@@ -103,6 +110,24 @@ mod tests {
             assert_eq!(url.as_deref(), Some(expected), "{input}");
             let directory = parse_absolute_directory_url(input).map(String::from);
             assert_eq!(directory, Some(format!("{expected}/")), "{input}");
+        }
+    }
+
+    #[test]
+    fn test_same_location() {
+        for spelling in ["/t", "/t/", "file:/t", "file:///t", "FILE:/t", "file:///t/"] {
+            assert!(same_location("/t", spelling), "{spelling}");
+            assert!(same_location(spelling, "file:/t/"), "{spelling}");
+        }
+        for (a, b) in [
+            ("/t", "/u"),
+            ("/t/a%20b", "/t/a b"),
+            ("s3://a/t", "s3://b/t"),
+            ("rel/t", "/t"),
+            ("file://host/t", "/t"),
+        ] {
+            assert!(!same_location(a, b), "{a}, {b}");
+            assert!(!same_location(b, a), "{b}, {a}");
         }
     }
 }

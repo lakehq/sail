@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
 ROWS = [(1, "a"), (2, "b"), (3, "c")]
 SCHEMA = "a INT, b STRING"
@@ -151,3 +151,38 @@ def test_lakehouse_location_without_authority_is_not_local(spark, location):
     finally:
         spark.sql("DROP TABLE IF EXISTS hadoop_file_uri_s3a")
     _assert_no_local_scheme_dir("s3a")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Needs the Delta and Iceberg formats")
+@pytest.mark.parametrize("data_format", ["delta", "iceberg"])
+@pytest.mark.parametrize(("created", "replaced"), [("{}", "file:{}"), ("file:{}", "{}"), ("{}", "file://{}/")])
+def test_replace_table_at_another_spelling_of_its_location(spark, tmp_path, data_format, created, replaced):
+    path = str(tmp_path / "table")
+    name = f"hadoop_file_uri_replace_{data_format}"
+    create = escape_sql_string_literal(created.format(path))
+    replace = escape_sql_string_literal(replaced.format(path))
+    try:
+        spark.sql(f"CREATE TABLE {name} USING {data_format} LOCATION '{create}' AS SELECT 1 AS a")
+        spark.sql(f"REPLACE TABLE {name} USING {data_format} LOCATION '{replace}' AS SELECT 2 AS a")
+        assert spark.table(name).collect() == [(2,)]
+        assert spark.read.format(data_format).load(path).collect() == [(2,)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Needs the Delta format")
+@pytest.mark.parametrize(("created", "replaced"), [("{}", "file:{}"), ("file:{}", "{}")])
+def test_shallow_clone_onto_another_spelling_of_the_target_location(spark, tmp_path, created, replaced):
+    source = str(tmp_path / "source")
+    target = str(tmp_path / "target")
+    spark.createDataFrame(ROWS, SCHEMA).write.format("delta").save(source)
+    name = "hadoop_file_uri_clone"
+    source_identifier = f"delta.`{escape_sql_identifier(source)}`"
+    try:
+        create = escape_sql_string_literal(created.format(target))
+        replace = escape_sql_string_literal(replaced.format(target))
+        spark.sql(f"CREATE TABLE {name} SHALLOW CLONE {source_identifier} LOCATION '{create}'")
+        spark.sql(f"REPLACE TABLE {name} SHALLOW CLONE {source_identifier} LOCATION '{replace}'")
+        assert sorted(spark.table(name).collect()) == sorted(ROWS)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
