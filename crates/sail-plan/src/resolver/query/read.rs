@@ -535,7 +535,7 @@ impl PlanResolver<'_> {
             temporal_options: origin.temporal_options.clone(),
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
             partition_value_cast: (!is_lake_source).then(|| origin.partition_value_cast.clone()),
-            data_sources: (!is_lake_source).then(|| Arc::as_ptr(data_source_registry) as usize),
+            data_sources: (!is_lake_source).then_some(Arc::as_ptr(data_source_registry) as usize),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(sources) = source_key
