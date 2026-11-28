@@ -197,3 +197,25 @@ def test_delta_timestamp_partition_value_without_offset_in_a_repeated_hour(spark
     assert [row.id for row in frame.where("ts = TIMESTAMP '2024-11-03 01:30:00'").collect()] == [1]
     spark.sql(f"DELETE FROM delta.`{path}` WHERE ts = TIMESTAMP '2024-11-03 01:30:00'").collect()  # noqa: S608
     assert spark.read.format("delta").load(str(path)).count() == 0
+
+
+@pytest.mark.parametrize("session_timezone", ["+05:30:15"], indirect=True)
+def test_delta_timestamp_partition_value_without_offset_in_an_offset_with_seconds(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "table"
+    # TODO: Use a TIMESTAMP literal, which Sail does not resolve yet in an offset with seconds.
+    value = "CAST('2024-01-01 09:00:00' AS TIMESTAMP)"
+    spark.sql(f"SELECT 1 AS id, {value} AS ts").write.format("delta").partitionBy("ts").save(str(path))
+    for log in (path / "_delta_log").glob("*.json"):
+        log.write_text(log.read_text().replace('"2024-01-01T03:29:45.000000Z"', '"2024-01-01 09:00:00.000000"'))
+    assert partition_values((path / "_delta_log").glob("*.json")) == {"2024-01-01 09:00:00.000000"}
+    # Like Delta Lake on Spark, the value without an offset is read as the cast of the string in the
+    # session time zone, including the seconds of the offset.
+    (cast,) = spark.sql(f"SELECT unix_micros({value}) AS micros").collect()
+    assert cast.micros == 1704079785000000
+    for metadata_as_data in ["false", "true"]:
+        frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+        assert [row.micros for row in frame.selectExpr("unix_micros(ts) AS micros").collect()] == [cast.micros]
+        assert [row.id for row in frame.where(f"ts = {value}").collect()] == [1]
+    spark.sql(f"DELETE FROM delta.`{path}` WHERE ts = {value}").collect()  # noqa: S608
+    assert spark.read.format("delta").load(str(path)).count() == 0

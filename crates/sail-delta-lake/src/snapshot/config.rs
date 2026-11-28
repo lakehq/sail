@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use datafusion::common::config::ConfigOptions;
 use object_store::path::Path;
+use sail_common_datafusion::session::time_zone::session_time_zone;
 use serde::{Deserialize, Serialize};
 
 /// Configuration options for loading Delta table snapshots.
@@ -83,14 +84,9 @@ impl DeltaSnapshotConfig {
 }
 
 /// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
-/// session time zone, as Delta-Spark reads it. The Arrow label of the session time zone is read
-/// because workers receive only the label.
+/// session time zone with full Spark offset precision, as Delta-Spark reads it.
 pub(crate) fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
-    options
-        .execution
-        .time_zone
-        .as_ref()
-        .map_or_else(|| "UTC".into(), |time_zone| time_zone.as_str().into())
+    session_time_zone(options).unwrap_or("UTC").into()
 }
 
 impl Default for DeltaSnapshotConfig {
@@ -114,35 +110,36 @@ fn default_parallelism() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::common::Result;
+    use datafusion::arrow::datatypes::{DataType, TimeUnit};
+    use datafusion::common::ScalarValue;
     use datafusion::common::config::ConfigOptions;
     use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
 
     use super::partition_time_zone;
+    use crate::conversion::parse_partition_value;
 
     #[test]
-    fn partition_time_zone_follows_the_spark_session_time_zone() -> Result<()> {
+    fn partition_time_zone_is_the_session_time_zone() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
             partition_time_zone(&ConfigOptions::default()).as_ref(),
             "UTC"
         );
-        for (session, expected) in [
-            ("America/Los_Angeles", "America/Los_Angeles"),
-            ("PST", "America/Los_Angeles"),
-            ("Z", "+00:00"),
-            ("GMT+8", "+08:00"),
-            ("+05:30", "+05:30"),
-            // TODO: Spark reads values in an offset with seconds, which Arrow labels cannot hold.
-            ("+05:30:45", "UTC"),
-        ] {
-            let mut options = ConfigOptions::default();
-            set_spark_session_time_zone(&mut options, session)?;
-            assert_eq!(
-                partition_time_zone(&options).as_ref(),
-                expected,
-                "{session}"
-            );
-        }
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+05:30".parse()?);
+        assert_eq!(partition_time_zone(&options).as_ref(), "+05:30");
+        // The Arrow label of an offset with seconds is UTC, but Spark casts values in the offset.
+        set_spark_session_time_zone(&mut options, "+05:30:45")?;
+        assert_eq!(partition_time_zone(&options).as_ref(), "+05:30:45");
+        let data_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let value = parse_partition_value(
+            "2024-01-01 09:00:00",
+            &data_type,
+            &partition_time_zone(&options),
+        )?;
+        assert_eq!(
+            value,
+            ScalarValue::TimestampMicrosecond(Some(1_704_079_755_000_000), Some("UTC".into()))
+        );
         Ok(())
     }
 }
