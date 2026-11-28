@@ -503,6 +503,65 @@ def test_view_reads_a_timestamp_whose_time_zone_changed(spark, tmp_path, kind, w
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+@pytest.mark.parametrize("fmt", LAKE_FORMATS)
+@pytest.mark.parametrize("kind", ["sql", "dataframe"])
+@pytest.mark.parametrize(
+    ("change", "columns"),
+    [("gained", "`a` INT, `A` INT, `x` INT"), ("retyped", "`a` INT, `A` BIGINT")],
+)
+def test_view_reads_columns_whose_names_differ_only_in_letter_case_by_their_names(
+    spark, tmp_path, fmt, kind, change, columns
+):
+    def write(values, schema, mode=None):
+        writer = spark.createDataFrame(values, schema).write.format(fmt)
+        if mode is not None:
+            writer = writer.mode(mode).option("overwriteSchema", "true")
+        writer.save(path)
+
+    path = str(tmp_path / "table")
+    write([(1, 10), (2, 20)], "`A` INT, `a` INT")
+    view = f"v_{uuid.uuid4().hex}"
+    if kind == "sql":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {fmt}.`{path}`")
+    else:
+        spark.read.format(fmt).load(path).createOrReplaceTempView(view)
+    try:
+        assert rows(spark, f"SELECT * FROM {view}") == [(1, 10), (2, 20)]
+        # The table has the columns in the other order now, and the view resolves its
+        # definition again for the gained or retyped column.
+        values = [(30, 3, 0), (40, 4, 0)] if change == "gained" else [(30, 3), (40, 4)]
+        write(values, columns, mode="overwrite")
+        assert spark.table(view).columns == ["A", "a"]
+        assert rows(spark, f"SELECT * FROM {view}") == [(3, 30), (4, 40)]
+    finally:
+        spark.catalog.dropTempView(view)
+
+
+@pytest.mark.parametrize("fmt", LAKE_FORMATS)
+@pytest.mark.parametrize("kind", ["sql", "dataframe"])
+def test_view_of_all_columns_reads_a_column_gained_whose_name_differs_only_in_letter_case(spark, tmp_path, fmt, kind):
+    path = str(tmp_path / "table")
+    spark.createDataFrame([(1,), (1,), (2,)], "`A` INT").write.format(fmt).save(path)
+    view = f"v_{uuid.uuid4().hex}"
+    if kind == "sql":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT count(*) AS c FROM (SELECT DISTINCT * FROM {fmt}.`{path}`)")
+    else:
+        spark.read.format(fmt).load(path).distinct().groupBy().count().createOrReplaceTempView(view)
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    try:
+        assert rows(spark, f"SELECT * FROM {view}") == [(2,)]
+        spark.conf.set("spark.sql.caseSensitive", "true")
+        try:
+            frame = spark.createDataFrame([(1, 1), (1, 2), (2, 3)], "`A` INT, `a` INT")
+            frame.write.format(fmt).mode("overwrite").option("overwriteSchema", "true").save(path)
+        finally:
+            spark.conf.set("spark.sql.caseSensitive", previous)
+        # The distinct rows of all the columns include the gained column.
+        assert rows(spark, f"SELECT * FROM {view}") == [(3,)]
+    finally:
+        spark.catalog.dropTempView(view)
+
+
 @pytest.mark.parametrize("kind", PLAN_KINDS)
 def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tables, kind):
     table = tables("delta")

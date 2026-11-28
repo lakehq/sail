@@ -12,7 +12,6 @@
 //! one version of the table. Only the columns that the stored plan reads must be as they
 //! were when the view was created.
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -441,7 +440,8 @@ const LOGICAL_TYPE_METADATA_KEYS: [&str; 5] = [
     VARIANT_METADATA_MARKER_KEY,
 ];
 
-/// The field that a field of a stored schema is in a current schema.
+/// The field that a field of a stored schema, or an output of a stored query, is in a current
+/// schema or among the outputs of the current query.
 #[derive(Debug, PartialEq, Eq)]
 enum FieldMatch {
     Found(usize),
@@ -450,54 +450,53 @@ enum FieldMatch {
     Several(Vec<usize>),
 }
 
-/// Matches the fields of a stored schema to those of a current schema. A name that is
-/// written the same way comes first, by position among the fields of that name. A name
-/// that is not is then matched without letter case, unless the names are case sensitive,
-/// among the fields that no other name matched.
+/// Matches the fields of a stored schema to those of a current schema (see [`match_names`]).
 fn match_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> Vec<FieldMatch> {
+    fn names(fields: &Fields) -> Vec<&str> {
+        fields.iter().map(|x| x.name().as_str()).collect()
+    }
+    match_names(&names(stored), &names(current), case_sensitive)
+}
+
+/// Matches stored names to current names. A name that is written the same way comes first,
+/// by position among the names that are written that way. A name that is not is then matched
+/// without letter case, unless the names are case sensitive, among the names that no other
+/// name matched.
+fn match_names(stored: &[&str], current: &[&str], case_sensitive: bool) -> Vec<FieldMatch> {
     let mut exact: HashMap<&str, VecDeque<usize>> = HashMap::new();
-    for (i, field) in current.iter().enumerate() {
-        exact.entry(field.name()).or_default().push_back(i);
+    for (i, name) in current.iter().enumerate() {
+        exact.entry(name).or_default().push_back(i);
     }
     let mut claimed = vec![false; current.len()];
     let mut matches = stored
         .iter()
-        .map(|field| {
-            match exact
-                .get_mut(field.name().as_str())
-                .and_then(VecDeque::pop_front)
-            {
+        .map(
+            |name| match exact.get_mut(name).and_then(VecDeque::pop_front) {
                 Some(i) => {
                     claimed[i] = true;
                     FieldMatch::Found(i)
                 }
                 None => FieldMatch::Missing,
-            }
-        })
+            },
+        )
         .collect::<Vec<_>>();
     if case_sensitive {
         return matches;
     }
     // Names that differ only in letter case compete for the same fields.
     let mut unmatched: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, field) in stored.iter().enumerate() {
+    for (i, name) in stored.iter().enumerate() {
         if matches[i] == FieldMatch::Missing {
-            unmatched
-                .entry(field.name().to_lowercase())
-                .or_default()
-                .push(i);
+            unmatched.entry(name.to_lowercase()).or_default().push(i);
         }
     }
     if unmatched.is_empty() {
         return matches;
     }
     let mut unclaimed: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, field) in current.iter().enumerate() {
+    for (i, name) in current.iter().enumerate() {
         if !claimed[i] {
-            unclaimed
-                .entry(field.name().to_lowercase())
-                .or_default()
-                .push(i);
+            unclaimed.entry(name.to_lowercase()).or_default().push(i);
         }
     }
     for (name, fields) in unmatched {
@@ -513,16 +512,6 @@ fn match_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> Vec<
         }
     }
     matches
-}
-
-fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
-    a == b
-        || (!case_sensitive
-            && if a.is_ascii() && b.is_ascii() {
-                a.eq_ignore_ascii_case(b)
-            } else {
-                a.to_lowercase() == b.to_lowercase()
-            })
 }
 
 /// Returns whether two string types or two binary types store the same values in other ways.
@@ -1114,27 +1103,42 @@ impl PlanResolver<'_> {
         state.swap_statement(&mut query_state);
         let query = query?;
         let names = Self::get_field_names(query.schema(), state)?;
-        let names_like = |names: &[String], name: &str| {
-            names
-                .iter()
-                .enumerate()
-                .filter(|(_, x)| same_name(x, name, case_sensitive))
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>()
+        let stored = definition
+            .output_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let current = names.iter().map(String::as_str).collect::<Vec<_>>();
+        // The query must have as many outputs of each name as when the view was created, as
+        // the view reads an output by its name and its position among the outputs of the name.
+        let key = |name: &str| {
+            if case_sensitive {
+                name.to_string()
+            } else {
+                name.to_lowercase()
+            }
         };
-        let outputs = definition.output_names.iter().zip(plan.schema().fields());
-        let outputs = outputs
-            .enumerate()
-            .map(|(i, (name, field))| {
-                // The output of the name at the position of the stored output among those
-                // of its name, if the query has as many outputs of the name.
-                let stored = names_like(&definition.output_names, name);
-                let found = names_like(&names, name);
-                if found.len() != stored.len() {
+        let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for name in &stored {
+            counts.entry(key(name)).or_default().0 += 1;
+        }
+        for name in &current {
+            if let Some((_, count)) = counts.get_mut(&key(name)) {
+                *count += 1;
+            }
+        }
+        if counts.values().any(|(stored, current)| stored != current) {
+            return Ok(None);
+        }
+        // An output that is written the same way comes before one that differs in letter case,
+        // so that outputs whose names differ only in letter case keep their values.
+        let outputs = match_names(&stored, &current, case_sensitive)
+            .into_iter()
+            .zip(plan.schema().fields())
+            .map(|(found, field)| {
+                let FieldMatch::Found(j) = found else {
                     return None;
-                }
-                let ordinal = stored.iter().position(|x| *x == i)?;
-                let j = *found.get(ordinal)?;
+                };
                 let column = Column::from(query.schema().qualified_field(j));
                 Some(Expr::Column(column).alias(field.name()))
             })
@@ -1392,40 +1396,29 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Whether `current` has a field, also in a struct, that `stored` does not have. A field
-/// matches the first stored field of its name (see [`same_name`]).
+/// Whether `current` has a field, also in a struct, that `stored` does not have. A current
+/// field is new if no stored field matches it (see [`match_fields`]).
 fn has_new_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> bool {
-    // A name matches the names that it is equal to, or that have its lowercase letters if
-    // the letter case is ignored, as `same_name` matches them.
-    fn key(name: &str, case_sensitive: bool) -> Cow<'_, str> {
-        if case_sensitive {
-            Cow::Borrowed(name)
-        } else {
-            Cow::Owned(name.to_lowercase())
-        }
-    }
     if stored == current {
         return false;
     }
-    let mut first = HashMap::with_capacity(stored.len());
-    for field in stored.iter() {
-        first
-            .entry(key(field.name(), case_sensitive))
-            .or_insert(field);
-    }
-    current.iter().any(|field| {
-        match (
-            first.get(key(field.name(), case_sensitive).as_ref()),
-            field.data_type(),
-        ) {
-            (None, _) => true,
-            (Some(old), DataType::Struct(new)) => match old.data_type() {
-                DataType::Struct(old) => has_new_fields(old, new, case_sensitive),
-                _ => false,
-            },
-            _ => false,
+    let mut claimed = vec![false; current.len()];
+    for (field, found) in stored
+        .iter()
+        .zip(match_fields(stored, current, case_sensitive))
+    {
+        let FieldMatch::Found(i) = found else {
+            continue;
+        };
+        claimed[i] = true;
+        if let (DataType::Struct(old), DataType::Struct(new)) =
+            (field.data_type(), current[i].data_type())
+            && has_new_fields(old, new, case_sensitive)
+        {
+            return true;
         }
-    })
+    }
+    claimed.contains(&false)
 }
 
 /// Returns the quoted name of a temporary view.
@@ -1863,7 +1856,8 @@ mod tests {
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
     use super::{
-        FieldMatch, Fit, Read, TableOrigin, ViewTableReference, has_new_fields, read_columns,
+        FieldMatch, Fit, Read, TableOrigin, ViewTableReference, has_new_fields, match_names,
+        read_columns,
     };
     use crate::resolver::PlanResolver;
     use crate::resolver::query::temp_view::CatalogTableOrigin;
@@ -2376,6 +2370,14 @@ mod tests {
             assert!(!has_new_fields(&stored, &current, false));
             assert!(has_new_fields(&stored, &current, true));
         }
+        // A field whose name differs only in letter case from a stored field that another
+        // field matches exactly is new.
+        let stored = Fields::from(vec![field("A", DataType::Int32)]);
+        let current = Fields::from(vec![
+            field("A", DataType::Int32),
+            field("a", DataType::Int32),
+        ]);
+        assert!(has_new_fields(&stored, &current, false));
     }
 
     #[test]
@@ -2459,6 +2461,26 @@ mod tests {
         assert_eq!(
             match_columns(&stored, &current, false),
             Err(vec!["`A` Int32 has been removed".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_names_that_differ_only_in_letter_case_match_exactly_first() {
+        assert_eq!(
+            match_names(&["A", "a"], &["a", "A", "x"], false),
+            vec![FieldMatch::Found(1), FieldMatch::Found(0)]
+        );
+        assert_eq!(
+            match_names(&["A", "b"], &["a", "B", "x"], false),
+            vec![FieldMatch::Found(0), FieldMatch::Found(1)]
+        );
+        assert_eq!(
+            match_names(&["a"], &["A", "A"], false),
+            vec![FieldMatch::Several(vec![0, 1])]
+        );
+        assert_eq!(
+            match_names(&["A", "a"], &["a", "x"], true),
+            vec![FieldMatch::Missing, FieldMatch::Found(0)]
         );
     }
 
