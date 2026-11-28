@@ -1672,7 +1672,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
         if existing
             && options.location.as_ref().is_some_and(|location| {
-                location.trim_end_matches('/') != metadata.location.trim_end_matches('/')
+                !sail_common_datafusion::location::same_location(location, &metadata.location)
             })
         {
             return Err(CatalogError::NotSupported(

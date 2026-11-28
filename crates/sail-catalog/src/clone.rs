@@ -66,7 +66,9 @@ impl StageTableOptions {
         };
         let (destination, external) = if let Some(status) = existing {
             let (old_location, external) = table_location(&status.kind)?;
-            if location.as_deref().is_some_and(|path| path != old_location) {
+            if location.as_deref().is_some_and(|path| {
+                !sail_common_datafusion::location::same_location(path, old_location)
+            }) {
                 return Err(CatalogError::NotSupported(
                     "relocating a Delta table during SHALLOW CLONE".into(),
                 ));

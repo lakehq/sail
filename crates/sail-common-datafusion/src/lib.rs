@@ -18,6 +18,7 @@ pub mod lakeprocedure;
 pub mod lakerelation;
 pub mod lakesource;
 pub mod literal;
+pub mod location;
 pub mod logical_expr;
 pub mod logical_rewriter;
 pub mod metadata;

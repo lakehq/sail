@@ -457,11 +457,22 @@ enum ReadPathSyntax {
     HadoopLiteral,
 }
 
-/// The path in a Hadoop file URI with one slash after the scheme.
-fn hadoop_local_uri_path(uri: &str) -> Option<&str> {
+/// The scheme and path of a URI without an authority, as Hadoop writes it (`file:/path`),
+/// or of a bare scheme (`file:`) with an empty path.
+/// Single-letter schemes are left alone so that Windows drive letters stay paths.
+fn uri_without_authority(uri: &str) -> Option<(&str, &str)> {
     let (scheme, path) = uri.split_once(':')?;
-    (scheme.eq_ignore_ascii_case("file") && path.starts_with('/') && !path.starts_with("//"))
-        .then_some(path)
+    let valid_scheme = scheme.len() > 1
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    let no_authority = path.is_empty() || (path.starts_with('/') && !path.starts_with("//"));
+    (valid_scheme && no_authority).then_some((scheme, path))
+}
+
+fn is_http_scheme(scheme: &str) -> bool {
+    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
 }
 
 impl GlobUrl {
@@ -478,10 +489,16 @@ impl GlobUrl {
             return Self::parse_file_path(s, syntax);
         }
         // Hadoop also accepts file:/absolute/path without an authority.
-        if syntax != ReadPathSyntax::UrlGlob
-            && let Some(path) = hadoop_local_uri_path(s)
-        {
-            return Self::parse_file_path(path, syntax);
+        // Hadoop reads such a URI with an empty authority, as in `s3a:///bucket/key`.
+        if let Some((scheme, path)) = uri_without_authority(s) {
+            if path.is_empty() || is_http_scheme(scheme) {
+                return not_impl_err!("URL without authority: {s}");
+            }
+            if scheme.eq_ignore_ascii_case("file") && syntax != ReadPathSyntax::UrlGlob {
+                return Self::parse_file_path(path, syntax);
+            }
+            // The `scheme:///` spelling keeps URI escapes and globs the same for both forms.
+            return Self::parse_with_syntax(&format!("{scheme}://{path}"), syntax);
         }
         let url = RawGlobUrl::parser()
             .parse(s)
@@ -496,6 +513,10 @@ impl GlobUrl {
                 query,
                 fragment,
             } => {
+                // The URL parser would take the first path segment as the host.
+                if authority.is_empty() && is_http_scheme(scheme) {
+                    return not_impl_err!("URL without authority: {s}");
+                }
                 // `"/path"` is a placeholder that will be replaced after parsing the URL.
                 // The actual path may contain special characters such as `#` that will be
                 // percent-encoded after replacing the path placeholder.
@@ -1000,41 +1021,6 @@ pub(crate) fn resolve_base_directory_url(path: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Parse an absolute directory location without glob expansion or filesystem probes.
-/// Only the path gets a trailing separator; URL authority, escapes, query and fragment stay intact.
-pub fn parse_absolute_directory_url(path: &str) -> Option<Url> {
-    let mut url = parse_absolute_url(path).or_else(|| file_url_from_absolute_path(path))?;
-    if !url.path().ends_with('/') {
-        url.set_path(&format!("{}/", url.path()));
-    }
-    Some(url)
-}
-
-pub fn parse_absolute_url(raw: &str) -> Option<Url> {
-    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
-}
-
-pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
-    if std::path::Path::new(path).is_absolute() {
-        return Url::from_file_path(path).ok();
-    }
-    windows_drive_path_to_file_url(path)
-}
-
-fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
-    let bytes = path.as_bytes();
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || !matches!(bytes[2], b'/' | b'\\')
-    {
-        return None;
-    }
-
-    let path = path.replace('\\', "/");
-    Url::parse(&format!("file:///{path}")).ok()
-}
-
 /// Resolve aliases even when the last components do not exist yet.
 pub fn canonical_local_path(url: &Url) -> Result<PathBuf> {
     let path = url
@@ -1069,12 +1055,6 @@ pub fn resolve_table_url(path: String) -> Result<Url> {
     if path.is_empty() {
         return plan_err!("table path cannot be empty");
     }
-    // Use the URL parser's file:/// spelling for Hadoop's file:/ locations.
-    // This keeps URI escaping and glob validation identical for both spellings.
-    let path = match hadoop_local_uri_path(&path) {
-        Some(local) => format!("file://{local}"),
-        None => path,
-    };
     let path = fill_directory_root_path(path)?;
     let raw_path = if std::path::Path::new(&path).is_absolute() {
         path.as_str()
@@ -1142,6 +1122,7 @@ pub async fn rewrite_directory_url(mut url: GlobUrl, session: &dyn Session) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse_absolute_directory_url;
 
     #[test]
     fn test_pattern_segment_parser() {
@@ -1507,6 +1488,121 @@ mod tests {
         let url = resolve_table_url("file:/tmp/table%20name".into())?;
         assert_eq!(url, resolve_table_url("file:///tmp/table%20name".into())?);
         assert_eq!(url.as_str(), "file:///tmp/table%20name/");
+        Ok(())
+    }
+
+    const READ_PATH_SYNTAXES: [ReadPathSyntax; 3] = [
+        ReadPathSyntax::UrlGlob,
+        ReadPathSyntax::HadoopGlob,
+        ReadPathSyntax::HadoopLiteral,
+    ];
+
+    fn parse_urls(s: &str, syntax: ReadPathSyntax) -> Result<Vec<GlobUrl>> {
+        Ok(GlobUrl::parse_with_syntax(s, syntax)?.urls)
+    }
+
+    #[test]
+    fn test_hadoop_file_uri_is_absolute_local_path() -> Result<()> {
+        for syntax in READ_PATH_SYNTAXES {
+            for path in [
+                "/tmp/t",
+                "/tmp/a%20b/",
+                "/tmp/t/*.parquet",
+                "/tmp/{a,b}/c?",
+            ] {
+                for scheme in ["file", "FILE"] {
+                    let hadoop = format!("{scheme}:{path}");
+                    let uri = format!("file://{path}");
+                    assert_eq!(parse_urls(&hadoop, syntax)?, parse_urls(&uri, syntax)?, "{hadoop}");
+                }
+            }
+        }
+        let url = resolve_listing_writer_url("file:/tmp/t".into())?;
+        assert_eq!(url.as_str(), "file:///tmp/t/");
+        Ok(())
+    }
+
+    #[test]
+    fn test_uri_without_authority_has_an_empty_authority() -> Result<()> {
+        for scheme in [
+            "s3",
+            "s3a",
+            "S3A",
+            "gs",
+            "abfss",
+            "hdfs",
+            "memory",
+            "hf",
+            "oss",
+            "a+b.c-1",
+        ] {
+            for path in ["/b/k", "/b/k/", "/b/k/*.parquet"] {
+                let hadoop = format!("{scheme}:{path}");
+                let uri = format!("{scheme}://{path}");
+                for syntax in READ_PATH_SYNTAXES {
+                    assert_eq!(parse_urls(&hadoop, syntax)?, parse_urls(&uri, syntax)?, "{hadoop}");
+                }
+                if !path.contains('*') {
+                    let writer_url = resolve_listing_writer_url(hadoop.clone())?;
+                    assert_eq!(writer_url, resolve_listing_writer_url(uri)?, "{hadoop}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_uri_without_authority_is_rejected_without_a_path_or_for_http() {
+        for input in [
+            "file:",
+            "FILE:",
+            "s3a:",
+            "http:/x",
+            "https:/x",
+            "HTTP:/x",
+            "http:///x",
+            "https:///x",
+        ] {
+            let expected = format!("URL without authority: {input}");
+            let is_expected = |error| {
+                matches!(error, DataFusionError::NotImplemented(message) if message == expected)
+            };
+            for syntax in READ_PATH_SYNTAXES {
+                assert!(parse_urls(input, syntax).is_err_and(is_expected), "{input}");
+            }
+            for resolve in [resolve_listing_writer_url, resolve_table_url] {
+                assert!(resolve(input.to_string()).is_err_and(is_expected), "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_paths_that_look_like_uris_without_authority_are_unchanged() -> Result<()> {
+        let cwd = std::env::current_dir()?;
+        #[cfg(unix)]
+        let relative = ["C:/x", "my data:/x", "_x:/y", "1ab:/x", "rel/x"].as_slice();
+        #[cfg(not(unix))]
+        let relative = ["my data:/x", "_x:/y", "1ab:/x", "rel/x"].as_slice();
+        for input in relative {
+            let expected = Url::from_file_path(cwd.join(input))
+                .map_err(|()| plan_datafusion_err!("file path: {input}"))?;
+            assert_eq!(GlobUrl::parse(input)?.one()?.base, expected, "{input}");
+        }
+        for (input, expected) in [
+            ("file://host/x", "file://host/x"),
+            ("file:///x", "file:///x"),
+            ("s3://b/k", "s3://b/k"),
+            ("s3a:///k", "s3a:///k"),
+            ("http://h/x", "http://h/x"),
+        ] {
+            assert_eq!(GlobUrl::parse(input)?.one()?.base.as_str(), expected, "{input}");
+        }
+        #[cfg(unix)]
+        assert_eq!(GlobUrl::parse("/x")?.one()?.base.as_str(), "file:///x");
+        assert!(GlobUrl::parse("file:x").is_err_and(|error| matches!(
+            error,
+            DataFusionError::NotImplemented(message) if message == "URL without authority: file:x"
+        )));
         Ok(())
     }
 
