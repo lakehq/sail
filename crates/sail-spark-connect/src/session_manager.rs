@@ -11,6 +11,7 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+use sail_common_datafusion::session::ansi_mode::set_spark_session_ansi_mode;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
@@ -72,6 +73,7 @@ impl ServerSessionMutator for SparkSessionMutator {
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         let mut config = config;
         set_spark_session_time_zone(config.options_mut(), &plan_config.session_timezone)?;
+        set_spark_session_ansi_mode(config.options_mut(), plan_config.ansi_mode);
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(spark)

@@ -3,8 +3,10 @@
 import json
 import re
 import shutil
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -55,6 +57,19 @@ def check_timestamp_ntz_append(spark, path, wall_clock, micros, partition=""):
         assert spark.sql(f"SELECT id FROM ntz_cast WHERE ts = {cast}").count() == 2  # noqa: S608
     finally:
         spark.sql("DROP TABLE IF EXISTS ntz_cast").collect()
+
+
+# A TIMESTAMP partition value that neither Spark's cast nor Arrow's cast parses.
+UNPARSED_TIMESTAMP = "2024-01-01T09:00:00 Q"
+
+
+@contextmanager
+def ansi_mode(spark, *, enabled):
+    spark.conf.set("spark.sql.ansi.enabled", str(enabled).lower())
+    try:
+        yield
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
 
 
 def utc_micros(hour):
@@ -458,10 +473,18 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
             )
     finally:
         spark.sql("DROP TABLE IF EXISTS unparsed").collect()
-    # Spark's cast rejects a lowercase `t` or `z`, so Delta Lake on Spark reads the value as NULL.
+    # Neither Spark's cast nor the Arrow cast of earlier Sail versions parses the value, so Delta Lake on
+    # Spark reads it as NULL.
     for log in (path / "_delta_log").glob("*.json"):
-        log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', '"2024-01-01t09:00:00z"'))
+        log.write_text(log.read_text().replace('"2024-01-01T09:00:00.000000Z"', f'"{UNPARSED_TIMESTAMP}"'))
+    # Like Delta Lake on Spark, a partition filter in ANSI mode rejects the value.
+    with pytest.raises(Exception, match="CAST_INVALID_INPUT"):
+        spark.read.format("delta").load(str(path)).where("ts IS NULL").collect()
+    with ansi_mode(spark, enabled=False):
+        check_timestamp_partition_values_that_do_not_parse(spark, path, june)
 
+
+def check_timestamp_partition_values_that_do_not_parse(spark, path, june):
     def rows():
         frame = spark.read.format("delta").load(str(path)).selectExpr("id", "unix_micros(ts) AS micros")
         return sorted((row.id, row.micros) for row in frame.collect())
@@ -491,7 +514,7 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
         for row in checkpoint
         if row["add"]
     }
-    assert parsed == {"2024-01-01t09:00:00z": None, "2024-06-01T07:00:00.000000Z": datetime(2024, 6, 1, 7, tzinfo=UTC)}
+    assert parsed == {UNPARSED_TIMESTAMP: None, "2024-06-01T07:00:00.000000Z": datetime(2024, 6, 1, 7, tzinfo=UTC)}
     # Like Delta Lake on Spark, a dynamic overwrite of the NULL partition keeps the files whose value does
     # not parse.
     overwrite("SELECT 8 AS id, CAST(NULL AS TIMESTAMP) AS ts")
@@ -500,3 +523,131 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
     assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (8, None)]
     overwrite("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts")
     assert rows() == [(1, None), (2, None), (6, june), (8, None)]
+
+
+def write_partitioned_log(path, data_type, values):
+    """Writes a Delta table `(id INT, v INT, p <data_type>) PARTITIONED BY (p)` with one file of one row
+    per raw partition value in `values`, for ids 1, 2 and so on."""
+    (path / "_delta_log").mkdir(parents=True)
+    fields = [
+        {"name": name, "type": kind, "nullable": True, "metadata": {}}
+        for name, kind in [("id", "integer"), ("v", "integer"), ("p", data_type)]
+    ]
+    actions = [
+        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+        {
+            "metaData": {
+                "id": "partition-values",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": json.dumps({"type": "struct", "fields": fields}),
+                "partitionColumns": ["p"],
+                "configuration": {},
+                "createdTime": 0,
+            }
+        },
+    ]
+    for id_, value in enumerate(values, 1):
+        name = f"part-{id_}.parquet"
+        pq.write_table(
+            pa.table({"id": pa.array([id_], pa.int32()), "v": pa.array([id_ * 10], pa.int32())}), path / name
+        )
+        stats = {"numRecords": 1, "minValues": {"id": id_}, "maxValues": {"id": id_}, "nullCount": {"id": 0}}
+        actions.append(
+            {
+                "add": {
+                    "path": name,
+                    "partitionValues": {"p": value},
+                    "size": (path / name).stat().st_size,
+                    "modificationTime": 0,
+                    "dataChange": True,
+                    "stats": json.dumps(stats),
+                }
+            }
+        )
+    (path / "_delta_log" / f"{0:020}.json").write_text("".join(json.dumps(action) + "\n" for action in actions))
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+@pytest.mark.parametrize(
+    ("data_type", "bad", "good", "literal"),
+    [
+        ("decimal(5,2)", "-1.-25", "2.50", "2.50"),
+        ("integer", "abc", "2", "2"),
+        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z", "TIMESTAMP '2024-01-01 09:00:00'"),
+    ],
+    ids=["decimal", "integer", "timestamp"],
+)
+def test_delta_partition_filters_follow_ansi_mode_for_values_that_do_not_parse(
+    spark, tmp_path, session_timezone, ansi, data_type, bad, good, literal
+):
+    """Like Delta Lake on Spark, a partition value that does not parse reads as NULL, and a partition
+    filter casts it as the session does: an error in ANSI mode, NULL otherwise."""
+    _ = session_timezone
+    path = tmp_path / "table"
+    write_partitioned_log(path, data_type, [bad, bad, good, None])
+    log = sorted((path / "_delta_log").glob("*.json"))
+    with ansi_mode(spark, enabled=ansi):
+        frame = spark.read.format("delta").load(str(path))
+        assert sorted((row.id, row.p is None) for row in frame.collect()) == [
+            (1, True),
+            (2, True),
+            (3, False),
+            (4, True),
+        ]
+        assert sorted(row.id for row in frame.where("v > 0").collect()) == [1, 2, 3, 4]
+        for metadata_as_data in ["false", "true"]:
+            frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+            for condition, expected in [("p IS NULL", [1, 2, 4]), (f"p = {literal}", [3])]:
+                if ansi:
+                    with pytest.raises(Exception, match=re.escape(bad)):
+                        frame.where(condition).collect()
+                else:
+                    assert sorted(row.id for row in frame.where(condition).collect()) == expected
+        delete = f"DELETE FROM delta.`{path}` WHERE p IS NULL"  # noqa: S608
+        if ansi:
+            with pytest.raises(Exception, match=re.escape(bad)):
+                spark.sql(delete).collect()
+            assert sorted((path / "_delta_log").glob("*.json")) == log
+        else:
+            spark.sql(delete).collect()
+            assert [row.id for row in spark.read.format("delta").load(str(path)).collect()] == [3]
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+def test_delta_timestamp_partition_values_in_spellings_of_earlier_sail_versions(
+    spark, tmp_path, session_timezone, ansi
+):
+    """TIMESTAMP partition values in spellings that only the Arrow cast of earlier Sail versions parses
+    keep the instant those versions read, a value without a zone in the session time zone."""
+    _ = session_timezone
+    path = tmp_path / "table"
+    with_zone = [
+        "2024-01-01t09:00:00Z",
+        "2024-01-01T09:00:00z",
+        "2024-01-01 09:00:00z",
+        "2024-01-01T090000Z",
+        "2024-01-01T09:00Z",
+    ]
+    without_zone = ["2024-01-01t09:00:00", "2024-01-01 090000"]
+    write_partitioned_log(path, "timestamp", with_zone + without_zone)
+    nine = utc_micros(9)
+    wall_clock = nine if spark.conf.get("spark.sql.session.timeZone") == "UTC" else utc_micros(17)
+    expected = dict.fromkeys(range(1, 6), nine) | {6: wall_clock, 7: wall_clock}
+    with ansi_mode(spark, enabled=ansi):
+        for metadata_as_data in ["false", "true"]:
+            frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+            assert {row.id: row.micros for row in frame.selectExpr("id", "unix_micros(p) AS micros").collect()} == (
+                expected
+            )
+            selected = frame.where(f"p = timestamp_micros({nine})").collect()
+            assert sorted(row.id for row in selected) == sorted(
+                id_ for id_, micros in expected.items() if micros == nine
+            )
+        spark.sql(f"OPTIMIZE delta.`{path}`").collect()
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE p = timestamp_micros({nine})").collect()  # noqa: S608
+        left = spark.read.format("delta").load(str(path)).selectExpr("id", "unix_micros(p) AS micros").collect()
+        assert {row.id: row.micros for row in left} == {
+            id_: micros for id_, micros in expected.items() if micros != nine
+        }

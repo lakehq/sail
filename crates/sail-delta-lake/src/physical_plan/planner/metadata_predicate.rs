@@ -16,7 +16,8 @@ use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunctio
 use datafusion::logical_expr::{Expr, Operator, ScalarUDF, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
-use sail_function::scalar::datetime::timestamp::Timestamp;
+use sail_common_datafusion::session::ansi_mode::spark_session_ansi_mode;
+use sail_function::scalar::datetime::partition_timestamp::DeltaPartitionTimestamp;
 
 use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
@@ -82,6 +83,7 @@ pub(crate) fn build_metadata_filter(
         &partition_columns,
         logical_schema,
         snapshot.partition_time_zone(),
+        spark_session_ansi_mode(session.config().options()),
     )?;
     let df_schema = input.schema().to_dfschema()?;
     let physical_expr = simplify_expr(session, &df_schema, predicate)?;
@@ -93,6 +95,7 @@ fn type_partition_columns(
     partition_columns: &[String],
     logical_schema: &ArrowSchema,
     time_zone: &str,
+    ansi_mode: bool,
 ) -> Result<Expr> {
     // Replay carries raw strings for Add decoding; only predicate inputs use logical types.
     predicate
@@ -109,15 +112,18 @@ fn type_partition_columns(
                 .clone();
             let mut value = nullif(expr, lit(""));
             // Parse a value as `PartitionValueParser` does: a TIMESTAMP value in the session time
-            // zone, and a value that does not parse as NULL.
+            // zone, and a value that does not parse as NULL, or as an error in ANSI mode, as
+            // Delta-Spark casts partition values in its filters.
             if let ArrowDataType::Timestamp(_, Some(_)) = data_type {
-                let parse = Timestamp::try_new(Some(Arc::from(time_zone)), false, false)?;
+                let parse = DeltaPartitionTimestamp::new(Arc::from(time_zone), ansi_mode);
                 value = ScalarUDF::from(parse).call(vec![value]);
             }
-            Ok(Transformed::yes(Expr::TryCast(TryCast::new(
-                Box::new(value),
-                data_type,
-            ))))
+            let value = Box::new(value);
+            Ok(Transformed::yes(if ansi_mode {
+                Expr::Cast(Cast::new(value, data_type))
+            } else {
+                Expr::TryCast(TryCast::new(value, data_type))
+            }))
         })
         .map(|transformed| transformed.data)
 }
@@ -736,8 +742,13 @@ mod tests {
             ]);
             let predicate = Expr::Column(LogicalColumn::new_unqualified("p"))
                 .gt(Expr::Column(LogicalColumn::new_unqualified("q")));
-            let predicate =
-                type_partition_columns(predicate, &partition_columns, &logical_schema, "UTC")?;
+            let predicate = type_partition_columns(
+                predicate,
+                &partition_columns,
+                &logical_schema,
+                "UTC",
+                true,
+            )?;
             let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
             let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
             assert_eq!(
@@ -749,8 +760,8 @@ mod tests {
     }
 
     /// TIMESTAMP partition values parse as the scans parse them: without an offset, as a wall
-    /// clock in the session time zone, the first instant when it occurs twice, and as NULL when
-    /// they do not parse.
+    /// clock in the session time zone, the first instant when it occurs twice, a spelling that
+    /// only Arrow's cast accepts as Arrow reads it, and as NULL when they do not parse.
     #[test]
     fn replay_timestamp_partition_values_use_the_session_time_zone() -> Result<()> {
         let batch = RecordBatch::try_from_iter(vec![(
@@ -787,6 +798,7 @@ mod tests {
             &["ts".to_string()],
             &logical_schema,
             "America/Los_Angeles",
+            false,
         )?;
         let ctx = SessionContext::new();
         let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
@@ -799,16 +811,17 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                None,
+                Some(true),
                 None,
             ])
         );
         Ok(())
     }
 
-    /// Partition values of other types that do not parse are NULL, as the scans read them.
+    /// Partition values that do not parse are NULL, as the scans read them, and an error in ANSI
+    /// mode, for every row and whatever the rest of the predicate selects.
     #[test]
-    fn replay_partition_values_that_do_not_parse_are_null() -> Result<()> {
+    fn replay_partition_values_that_do_not_parse_follow_ansi_mode() -> Result<()> {
         let batch = RecordBatch::try_from_iter(vec![
             (
                 "n",
@@ -818,24 +831,46 @@ mod tests {
                 "d",
                 Arc::new(StringArray::from(vec!["2024-02-28", "2024-02-30", ""])) as Arc<_>,
             ),
+            (
+                "ts",
+                Arc::new(StringArray::from(vec![
+                    "2024-01-01 09:00:00",
+                    "2024-01-01T09:00:00 Q",
+                    "",
+                ])) as Arc<_>,
+            ),
         ])?;
         let logical_schema = ArrowSchema::new(vec![
             Field::new("n", ArrowDataType::Int32, true),
             Field::new("d", ArrowDataType::Date32, true),
+            Field::new(
+                "ts",
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
         ]);
-        for column in ["n", "d"] {
+        let partition_columns = ["n".to_string(), "d".to_string(), "ts".to_string()];
+        let ctx = SessionContext::new();
+        let evaluate = |predicate: Expr, ansi_mode: bool| -> Result<Arc<dyn Array>> {
             let predicate = type_partition_columns(
-                Expr::Column(LogicalColumn::new_unqualified(column)).is_null(),
-                &["n".to_string(), "d".to_string()],
+                predicate,
+                &partition_columns,
                 &logical_schema,
                 "UTC",
+                ansi_mode,
             )?;
-            let ctx = SessionContext::new();
             let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
-            let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+            physical.evaluate(&batch)?.into_array(batch.num_rows())
+        };
+        for column in ["n", "d", "ts"] {
+            let column = Expr::Column(LogicalColumn::new_unqualified(column));
             assert_eq!(
-                actual.as_ref(),
+                evaluate(column.clone().is_null(), false)?.as_ref(),
                 &datafusion::arrow::array::BooleanArray::from(vec![false, true, true]),
+                "{column}"
+            );
+            assert!(
+                evaluate(column.clone().is_null(), true).is_err(),
                 "{column}"
             );
         }

@@ -21,6 +21,7 @@ use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
+use sail_common_datafusion::session::ansi_mode::spark_session_ansi_mode;
 
 use crate::conversion::{PartitionValueParser, ScalarConverter};
 use crate::schema::arrow_field_physical_name;
@@ -136,7 +137,8 @@ pub(crate) fn select_files_for_limit(adds: &[Add], limit: usize) -> Vec<Add> {
     selected
 }
 
-/// Evaluate an exact partition predicate on one metadata row per file.
+/// Evaluate an exact partition predicate on one metadata row per file. A partition value that does
+/// not parse is NULL, or an error in ANSI mode, as Delta-Spark casts partition values in filters.
 pub(crate) fn partition_filter_mask(
     session: &dyn Session,
     snapshot: &DeltaSnapshot,
@@ -144,6 +146,7 @@ pub(crate) fn partition_filter_mask(
     adds: &[Add],
     predicate: Expr,
 ) -> Result<BooleanArray> {
+    let ansi_mode = spark_session_ansi_mode(session.config().options());
     let mut fields = Vec::new();
     let mut columns = Vec::new();
     let referenced_columns = predicate.column_refs();
@@ -165,9 +168,13 @@ pub(crate) fn partition_filter_mask(
                     .partition_values
                     .get(physical_name)
                     .and_then(Option::as_deref);
-                parser.parse(raw)
+                if ansi_mode {
+                    parser.parse_strict(name, raw)
+                } else {
+                    Ok(parser.parse(raw))
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let column = if values.is_empty() {
             new_empty_array(field.data_type())
         } else {
@@ -194,13 +201,15 @@ pub(crate) fn partition_filter_mask(
 
 /// Prune a set of `Add` actions using a DataFusion physical predicate and per-file stats.
 ///
-/// Returns a boolean mask aligned with `adds` where `true` means "keep".
+/// Returns a boolean mask aligned with `adds` where `true` means "keep". In ANSI mode, a partition
+/// value of a referenced column that does not parse is an error, as in [`partition_filter_mask`].
 pub(crate) fn prune_adds_by_physical_predicate(
     adds: &[Add],
     table_schema: SchemaRef,
     predicate: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
     column_mapping_mode: ColumnMappingMode,
     time_zone: &str,
+    ansi_mode: bool,
 ) -> Result<Vec<bool>> {
     if adds.is_empty() {
         return Ok(vec![]);
@@ -213,6 +222,7 @@ pub(crate) fn prune_adds_by_physical_predicate(
         referenced_columns,
         column_mapping_mode,
         time_zone,
+        ansi_mode,
     )?;
 
     let pruning_predicate = PruningPredicateBuilder::new()
@@ -237,6 +247,7 @@ struct AddStatsPruningStatistics<'adds> {
     referenced_columns: std::collections::HashSet<String>,
     materialized_columns: std::collections::HashMap<String, MaterializedColumnStats>,
     column_mapping_mode: ColumnMappingMode,
+    ansi_mode: bool,
 }
 
 impl<'adds> AddStatsPruningStatistics<'adds> {
@@ -246,6 +257,7 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         referenced_columns: std::collections::HashSet<String>,
         column_mapping_mode: ColumnMappingMode,
         time_zone: &'adds str,
+        ansi_mode: bool,
     ) -> Result<Self> {
         let mut stats = Vec::with_capacity(adds.len());
         for a in adds {
@@ -262,12 +274,13 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             referenced_columns,
             materialized_columns: Default::default(),
             column_mapping_mode,
+            ansi_mode,
         };
-        out.materialize_referenced_columns();
+        out.materialize_referenced_columns()?;
         Ok(out)
     }
 
-    fn materialize_referenced_columns(&mut self) {
+    fn materialize_referenced_columns(&mut self) -> Result<()> {
         self.materialized_columns = self
             .referenced_columns
             .iter()
@@ -276,7 +289,7 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
                 self.field_for(&column).map(|_| {
                     // The partition values of a column are parsed once for its bounds and null
                     // counts.
-                    let stats = match self.build_partition_array(&column) {
+                    let stats = match self.build_partition_array(&column)? {
                         Some(values) => MaterializedColumnStats {
                             min_values: Some(Arc::clone(&values)),
                             null_counts: self.partition_null_counts(&values),
@@ -288,10 +301,11 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
                             null_counts: self.compute_null_counts(&column),
                         },
                     };
-                    (name.clone(), stats)
+                    Ok((name.clone(), stats))
                 })
             })
-            .collect();
+            .collect::<Result<_>>()?;
+        Ok(())
     }
 
     fn field_for(&self, column: &Column) -> Option<Arc<datafusion::arrow::datatypes::Field>> {
@@ -404,13 +418,18 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         has_value.then(|| Arc::new(UInt64Array::from(values)) as ArrayRef)
     }
 
-    fn build_partition_array(&self, column: &Column) -> Option<ArrayRef> {
+    /// Parses the partition values of a column, or returns `None` if it is not a partition column
+    /// or its values are unknown. In ANSI mode, a value that does not parse is an error.
+    fn build_partition_array(&self, column: &Column) -> Result<Option<ArrayRef>> {
         if !self.should_build_stats_for(column) {
-            return None;
+            return Ok(None);
         }
 
-        let field = self.field_for(column)?;
-        let storage_name = self.storage_name_for(column)?;
+        let (Some(field), Some(storage_name)) =
+            (self.field_for(column), self.storage_name_for(column))
+        else {
+            return Ok(None);
+        };
         let values: Option<Vec<Option<&str>>> = self
             .adds
             .iter()
@@ -420,12 +439,18 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
                     .map(|value| value.as_deref().filter(|value| !value.is_empty()))
             })
             .collect();
-        let values = values?;
+        let Some(values) = values else {
+            return Ok(None);
+        };
 
-        PartitionValueParser::try_new(field.data_type(), self.time_zone)
-            .ok()?
-            .parse_array(&values)
-            .ok()
+        let Ok(parser) = PartitionValueParser::try_new(field.data_type(), self.time_zone) else {
+            return Ok(None);
+        };
+        if self.ansi_mode {
+            parser.parse_array_strict(field.name(), &values).map(Some)
+        } else {
+            Ok(parser.parse_array(&values).ok())
+        }
     }
 
     fn null_scalar(dt: &datafusion::arrow::datatypes::DataType) -> ScalarValue {
@@ -794,6 +819,7 @@ mod tests {
             referenced_columns,
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
         let array = stats.row_counts().ok_or_else(|| {
             DataFusionError::Internal("row count stats should be available".to_string())
@@ -827,6 +853,7 @@ mod tests {
             referenced_columns,
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
         let array = stats
             .null_counts(&Column::from_name("date_col"))
@@ -878,6 +905,7 @@ mod tests {
                     Arc::clone(&is_null),
                     mode,
                     "UTC",
+                    false,
                 )?,
                 vec![false, true]
             );
@@ -888,6 +916,7 @@ mod tests {
                     Arc::clone(&is_not_null),
                     mode,
                     "UTC",
+                    false,
                 )?,
                 vec![true, false]
             );
@@ -914,6 +943,7 @@ mod tests {
             referenced_columns,
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
         let array = stats
             .min_values(&Column::from_name("part_col"))
@@ -950,6 +980,7 @@ mod tests {
             HashSet::from(["p".to_string()]),
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
         let column = Column::from_name("p");
         let bounds = stats
@@ -1013,6 +1044,7 @@ mod tests {
                 predicate,
                 ColumnMappingMode::Name,
                 "UTC",
+                false,
             )?,
             vec![true]
         );
@@ -1048,6 +1080,7 @@ mod tests {
             HashSet::from(["payload".to_string()]),
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
 
         let min_values = stats
@@ -1114,6 +1147,7 @@ mod tests {
                 HashSet::from(["event_time".to_string()]),
                 ColumnMappingMode::None,
                 "UTC",
+                false,
             )?;
             let timestamp_bound = |values: Option<ArrayRef>, bound: &str| -> Result<i64> {
                 let values = values.ok_or_else(|| {
@@ -1155,6 +1189,7 @@ mod tests {
                     predicate,
                     ColumnMappingMode::None,
                     "UTC",
+                    false,
                 )?,
                 vec![true]
             );
@@ -1179,6 +1214,7 @@ mod tests {
             HashSet::from(["partition_time".to_string()]),
             ColumnMappingMode::None,
             "UTC",
+            false,
         )?;
         let max_values = stats
             .max_values(&Column::from_name("partition_time"))

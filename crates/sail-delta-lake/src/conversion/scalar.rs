@@ -18,11 +18,11 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{Result as DataFusionResult, exec_datafusion_err};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, exec_datafusion_err};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use sail_common::utils::datetime::civil_from_days;
 use sail_common_datafusion::utils::datetime::SparkZone;
-use sail_function::scalar::datetime::timestamp::parse_unformatted_timestamp;
+use sail_function::scalar::datetime::partition_timestamp::parse_partition_timestamp;
 use serde_json::Value;
 
 use crate::spec::{
@@ -549,8 +549,9 @@ fn number_from_f64(value: f64) -> Value {
 ///
 /// A TIMESTAMP value (a type with a time zone) is parsed as `CAST(value AS TIMESTAMP)` in the
 /// session time zone, as Delta-Spark reads partition values: a value without an offset is a wall
-/// clock in that zone, whatever the label of the type. TIMESTAMP_NTZ and other values are parsed
-/// by Arrow.
+/// clock in that zone, whatever the label of the type. Spellings that only Arrow's cast accepts
+/// keep the instant that earlier Sail versions read (`parse_partition_timestamp`). TIMESTAMP_NTZ
+/// and other values are parsed by Arrow.
 #[derive(Debug)]
 pub struct PartitionValueParser {
     field_dt: ArrowDataType,
@@ -593,6 +594,44 @@ impl PartitionValueParser {
         value.unwrap_or_else(|| self.null.clone())
     }
 
+    /// Parses a value as [`Self::parse`] does, except that a value that does not parse is an
+    /// error, as Delta-Spark casts partition values in the filters of a session in ANSI mode.
+    pub fn parse_strict(&self, column: &str, raw: Option<&str>) -> DataFusionResult<ScalarValue> {
+        let value = self.parse(raw);
+        match raw {
+            Some(raw) if !raw.is_empty() && value.is_null() => {
+                Err(self.malformed_value_error(column, raw))
+            }
+            _ => Ok(value),
+        }
+    }
+
+    /// Parses values as [`Self::parse_array`] does, except that a value that does not parse is
+    /// an error, as in [`Self::parse_strict`].
+    pub fn parse_array_strict(
+        &self,
+        column: &str,
+        values: &[Option<&str>],
+    ) -> DataFusionResult<ArrayRef> {
+        let array = self.parse_array(values)?;
+        match values
+            .iter()
+            .enumerate()
+            .find(|(index, raw)| raw.is_some() && array.is_null(*index))
+        {
+            Some((_, Some(raw))) => Err(self.malformed_value_error(column, raw)),
+            _ => Ok(array),
+        }
+    }
+
+    fn malformed_value_error(&self, column: &str, raw: &str) -> DataFusionError {
+        let sql_value = raw.replace('\\', "\\\\").replace('\'', "\\'");
+        exec_datafusion_err!(
+            "[CAST_INVALID_INPUT] The value '{sql_value}' of the partition column `{column}` cannot be cast to {} because it is malformed. Correct the value in the Delta log, or set \"spark.sql.ansi.enabled\" to \"false\" to read it as NULL.",
+            self.field_dt
+        )
+    }
+
     /// Parses values that are not empty, where a value that does not parse is null.
     pub fn parse_array(&self, values: &[Option<&str>]) -> DataFusionResult<ArrayRef> {
         let array: ArrayRef = match (&self.session_zone, &self.field_dt) {
@@ -610,7 +649,7 @@ impl PartitionValueParser {
 
 /// Parses a TIMESTAMP partition value in the session time zone, in `unit` since the epoch.
 fn parse_timestamp(raw: &str, zone: &SparkZone, unit: TimeUnit) -> DataFusionResult<i64> {
-    let micros = parse_unformatted_timestamp(raw, Some(zone))?;
+    let micros = parse_partition_timestamp(raw, zone)?;
     match unit {
         TimeUnit::Second => Ok(micros.div_euclid(1_000_000)),
         TimeUnit::Millisecond => Ok(micros.div_euclid(1_000)),
@@ -790,6 +829,46 @@ mod tests {
         }
     }
 
+    /// A value that does not parse is NULL, or an error when parsed strictly, as in the partition
+    /// filters of a session in ANSI mode. Empty and missing values are NULL either way.
+    #[test]
+    fn strict_partition_values_reject_values_that_do_not_parse()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (data_type, good, bad) in [
+            (ArrowDataType::Int32, "2", "abc"),
+            (ArrowDataType::Decimal128(5, 2), "2.50", "-1.-25"),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                "2024-01-01t09:00:00z",
+                "2024-01-01T09:00:00 Q",
+            ),
+        ] {
+            let parser = PartitionValueParser::try_new(&data_type, "UTC")?;
+            assert!(parser.parse(Some(bad)).is_null(), "{data_type}");
+            assert!(parser.parse_strict("p", Some(bad)).is_err(), "{data_type}");
+            assert_eq!(
+                parser.parse_strict("p", Some(good))?,
+                parser.parse(Some(good))
+            );
+            for raw in [None, Some("")] {
+                assert!(parser.parse_strict("p", raw)?.is_null(), "{data_type}");
+            }
+            assert!(
+                parser
+                    .parse_array_strict("p", &[Some(good), None, Some(bad)])
+                    .is_err()
+            );
+            assert_eq!(
+                parser
+                    .parse_array_strict("p", &[Some(good), None])?
+                    .null_count(),
+                1,
+                "{data_type}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn timestamp_ntz_partition_values_are_unchanged() {
         assert_eq!(
@@ -899,7 +978,7 @@ mod tests {
         for (data_type, raw) in [
             (
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                "2024-01-01t09:00:00z",
+                "2024-01-01T09:00:00 Q",
             ),
             (
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),

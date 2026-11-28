@@ -12,6 +12,7 @@ pub mod make_timestamp_ntz;
 pub mod make_ym_interval;
 pub mod negate_duration;
 pub mod next_day;
+pub mod partition_timestamp;
 pub mod time;
 pub mod time_diff;
 pub mod time_trunc;

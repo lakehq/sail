@@ -328,6 +328,7 @@ message ExtendedScalarUdf {
     SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
     SparkToJsonUdf spark_to_json = 44;
     SparkToJsonUdf variant_to_json = 45;
+    DeltaPartitionTimestampUdf delta_partition_timestamp = 46;
   }
 }
 
@@ -475,6 +476,11 @@ message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
   bool ansi_mode = 3;
+}
+
+message DeltaPartitionTimestampUdf {
+  string time_zone = 1;
+  bool ansi_mode = 2;
 }
 
 message SparkDateUdf {
