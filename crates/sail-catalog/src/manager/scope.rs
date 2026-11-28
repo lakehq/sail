@@ -80,6 +80,12 @@ impl ViewDefinitionScope {
         }
     }
 
+    /// Returns the address of the definition of the view while the view resolves its query
+    /// again, which identifies the scope in which the names of the query are resolved.
+    pub fn pinned_definition_address() -> Option<usize> {
+        Self::pinned().map(|definition| Arc::as_ptr(&definition) as usize)
+    }
+
     fn current() -> Option<Arc<Self>> {
         VIEW_DEFINITION_SCOPE.try_with(Arc::clone).ok()
     }

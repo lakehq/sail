@@ -11,6 +11,7 @@ import re
 import shutil
 import time
 import uuid
+from functools import partial
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -2571,6 +2572,161 @@ def test_view_reads_its_table_after_a_data_source_of_the_database_name_is_regist
         for view in views:
             drop_view(spark, view)
         spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def planning_hook(name, signals):
+    """Returns a Python data source whose schema, which the planning of a read of its table asks for,
+    signals `fire` and waits for `done` once `armed` is signaled."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
+    directory = str(signals)
+
+    class Reader(DataSourceReader):
+        def read(self, partition):  # noqa: ARG002
+            yield (1,)
+
+    class Hook(DataSource):
+        @classmethod
+        def name(cls):
+            return name
+
+        def schema(self):
+            import pathlib
+            import time
+
+            path = pathlib.Path(directory)
+            if (path / "armed").exists():
+                (path / "armed").unlink()
+                (path / "fire").write_text("1")
+                deadline = time.time() + 60
+                while not (path / "done").exists() and time.time() < deadline:
+                    time.sleep(0.02)
+            return StructType([StructField("h", IntegerType())])
+
+        def reader(self, schema):  # noqa: ARG002
+            return Reader()
+
+    return Hook
+
+
+@pytest.fixture
+def run_while_planning(spark, tmp_path):
+    """Returns a function that runs a statement and runs an action in another thread while the statement
+    is planned, between its reads before and after a read of the table `hook`."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    signals = tmp_path / "signals"
+    signals.mkdir()
+    name = f"hook_{uuid.uuid4().hex}"
+    spark.dataSource.register(planning_hook(name, signals))
+    spark.sql(f"CREATE TABLE hook USING {name}")
+
+    def watch(action):
+        deadline = time.time() + 60
+        while not (signals / "fire").exists():
+            if time.time() > deadline:
+                pytest.fail("the statement did not plan the hook")
+            time.sleep(0.02)
+        (signals / "fire").unlink()
+        try:
+            action()
+        finally:
+            (signals / "done").write_text("1")
+
+    def run(sql, action):
+        (signals / "armed").write_text("1")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            watched = executor.submit(watch, action)
+            try:
+                return rows(spark, sql)
+            finally:
+                watched.result(60)
+
+    yield run
+    spark.sql("DROP TABLE IF EXISTS hook")
+
+
+# A statement that reads the name `r` before and after it reads the table `hook`.
+READS_AROUND_HOOK = (
+    "SELECT (SELECT max(x) FROM {r}) AS a, (SELECT count(*) FROM hook) AS h, (SELECT max(x) FROM {r}) AS b"
+)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize("change", ["replace_global", "drop_global", "replace_temporary", "drop_shadowing"])
+def test_statement_reads_one_definition_of_a_view_changed_while_it_is_planned(
+    spark, observer, tmp_path, run_while_planning, change
+):
+    name = f"v_{uuid.uuid4().hex}"
+    if change == "replace_global":
+        observer.sql(f"CREATE OR REPLACE GLOBAL TEMPORARY VIEW {name} AS SELECT 1 AS x")
+        reference = f"global_temp.{name}"
+        action = partial(observer.sql, f"CREATE OR REPLACE GLOBAL TEMPORARY VIEW {name} AS SELECT 2 AS x")
+    elif change == "drop_global":
+        observer.sql(f"CREATE OR REPLACE GLOBAL TEMPORARY VIEW {name} AS SELECT 1 AS x")
+        reference = f"global_temp.{name}"
+        action = partial(observer.sql, f"DROP VIEW global_temp.{name}")
+    elif change == "replace_temporary":
+        spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {name} AS SELECT 1 AS x")
+        reference = name
+        action = partial(spark.sql, f"CREATE OR REPLACE TEMPORARY VIEW {name} AS SELECT 2 AS x")
+    else:
+        # The view has the name of a table, which a read reads once the view is dropped.
+        spark.sql(f"CREATE TABLE {name} (x INT) USING parquet LOCATION '{tmp_path / name}'")
+        spark.sql(f"INSERT INTO {name} VALUES (100)")
+        spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {name} AS SELECT 1 AS x")
+        reference = name
+        action = partial(spark.sql, f"DROP VIEW {name}")
+    try:
+        assert run_while_planning(READS_AROUND_HOOK.format(r=reference), action) == [(1, 1, 1)]
+    finally:
+        observer.sql(f"DROP VIEW IF EXISTS global_temp.{name}")
+        spark.sql(f"DROP VIEW IF EXISTS {name}")
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+def test_statement_reads_one_table_of_a_name_when_the_database_changes_while_it_is_planned(
+    spark, tmp_path, run_while_planning
+):
+    databases = [f"db_{uuid.uuid4().hex}" for _ in range(2)]
+    previous = spark.catalog.currentDatabase()
+    try:
+        for value, database in enumerate(databases, start=1):
+            spark.sql(f"CREATE DATABASE {database}")
+            spark.sql(f"CREATE TABLE {database}.u (x INT) USING parquet LOCATION '{tmp_path / database}'")
+            spark.sql(f"INSERT INTO {database}.u VALUES ({value})")
+        spark.catalog.setCurrentDatabase(databases[0])
+        statement = READS_AROUND_HOOK.format(r="u").replace("FROM hook", f"FROM {previous}.hook")
+        assert run_while_planning(statement, partial(spark.catalog.setCurrentDatabase, databases[1])) == [(1, 1, 1)]
+    finally:
+        spark.catalog.setCurrentDatabase(previous)
+        for database in databases:
+            spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize("statement", ["insert", "view"])
+def test_statement_that_persists_its_reads_reads_one_definition_of_a_view(
+    spark, observer, tmp_path, run_while_planning, statement
+):
+    name = f"v_{uuid.uuid4().hex}"
+    observer.sql(f"CREATE OR REPLACE GLOBAL TEMPORARY VIEW {name} AS SELECT 1 AS x")
+    query = f"SELECT x FROM global_temp.{name} UNION ALL SELECT h FROM hook UNION ALL SELECT x FROM global_temp.{name}"
+    action = partial(observer.sql, f"CREATE OR REPLACE GLOBAL TEMPORARY VIEW {name} AS SELECT 2 AS x")
+    try:
+        if statement == "insert":
+            spark.sql(f"CREATE TABLE {name} (x INT) USING parquet LOCATION '{tmp_path / name}'")
+            run_while_planning(f"INSERT INTO {name} {query}", action)
+            assert rows(spark, f"SELECT * FROM {name}") == [(1,), (1,), (1,)]
+        else:
+            run_while_planning(f"CREATE TEMPORARY VIEW {name} AS {query}", action)
+            assert rows(spark, f"SELECT * FROM {name}") == [(1,), (1,), (1,)]
+    finally:
+        observer.sql(f"DROP VIEW IF EXISTS global_temp.{name}")
+        spark.sql(f"DROP VIEW IF EXISTS {name}")
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
 PATH_KINDS = [*KINDS, "using"]

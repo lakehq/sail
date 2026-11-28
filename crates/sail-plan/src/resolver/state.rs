@@ -6,6 +6,7 @@ use datafusion_common::arrow::datatypes::{Field, FieldRef, Schema};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
 use sail_common_datafusion::catalog::lakehouse::CatalogTableIdentity;
@@ -43,6 +44,29 @@ pub(super) struct TableSourceKey {
     /// The catalog instance of the table, for a table that a global temporary view reads
     /// in a catalog of the session that created the view.
     pub session_catalog: Option<usize>,
+}
+
+/// Identifies a lookup of a name as the query wrote it, so that the references to a name in a
+/// statement find what the first one found, even if a temporary view of the name or the
+/// current database changes meanwhile.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct WrittenLookupKey {
+    reference: Vec<String>,
+    /// Whether the lookup finds tables only, for writes and reads in a required format.
+    tables_only: bool,
+    /// The address of the definition of the temporary view whose query is resolved again,
+    /// in which the name refers to what it referred to when the view was created.
+    scope: Option<usize>,
+}
+
+impl WrittenLookupKey {
+    pub fn new(reference: &[String], tables_only: bool) -> Self {
+        Self {
+            reference: reference.to_vec(),
+            tables_only,
+            scope: ViewDefinitionScope::pinned_definition_address(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -202,6 +226,8 @@ pub(super) struct PlanResolverState {
     /// the ways to write the name of the table. Names that the catalog returned the same
     /// table for have the same lookup, see [`PlanResolverState::share_catalog_table`].
     catalog_table_lookups: HashMap<(Option<usize>, Vec<String>), CatalogTableLookup>,
+    /// The successful lookups of names as the query wrote them (see [`WrittenLookupKey`]).
+    written_lookups: HashMap<WrittenLookupKey, CatalogTableLookup>,
     /// The first lookup of each table that the catalogs returned (see
     /// [`PlanResolverState::share_catalog_table`]).
     shared_catalog_tables: HashMap<SharedCatalogTableKey, (TableStatus, LakehouseResolvedTable)>,
@@ -304,6 +330,7 @@ impl PlanResolverState {
             same_source_sessions: HashMap::new(),
             lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
+            written_lookups: HashMap::new(),
             shared_catalog_tables: HashMap::new(),
             view_definition: None,
         }
@@ -650,6 +677,14 @@ impl PlanResolverState {
         Arc::clone(&self.lake_snapshot_pins)
     }
 
+    pub fn get_written_lookup(&self, key: &WrittenLookupKey) -> Option<CatalogTableLookup> {
+        self.written_lookups.get(key).cloned()
+    }
+
+    pub fn insert_written_lookup(&mut self, key: WrittenLookupKey, lookup: CatalogTableLookup) {
+        self.written_lookups.insert(key, lookup);
+    }
+
     pub fn get_catalog_table_lookup(
         &self,
         session_catalog: Option<usize>,
@@ -720,6 +755,7 @@ impl PlanResolverState {
             same_source_sessions,
             lake_snapshot_pins,
             catalog_table_lookups,
+            written_lookups,
             shared_catalog_tables,
             view_definition
         );

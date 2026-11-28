@@ -50,7 +50,7 @@ use crate::function::{get_built_in_table_function, is_built_in_generator_functio
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::{
-    CatalogTableLookup, LakePathSourceKey, PlanResolverState, TableSourceKey,
+    CatalogTableLookup, LakePathSourceKey, PlanResolverState, TableSourceKey, WrittenLookupKey,
 };
 
 impl PlanResolver<'_> {
@@ -188,13 +188,21 @@ impl PlanResolver<'_> {
         reference: &[String],
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
+        let key = WrittenLookupKey::new(reference, false);
+        if let Some(lookup) = state.get_written_lookup(&key) {
+            return Ok(lookup);
+        }
         // A temporary view can have the name of a catalog table, so it is looked up by
         // the name as written, before that name is qualified.
-        if let Some(status) = manager.find_temporary_view(reference).await? {
-            return Ok((status, None));
-        }
-        let table = manager.resolve_fully_qualified_object_name(reference)?;
-        Self::lookup_catalog_object(manager, table, state).await
+        let lookup = match manager.find_temporary_view(reference).await? {
+            Some(status) => (status, None),
+            None => {
+                let table = manager.resolve_fully_qualified_object_name(reference)?;
+                Self::lookup_catalog_object(manager, table, state).await?
+            }
+        };
+        state.insert_written_lookup(key, lookup.clone());
+        Ok(lookup)
     }
 
     /// Returns the table of the fully qualified name `table` in the catalog instance of
@@ -249,20 +257,26 @@ impl PlanResolver<'_> {
         reference: &[String],
         state: &mut PlanResolverState,
     ) -> Result<(TableStatus, LakehouseResolvedTable), CatalogError> {
+        let key = WrittenLookupKey::new(reference, true);
+        if let Some((status, Some(resolved))) = state.get_written_lookup(&key) {
+            return Ok((status, resolved));
+        }
         let table = manager.resolve_fully_qualified_object_name(reference)?;
         let session_catalog =
             Self::other_session_catalog_table(manager, &table)?.map(|x| x.catalog_id());
         // An earlier lookup that found a view is not reused: the catalog is asked for
         // the table, and reports that there is none.
-        if let Some((status, Some(resolved))) =
-            state.get_catalog_table_lookup(session_catalog, &table)
-        {
-            return Ok((status, resolved));
-        }
-        let (status, resolved) = manager
-            .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
-            .await?;
-        Ok(state.share_catalog_table(session_catalog, table, status, resolved))
+        let (status, resolved) = match state.get_catalog_table_lookup(session_catalog, &table) {
+            Some((status, Some(resolved))) => (status, resolved),
+            _ => {
+                let (status, resolved) = manager
+                    .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
+                    .await?;
+                state.share_catalog_table(session_catalog, table, status, resolved)
+            }
+        };
+        state.insert_written_lookup(key, (status.clone(), Some(resolved.clone())));
+        Ok((status, resolved))
     }
 
     /// Returns the settings of the session that created a temporary view, as they were when
