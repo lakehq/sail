@@ -112,7 +112,6 @@ pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
         MERGE_FILE_COLUMN,
         row_index_column,
         &[],
-        &unparsed,
         MergePlanRequirements {
             preserve_unmodified_target_rows: matches!(mode, RowLevelWriteMode::CopyOnWrite),
             source_metrics: true,
@@ -122,6 +121,7 @@ pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
                 row_index_deletes: matches!(mode, RowLevelWriteMode::MergeOnRead),
                 change_data,
             },
+            value_columns: &unparsed,
         },
     )?;
     trace!(

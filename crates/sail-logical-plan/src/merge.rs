@@ -157,11 +157,15 @@ pub struct MergeExpansion {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct MergePlanRequirements {
+pub struct MergePlanRequirements<'a> {
     /// Whether the write branch must retain unchanged target rows for file rewrites.
     pub preserve_unmodified_target_rows: bool,
     pub source_metrics: bool,
     pub effects: RowLevelEffectRequirements,
+    /// Pairs metadata columns of the target that carry a value of a target column with that
+    /// column. Such a column is kept for the rows the MERGE writes, except that it is NULL in the
+    /// rows whose clause writes the target column: by assigning it, or by generating it.
+    pub value_columns: &'a [(&'a str, &'a str)],
 }
 
 fn merge_name_key(name: &str, case_sensitive: bool) -> String {
@@ -226,17 +230,14 @@ pub fn validate_merge_internal_columns(info: &MergeInfo, format_columns: &[&str]
     Ok(())
 }
 
-/// `value_columns` pairs metadata columns of the target that carry a value of a target column
-/// with that column. Such a column is kept for the rows the MERGE writes, except that it is NULL
-/// in the rows whose clause writes the target column: by assigning it, or by generating it.
 pub fn expand_merge(
     info: MergeInfo,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
-    value_columns: &[(&str, &str)],
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
+    let value_columns = requirements.value_columns;
     let target_plan = info.target.as_ref().clone();
     let source_plan = info.source.as_ref().clone();
     let mut options = info.options;
@@ -736,7 +737,6 @@ pub fn expand_merge(
         path_column,
         row_index_column,
         row_delete_metadata_columns,
-        value_columns,
         requirements,
     )
 }
@@ -750,7 +750,6 @@ fn build_default_merge_expansion(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
-    value_columns: &[(&str, &str)],
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
@@ -896,7 +895,7 @@ fn build_default_merge_expansion(
         path_column,
         row_index_column,
         row_delete_metadata_columns,
-        value_columns,
+        requirements.value_columns,
     )?;
     let change_data_preimage =
         if single_stream_cdf {
