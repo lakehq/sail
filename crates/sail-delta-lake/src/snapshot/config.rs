@@ -116,7 +116,7 @@ mod tests {
     use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
 
     use super::partition_time_zone;
-    use crate::conversion::parse_partition_value;
+    use crate::conversion::PartitionValueParser;
 
     #[test]
     fn partition_time_zone_is_the_session_time_zone() -> Result<(), Box<dyn std::error::Error>> {
@@ -131,11 +131,8 @@ mod tests {
         set_spark_session_time_zone(&mut options, "+05:30:45")?;
         assert_eq!(partition_time_zone(&options).as_ref(), "+05:30:45");
         let data_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
-        let value = parse_partition_value(
-            "2024-01-01 09:00:00",
-            &data_type,
-            &partition_time_zone(&options),
-        )?;
+        let value = PartitionValueParser::try_new(&data_type, &partition_time_zone(&options))?
+            .parse(Some("2024-01-01 09:00:00"))?;
         assert_eq!(
             value,
             ScalarValue::TimestampMicrosecond(Some(1_704_079_755_000_000), Some("UTC".into()))
