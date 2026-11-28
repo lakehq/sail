@@ -8168,6 +8168,53 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_delta_commit_preserves_read_partition_predicate() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{binary, col, lit};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_delta_lake::physical_plan::DeltaCommitContext;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let url = Url::parse("file:///tmp/delta-commit-read-partitions-codec/")
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new("p", DataType::Int32, true)]));
+        let predicate = binary(col("p", &schema)?, Operator::Eq, lit(1i32), &schema)?;
+        let codec = RemoteExecutionCodec;
+        for read_partition_predicate in [
+            None,
+            Some(PartitionPredicate::new(Arc::clone(&schema), predicate)),
+        ] {
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                DeltaCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    vec!["p".to_string()],
+                    true,
+                    input.schema(),
+                    PhysicalSinkMode::Append,
+                    None,
+                    DeltaCommitContext::default(),
+                    None,
+                )
+                .with_read_partition_predicate(read_partition_predicate.clone()),
+            );
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<DeltaCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected Delta commit"))?
+                .read_partition_predicate()
+                .map(|p| (Arc::clone(p.schema()), p.predicate().to_string()));
+            let expected = read_partition_predicate
+                .as_ref()
+                .map(|p| (Arc::clone(p.schema()), p.predicate().to_string()));
+            assert_eq!(decoded, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_commit_output_round_trip_and_reconstruction() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
         use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
