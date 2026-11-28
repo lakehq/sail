@@ -22,6 +22,7 @@ pub struct FileWriteOptions {
     pub overwrite: bool,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<Sort>,
+    pub target_table: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Educe)]

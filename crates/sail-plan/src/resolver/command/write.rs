@@ -311,6 +311,7 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            target_table: None,
         };
         let mut preconditions = vec![];
         let mut skip_preconditions_on_empty_exec = false;
@@ -353,6 +354,11 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                sink_info.target_table = Some(
+                    self.ctx
+                        .extension::<CatalogManager>()?
+                        .resolve_fully_qualified_object_name(table.parts())?,
+                );
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {

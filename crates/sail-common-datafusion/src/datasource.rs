@@ -275,6 +275,8 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The fully qualified name of the target table when the write targets a catalog table.
+    pub target_table: Option<Vec<String>>,
 }
 
 impl SinkInfo {

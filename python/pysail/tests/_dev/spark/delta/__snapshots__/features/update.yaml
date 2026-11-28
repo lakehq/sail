@@ -752,6 +752,9 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
+    physical_plan after RejectSelfOverwrite:
+    SAME TEXT AS ABOVE
+
     physical_plan:
     DeltaCommitExec(table_path=file://<tmp>/delta_update/)
       CoalescePartitionsExec

@@ -418,3 +418,154 @@ def test_append_matches_mixed_case_columns_by_name(spark, tmp_path, table_format
     actual = spark.sql("SELECT * FROM t2").toPandas()
     expected = pd.DataFrame({"ColumnOne": ["col_one"], "ColumnTwo": ["col_two"]})
     assert_frame_equal(actual, expected)
+
+
+def _create_self_overwrite_tables(spark, tmp_path, table_format="parquet"):
+    for name, values in [("t2", "(1, 'a'), (2, 'b'), (3, 'c')"), ("t3", "(4, 'd'), (5, 'e')")]:
+        location = escape_sql_string_literal(str(tmp_path / name))
+        spark.sql(f"CREATE TABLE {name} (a INT, b STRING) USING {table_format} LOCATION '{location}'")
+        spark.sql(f"INSERT INTO {name} VALUES {values}")  # noqa: S608
+
+
+def _assert_self_overwrite_rejected(spark, write, table="t2"):
+    expected = sorted(spark.table(table).collect())
+    with pytest.raises(
+        Exception,
+        match=rf"\[UNSUPPORTED_OVERWRITE\.TABLE\] Can't overwrite the target that is also being read from\. "
+        rf"The target table is `\w+`\.`default`\.`{table}`",
+    ):
+        write()
+    assert sorted(spark.table(table).collect()) == expected
+
+
+@pytest.mark.parametrize("table_format", ["parquet", "json", "csv"])
+def test_insert_overwrite_table_reading_itself_is_rejected(spark, tmp_path, table_format):
+    _create_self_overwrite_tables(spark, tmp_path, table_format)
+    _assert_self_overwrite_rejected(spark, lambda: spark.sql("INSERT OVERWRITE t2 SELECT * FROM t2"))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "INSERT OVERWRITE TABLE t2 SELECT * FROM t2 UNION ALL SELECT * FROM t3",
+        "INSERT OVERWRITE t2 SELECT * FROM v",
+        "WITH c AS (SELECT * FROM t2) INSERT OVERWRITE t2 SELECT * FROM c",
+        "INSERT OVERWRITE t2 WITH c AS (SELECT * FROM t2) SELECT * FROM c",
+        "INSERT OVERWRITE t2 SELECT a, b FROM (SELECT a, b FROM t2 WHERE a > 1) s",
+        "INSERT OVERWRITE t2 SELECT x.a, y.b FROM t2 x JOIN t2 y ON x.a = y.a",
+        "INSERT OVERWRITE t2 SELECT * FROM t3 WHERE EXISTS (SELECT 1 FROM t2)",
+        "INSERT OVERWRITE t2 SELECT * FROM t3 WHERE a IN (SELECT a + 3 FROM t2)",
+        "INSERT OVERWRITE t2 SELECT * FROM t4",
+        "INSERT OVERWRITE t2 SELECT * FROM parquet.`{path}`",
+    ],
+)
+def test_insert_overwrite_table_reading_itself_indirectly_is_rejected(spark, tmp_path, query):
+    _create_self_overwrite_tables(spark, tmp_path)
+    path = str(tmp_path / "t2")
+    spark.sql(f"CREATE TABLE t4 (a INT, b STRING) USING parquet LOCATION '{escape_sql_string_literal(path)}'")
+    spark.sql("CREATE TEMP VIEW v AS SELECT * FROM t2")
+    try:
+        _assert_self_overwrite_rejected(spark, lambda: spark.sql(query.format(path=path)))
+    finally:
+        spark.catalog.dropTempView("v")
+
+
+def test_dataframe_overwrite_of_table_reading_itself_is_rejected(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    spark.table("t2").createOrReplaceTempView("v")
+    try:
+        _assert_self_overwrite_rejected(spark, lambda: spark.sql("INSERT OVERWRITE t2 SELECT * FROM v"))
+    finally:
+        spark.catalog.dropTempView("v")
+    _assert_self_overwrite_rejected(spark, lambda: spark.table("t2").write.mode("overwrite").saveAsTable("t2"))
+    _assert_self_overwrite_rejected(spark, lambda: spark.table("t2").write.insertInto("t2", overwrite=True))
+
+
+_SKIP_DYNAMIC_OVERWRITE = pytest.mark.spark(
+    skip_if_jvm=True, reason="JVM Spark overwrites the partitions dynamically, which Sail does not do yet"
+)
+
+
+@pytest.mark.parametrize(
+    ("conf_mode", "table_mode", "method"),
+    [
+        ("static", None, "insert_overwrite"),
+        ("static", None, "insert_into"),
+        ("static", None, "save_as_table"),
+        ("dynamic", None, "save_as_table"),
+        ("dynamic", "static", "insert_overwrite"),
+        pytest.param("dynamic", None, "insert_overwrite", marks=_SKIP_DYNAMIC_OVERWRITE),
+        pytest.param("DYNAMIC", None, "insert_overwrite", marks=_SKIP_DYNAMIC_OVERWRITE),
+        pytest.param("dynamic", None, "insert_into", marks=_SKIP_DYNAMIC_OVERWRITE),
+        pytest.param("static", "dynamic", "insert_overwrite", marks=_SKIP_DYNAMIC_OVERWRITE),
+    ],
+)
+def test_overwrite_partitioned_table_reading_itself_is_rejected(spark, tmp_path, conf_mode, table_mode, method):
+    location = escape_sql_string_literal(str(tmp_path / "t5"))
+    options = f"OPTIONS (partitionOverwriteMode '{table_mode}')" if table_mode else ""
+    spark.sql(f"CREATE TABLE t5 (a INT, p INT) USING parquet PARTITIONED BY (p) {options} LOCATION '{location}'")
+    spark.sql("INSERT INTO t5 VALUES (1, 1), (2, 1), (3, 2), (4, 3)")
+    writes = {
+        "insert_overwrite": lambda: spark.sql("INSERT OVERWRITE t5 SELECT a + 10, p FROM t5 WHERE p = 1"),
+        "insert_into": lambda: spark.sql("SELECT a + 10 AS a, p FROM t5 WHERE p = 1").write.insertInto(
+            "t5", overwrite=True
+        ),
+        "save_as_table": lambda: spark.sql("SELECT a + 10 AS a, p FROM t5 WHERE p = 1")
+        .write.mode("overwrite")
+        .partitionBy("p")
+        .saveAsTable("t5"),
+    }
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", conf_mode)
+    try:
+        _assert_self_overwrite_rejected(spark, writes[method], table="t5")
+    finally:
+        spark.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+
+def test_overwrite_unpartitioned_table_reading_itself_in_dynamic_mode_is_rejected(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+    try:
+        _assert_self_overwrite_rejected(spark, lambda: spark.sql("INSERT OVERWRITE t2 SELECT * FROM t2"))
+    finally:
+        spark.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not check these reads and loses the data")
+def test_insert_overwrite_table_reading_itself_through_subquery_join_or_child_is_rejected(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    # The subquery becomes an anti join that reads the table after the overwrite deletes it.
+    _assert_self_overwrite_rejected(
+        spark, lambda: spark.sql("INSERT OVERWRITE t2 SELECT * FROM t3 WHERE a NOT IN (SELECT a FROM t2)")
+    )
+    location = escape_sql_string_literal(str(tmp_path / "t2" / "sub"))
+    spark.sql(f"CREATE TABLE t6 (a INT, b STRING) USING parquet LOCATION '{location}'")
+    spark.sql("INSERT INTO t6 VALUES (6, 'f')")
+    _assert_self_overwrite_rejected(spark, lambda: spark.sql("INSERT OVERWRITE t2 SELECT * FROM t6"))
+
+
+def test_writes_reading_the_target_table_without_overwriting_it(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    spark.sql("INSERT INTO t2 SELECT * FROM t2")
+    assert sorted(spark.table("t2").collect()) == sorted([(1, "a"), (2, "b"), (3, "c")] * 2)
+    spark.sql("INSERT OVERWRITE t2 SELECT * FROM t3")
+    assert sorted(spark.table("t2").collect()) == [(4, "d"), (5, "e")]
+    location = escape_sql_string_literal(str(tmp_path / "t2" / "sub"))
+    spark.sql(f"CREATE TABLE t6 (a INT, b STRING) USING parquet LOCATION '{location}'")
+    spark.sql("INSERT OVERWRITE t6 SELECT * FROM t2")
+    assert sorted(spark.table("t6").collect()) == [(4, "d"), (5, "e")]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark reads the subquery after the overwrite deletes the table")
+def test_insert_overwrite_table_from_scalar_subquery_of_itself(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    spark.sql("INSERT OVERWRITE t2 SELECT (SELECT max(a) FROM t2), 'm'")
+    assert spark.table("t2").collect() == [(3, "m")]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark reads the subquery after the overwrite deletes the table")
+def test_insert_overwrite_table_from_scalar_subquery_reading_itself(spark, tmp_path):
+    _create_self_overwrite_tables(spark, tmp_path)
+    # The scalar subquery runs before the overwrite deletes the table.
+    spark.sql("INSERT OVERWRITE t2 SELECT (SELECT max(a) FROM t2 WHERE b <> 'zz'), 'm'")
+    assert spark.table("t2").collect() == [(3, "m")]

@@ -462,6 +462,9 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
+    physical_plan after RejectSelfOverwrite:
+    SAME TEXT AS ABOVE
+
     physical_plan:
     ProjectionExec: expr=[#3@0 as cnt]
       ProjectionExec: expr=[count(Int64(1))@0 as #3]
