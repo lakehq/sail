@@ -160,15 +160,22 @@ async fn head_many(
 /// file metadata cache.
 ///
 /// This mirrors `ParquetFormat::infer_schema()` at the DataFusion commit credited above, with the
-/// default format options, except that it reads the footers through `file_metadata_cache` instead
-/// of the runtime's unscoped file metadata cache, using the session's metadata size hint.
+/// default format options except the session's metadata size hint. It reads the footers through
+/// `file_metadata_cache` instead of the runtime's unscoped file metadata cache.
 async fn infer_parquet_checkpoint_schema(
     state: &dyn Session,
     store: &Arc<dyn ObjectStore>,
     file_metadata_cache: &Arc<FileMetadataCache>,
     objects: &[ObjectMeta],
 ) -> Result<SchemaRef> {
-    let format = ParquetFormat::default();
+    let format = ParquetFormat::default().with_metadata_size_hint(
+        state
+            .config()
+            .options()
+            .execution
+            .parquet
+            .metadata_size_hint,
+    );
     let coerce_int96 = format.coerce_int96().map(Into::into);
     let coerce_int96_tz = format
         .options()
@@ -176,12 +183,6 @@ async fn infer_parquet_checkpoint_schema(
         .coerce_int96_tz
         .as_ref()
         .map(|tz| Arc::<str>::from(tz.as_str()));
-    let metadata_size_hint = state
-        .config()
-        .options()
-        .execution
-        .parquet
-        .metadata_size_hint;
 
     let mut schemas: Vec<_> = futures::stream::iter(objects)
         .map(|object| async {
@@ -190,7 +191,7 @@ async fn infer_parquet_checkpoint_schema(
             // let file_decryption_properties =
             //     get_file_decryption_properties(state, format.options(), &object.location).await?;
             let meta = DFParquetMetadata::new(store.as_ref(), object)
-                .with_metadata_size_hint(metadata_size_hint)
+                .with_metadata_size_hint(format.metadata_size_hint())
                 // .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
                 .with_coerce_int96(coerce_int96)
