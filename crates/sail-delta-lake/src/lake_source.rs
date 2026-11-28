@@ -215,6 +215,15 @@ fn replace_where_constraints(condition: &ExprWithSource) -> Vec<DeltaCheckConstr
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    fn selects_table_version(&self, options: &[(String, String)]) -> bool {
+        options.iter().any(|(key, _)| {
+            matches!(
+                key.to_ascii_lowercase().as_str(),
+                "versionasof" | "version_as_of" | "timestampasof" | "timestamp_as_of"
+            )
+        })
+    }
+
     async fn prepare_shallow_clone(
         &self,
         ctx: &datafusion::execution::TaskContext,

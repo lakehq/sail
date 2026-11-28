@@ -39,7 +39,9 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use url::Url;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
-use super::temp_view::{CatalogTableOrigin, LakePathOrigin, TableOrigin, view_definition_source};
+use super::temp_view::{
+    CatalogTableOrigin, LakePathOrigin, TableOrigin, has_time_travel_option, view_definition_source,
+};
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -374,6 +376,11 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
+                let travels_in_time = !temporal_options.is_empty()
+                    || has_time_travel_option(&options)
+                    || data_source_registry
+                        .get_lake_source_if_supported(format)?
+                        .is_some_and(|x| x.selects_table_version(&options));
                 let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
                 let other_session_table = Self::other_session_catalog_table(&manager, &name)?;
                 let origin = CatalogTableOrigin {
@@ -390,6 +397,7 @@ impl PlanResolver<'_> {
                     format_required: required_format.is_some(),
                     options,
                     temporal_options,
+                    travels_in_time,
                     read_case_sensitive: self.config.case_sensitive,
                     partition_value_cast: (
                         self.config.ansi_mode,
@@ -945,12 +953,14 @@ impl PlanResolver<'_> {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
-        let is_lake = self
+        let lake_source = self
             .ctx
             .extension::<DataSourceRegistry>()?
-            .get_lake_source_if_supported(&format)?
-            .is_some();
+            .get_lake_source_if_supported(&format)?;
+        let is_lake = lake_source.is_some();
         let origin = LakePathOrigin {
+            travels_in_time: has_time_travel_option(&options)
+                || lake_source.is_some_and(|x| x.selects_table_version(&options)),
             format,
             schema,
             options,

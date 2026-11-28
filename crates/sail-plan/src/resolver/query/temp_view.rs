@@ -92,15 +92,15 @@ impl TableOrigin {
     /// Whether the read reads a version of the table, by a clause or a read option.
     fn travels_in_time(&self) -> bool {
         match self {
-            Self::CatalogTable(origin) => origin.travels_in_time(),
-            Self::LakePath(origin) => has_time_travel_option(&origin.options),
+            Self::CatalogTable(origin) => origin.travels_in_time,
+            Self::LakePath(origin) => origin.travels_in_time,
         }
     }
 }
 
 /// Whether the read options include a read option that Spark reads as time travel for a
 /// table of any format.
-fn has_time_travel_option(options: &[(String, String)]) -> bool {
+pub(super) fn has_time_travel_option(options: &[(String, String)]) -> bool {
     options.iter().any(|(key, _)| {
         key.eq_ignore_ascii_case("versionAsOf") || key.eq_ignore_ascii_case("timestampAsOf")
     })
@@ -115,6 +115,8 @@ pub(in crate::resolver) struct LakePathOrigin {
     pub options: Vec<(String, String)>,
     pub paths: Vec<String>,
     pub read_case_sensitive: bool,
+    /// Whether the read options select a version of the table.
+    pub travels_in_time: bool,
 }
 
 /// A read of a catalog table, as the query wrote it.
@@ -135,18 +137,13 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     pub format_required: bool,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
+    /// Whether the read reads a version of the table, by a clause or by a read option that
+    /// Spark or the format of the table reads as time travel.
+    pub travels_in_time: bool,
     pub read_case_sensitive: bool,
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
     pub partition_value_cast: (bool, Arc<str>),
-}
-
-impl CatalogTableOrigin {
-    /// Whether the read travels in time, by a clause or by a read option that Spark reads
-    /// as time travel for a table of any format.
-    fn travels_in_time(&self) -> bool {
-        !self.temporal_options.is_empty() || has_time_travel_option(&self.options)
-    }
 }
 
 /// The source of a table scan in the stored plan of a temporary view. It is not a table
@@ -1206,7 +1203,7 @@ impl PlanResolver<'_> {
                 origin.format,
             )));
         }
-        if origin.travels_in_time() && !format.eq_ignore_ascii_case(&origin.format) {
+        if origin.travels_in_time && !format.eq_ignore_ascii_case(&origin.format) {
             return Err(PlanError::AnalysisError(format!(
                 "the temporary view {} reads a version of {}, which has been created again \
                 with another format",
@@ -1752,6 +1749,7 @@ mod tests {
             format_required: false,
             options: vec![],
             temporal_options: vec![],
+            travels_in_time: false,
             read_case_sensitive: false,
             partition_value_cast: (false, Arc::from("UTC")),
         }))

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 import uuid
 
 import pytest
@@ -1945,6 +1946,44 @@ def test_data_frame_view_that_travels_in_time_by_a_read_option_reads_its_version
     table.recreate("id BIGINT", "(7), (8)", fmt="parquet")
     assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
     assert spark.table(view).columns == ["id"]
+
+
+@pytest.mark.parametrize(
+    ("fmt", "key"),
+    [
+        ("iceberg", "snapshot-id"),
+        ("iceberg", "snapshot_id"),
+        ("iceberg", "version_as_of"),
+        ("iceberg", "versionAsOf"),
+        ("delta", "version_as_of"),
+        ("delta", "timestamp_as_of"),
+    ],
+)
+def test_data_frame_view_of_a_version_by_any_selector_fails_after_another_format(spark, tables, fmt, key):
+    table = tables(fmt)
+    table.insert("(1)")
+    if fmt == "iceberg":
+        version = spark.sql(f"SELECT snapshot_id FROM {table.name}.snapshots").collect()[0][0]
+    elif key == "version_as_of":
+        version = 1
+    else:
+        # A time between the commits of the two inserts.
+        time.sleep(1)
+        version = spark.sql("SELECT CAST(current_timestamp() AS STRING)").collect()[0][0]
+        time.sleep(1)
+    table.insert("(2)")
+    view = table.create_view("dv", frame=spark.read.option(key, version).table(table.name))
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    table.recreate("id BIGINT", "(5)", fmt="parquet")
+    assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
+
+
+def test_data_frame_view_of_a_branch_follows_the_table(spark, tables):
+    table = tables("iceberg")
+    table.insert("(1)")
+    view = table.create_view("dv", frame=spark.read.option("branch", "main").table(table.name))
+    table.recreate("id BIGINT", "(5)", fmt="parquet")
+    assert rows(spark, f"SELECT * FROM {view}") == [(5,)]
 
 
 def test_data_frame_view_of_a_read_in_a_required_format_fails_after_another_format(spark, tables):

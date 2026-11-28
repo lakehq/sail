@@ -84,6 +84,19 @@ impl ResolveOptions for r#gen::IcebergReadOptions {
     }
 }
 
+/// The snapshot selector that a read option key is an alias of, if any.
+pub(crate) fn snapshot_selector(key: &str) -> Option<&'static str> {
+    match key.to_ascii_lowercase().as_str() {
+        "versionasof" | "version_as_of" => Some("versionAsOf"),
+        "snapshotid" | "snapshot_id" | "snapshot-id" => Some("snapshotId"),
+        "timestampasof" | "timestamp_as_of" => Some("timestampAsOf"),
+        "ref" | "use_ref" | "iceberg.ref" => Some("ref"),
+        "branch" => Some("branch"),
+        "tag" => Some("tag"),
+        _ => None,
+    }
+}
+
 // Validate before merging so that contradictory aliases cannot overwrite one another.
 fn validate_snapshot_selectors(options: &[OptionLayer]) -> DataSourceResult<()> {
     let mut selected: Option<(&str, &str)> = None;
@@ -92,14 +105,8 @@ fn validate_snapshot_selectors(options: &[OptionLayer]) -> DataSourceResult<()> 
             continue;
         };
         for (key, value) in items {
-            let selector = match key.to_ascii_lowercase().as_str() {
-                "versionasof" | "version_as_of" => "versionAsOf",
-                "snapshotid" | "snapshot_id" | "snapshot-id" => "snapshotId",
-                "timestampasof" | "timestamp_as_of" => "timestampAsOf",
-                "ref" | "use_ref" | "iceberg.ref" => "ref",
-                "branch" => "branch",
-                "tag" => "tag",
-                _ => continue,
+            let Some(selector) = snapshot_selector(key) else {
+                continue;
             };
             if value.trim().is_empty() {
                 return Err(DataSourceError::InvalidOption {

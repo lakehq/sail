@@ -55,6 +55,7 @@ use crate::operations::metadata_commit::{
     PreviousMetadataFile, previous_metadata_log_entry,
 };
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
+use crate::options::snapshot_selector;
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::action_schema::iceberg_action_schema;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
@@ -203,6 +204,13 @@ impl LakeRelationProvider for IcebergLakeSource {
 impl LakeSource for IcebergLakeSource {
     fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
         Some(self)
+    }
+
+    /// A branch read follows the branch. A ref can name a tag, which is a version.
+    fn selects_table_version(&self, options: &[(String, String)]) -> bool {
+        options
+            .iter()
+            .any(|(key, _)| snapshot_selector(key).is_some_and(|x| x != "branch"))
     }
 
     fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
