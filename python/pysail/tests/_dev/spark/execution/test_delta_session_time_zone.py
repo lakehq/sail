@@ -131,6 +131,35 @@ def test_delta_append_casts_timestamp_ntz_at_the_ends_of_chrono_range(
         spark.sql("DROP TABLE IF EXISTS ntz_range").collect()
 
 
+@pytest.mark.parametrize(
+    ("session_timezone", "wall_clock"),
+    [("America/Los_Angeles", "2024-11-03 01:30:00"), ("+05:30:15", "2024-01-01 09:00:00")],
+    indirect=["session_timezone"],
+    ids=["repeated-hour", "offset-with-seconds"],
+)
+@pytest.mark.parametrize("partitioned", [False, True], ids=["flat", "partitioned"])
+def test_delta_append_casts_timestamp_to_timestamp_ntz_as_spark_casts(
+    spark, tmp_path, session_timezone, wall_clock, partitioned
+):
+    _ = session_timezone
+    path = tmp_path / "table"
+    partition = "PARTITIONED BY (ts)" if partitioned else ""
+    spark.sql(
+        f"CREATE TABLE ltz_cast (id INT, ts TIMESTAMP_NTZ) USING delta {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        value = f"CAST('{wall_clock}' AS TIMESTAMP)"
+        # Like Spark's cast, the session wall clock of the instant is written.
+        spark.sql(f"SELECT * FROM VALUES (1, {value}), (2, {value}) AS t(id, ts)").repartition(  # noqa: S608
+            2
+        ).write.format("delta").mode("append").save(str(path))
+        rows = spark.sql("SELECT id, CAST(ts AS STRING) AS ts FROM ltz_cast ORDER BY id").collect()
+        assert [(row.id, row.ts) for row in rows] == [(1, wall_clock), (2, wall_clock)]
+    finally:
+        spark.sql("DROP TABLE IF EXISTS ltz_cast").collect()
+
+
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 def test_delta_timestamp_partition_values_are_utc(spark, tmp_path, session_timezone):
     _ = session_timezone
