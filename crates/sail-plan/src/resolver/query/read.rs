@@ -444,11 +444,14 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
+                let lake_source = data_source_registry.get_lake_source_if_supported(format)?;
                 let travels_in_time = !temporal_options.is_empty()
                     || has_time_travel_option(&options)
-                    || data_source_registry
-                        .get_lake_source_if_supported(format)?
+                    || lake_source
+                        .as_ref()
                         .is_some_and(|x| x.selects_table_version(&options));
+                let skips_gained_columns = travels_in_time
+                    && lake_source.is_some_and(|x| x.reports_table_columns_for_versions());
                 let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
                 let other_session_table = Self::other_session_catalog_table(&manager, &name)?;
                 let origin = CatalogTableOrigin {
@@ -466,6 +469,7 @@ impl PlanResolver<'_> {
                     options,
                     temporal_options,
                     travels_in_time,
+                    skips_gained_columns,
                     read_case_sensitive: self.config.case_sensitive,
                     partition_value_cast: (
                         self.config.ansi_mode,
@@ -1031,8 +1035,10 @@ impl PlanResolver<'_> {
             .get_lake_source_if_supported(&format)?;
         let is_lake = lake_source.is_some();
         let origin = LakePathOrigin {
-            travels_in_time: has_time_travel_option(&options)
-                || lake_source.is_some_and(|x| x.selects_table_version(&options)),
+            skips_gained_columns: lake_source.is_some_and(|x| {
+                x.reports_table_columns_for_versions()
+                    && (has_time_travel_option(&options) || x.selects_table_version(&options))
+            }),
             format,
             schema,
             options,

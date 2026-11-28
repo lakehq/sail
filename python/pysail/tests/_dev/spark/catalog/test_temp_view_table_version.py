@@ -1995,6 +1995,63 @@ def test_data_frame_view_of_a_version_by_any_selector_fails_after_another_format
     assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
 
 
+def latest_snapshot(spark, table):
+    return spark.sql(f"SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1").collect()[0][0]
+
+
+def iceberg_table_with_references(spark, tables):
+    """Returns an Iceberg table with the column `a`, the branch `b` and the tag `tg`, and a function that
+    adds the column `b`, inserts rows, and moves the branch and the tag to the new snapshot."""
+    table = tables("iceberg", columns="a INT")
+    table.insert("(1), (1), (2)")
+    first = latest_snapshot(spark, table.name)
+    spark.sql(f"ALTER TABLE {table.name} CREATE BRANCH b AS OF VERSION {first}")
+    spark.sql(f"ALTER TABLE {table.name} CREATE TAG tg AS OF VERSION {first}")
+
+    def change():
+        spark.sql(f"ALTER TABLE {table.name} ADD COLUMNS (b STRING)")
+        table.insert("(1, 'x'), (3, 'y')")
+        second = latest_snapshot(spark, table.name)
+        spark.sql(f"ALTER TABLE {table.name} REPLACE BRANCH b AS OF VERSION {second}")
+        spark.sql(f"ALTER TABLE {table.name} REPLACE TAG tg AS OF VERSION {second}")
+
+    return table, first, change
+
+
+@pytest.mark.parametrize("reference", ["main", "b", "tg"])
+@pytest.mark.parametrize("shape", ["natural_join", "distinct"])
+def test_view_of_an_iceberg_reference_reads_as_its_query_after_the_reference_gains_columns(
+    spark, tables, reference, shape
+):
+    table, _, change = iceberg_table_with_references(spark, tables)
+    source = f"{table.name} VERSION AS OF '{reference}'"
+    if shape == "natural_join":
+        query = f"SELECT a FROM {source} NATURAL JOIN (SELECT 1 AS a, 'x' AS b)"
+    else:
+        query = f"SELECT a FROM (SELECT DISTINCT * FROM {source})"
+    view = table.create_view("sv", query)
+    change()
+    # The reference reads the columns of its current snapshot, which the view reads as its query does.
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, query)
+
+
+@pytest.mark.parametrize(("key", "reference"), [("ref", "b"), ("use_ref", "tg")])
+def test_data_frame_view_of_an_iceberg_reference_reads_as_its_data_frame(spark, tables, key, reference):
+    table, _, change = iceberg_table_with_references(spark, tables)
+    frame = spark.read.option(key, reference).table(table.name).distinct().select("a")
+    view = table.create_view("dv", frame=frame)
+    change()
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, frame)
+
+
+def test_data_frame_view_of_an_iceberg_snapshot_keeps_its_rows(spark, tables):
+    table, first, change = iceberg_table_with_references(spark, tables)
+    view = table.create_view("dv", frame=spark.read.option("snapshot-id", first).table(table.name))
+    change()
+    assert spark.table(view).columns == ["a"]
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,), (1,), (2,)]
+
+
 def test_data_frame_view_of_a_branch_follows_the_table(spark, tables):
     table = tables("iceberg")
     table.insert("(1)")

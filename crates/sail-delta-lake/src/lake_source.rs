@@ -215,6 +215,10 @@ fn replace_where_constraints(condition: &ExprWithSource) -> Vec<DeltaCheckConstr
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    fn reports_table_columns_for_versions(&self) -> bool {
+        true
+    }
+
     fn selects_table_version(&self, options: &[(String, String)]) -> bool {
         options.iter().any(|(key, _)| {
             matches!(

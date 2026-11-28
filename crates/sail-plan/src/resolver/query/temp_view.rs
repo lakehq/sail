@@ -92,11 +92,12 @@ impl TableOrigin {
         }
     }
 
-    /// Whether the read reads a version of the table, by a clause or a read option.
-    fn travels_in_time(&self) -> bool {
+    /// Whether a column that the current table has is not one that the read gained (see
+    /// [`CatalogTableOrigin::skips_gained_columns`]).
+    fn skips_gained_columns(&self) -> bool {
         match self {
-            Self::CatalogTable(origin) => origin.travels_in_time,
-            Self::LakePath(origin) => origin.travels_in_time,
+            Self::CatalogTable(origin) => origin.skips_gained_columns,
+            Self::LakePath(origin) => origin.skips_gained_columns,
         }
     }
 }
@@ -118,8 +119,8 @@ pub(in crate::resolver) struct LakePathOrigin {
     pub options: Vec<(String, String)>,
     pub paths: Vec<String>,
     pub read_case_sensitive: bool,
-    /// Whether the read options select a version of the table.
-    pub travels_in_time: bool,
+    /// See [`CatalogTableOrigin::skips_gained_columns`].
+    pub skips_gained_columns: bool,
     /// The settings that build the source of the read (see [`CatalogTableOrigin::settings`]).
     pub settings: Option<Arc<ViewSourceSettings>>,
 }
@@ -145,6 +146,9 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// Whether the read reads a version of the table, by a clause or by a read option that
     /// Spark or the format of the table reads as time travel.
     pub travels_in_time: bool,
+    /// Whether the read reads a version of the table whose source reports the columns of the
+    /// current table, which the version does not read, so the read gains no columns.
+    pub skips_gained_columns: bool,
     pub read_case_sensitive: bool,
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
@@ -1141,9 +1145,9 @@ impl PlanResolver<'_> {
                 ))));
             }
         };
-        // A read of a version of the table reads columns that do not change, so a column
-        // that the current table has is not one that the version gained.
-        let gained = !reference.origin.travels_in_time()
+        // The source of a read of a version of a Delta Lake table reports the columns of the
+        // current table, which the version does not read.
+        let gained = !reference.origin.skips_gained_columns()
             && has_new_fields(
                 reference.table.fields(),
                 table_schema.fields(),
@@ -1814,6 +1818,7 @@ mod tests {
             options: vec![],
             temporal_options: vec![],
             travels_in_time: false,
+            skips_gained_columns: false,
             read_case_sensitive: false,
             partition_value_cast: (false, Arc::from("UTC")),
             settings: None,
