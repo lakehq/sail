@@ -2636,6 +2636,8 @@ def run_while_planning(spark, tmp_path):
             (signals / "done").write_text("1")
 
     def run(sql, action):
+        # A signal of an earlier run would end the wait of the hook at once.
+        (signals / "done").unlink(missing_ok=True)
         (signals / "armed").write_text("1")
         with ThreadPoolExecutor(max_workers=1) as executor:
             watched = executor.submit(watch, action)
@@ -2720,10 +2722,9 @@ def test_statement_that_persists_its_reads_reads_one_definition_of_a_view(
         if statement == "insert":
             spark.sql(f"CREATE TABLE {name} (x INT) USING parquet LOCATION '{tmp_path / name}'")
             run_while_planning(f"INSERT INTO {name} {query}", action)
-            assert rows(spark, f"SELECT * FROM {name}") == [(1,), (1,), (1,)]
         else:
             run_while_planning(f"CREATE TEMPORARY VIEW {name} AS {query}", action)
-            assert rows(spark, f"SELECT * FROM {name}") == [(1,), (1,), (1,)]
+        assert rows(spark, f"SELECT * FROM {name}") == [(1,), (1,), (1,)]
     finally:
         observer.sql(f"DROP VIEW IF EXISTS global_temp.{name}")
         spark.sql(f"DROP VIEW IF EXISTS {name}")
