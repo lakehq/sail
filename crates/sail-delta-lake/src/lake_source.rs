@@ -68,8 +68,9 @@ use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
-    DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
-    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
+    DeltaTable, catalog_managed_commit_context, catalog_managed_snapshot_context,
+    create_delta_table_with_object_store, create_logstore_with_object_store,
+    infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
@@ -562,7 +563,7 @@ impl LakeSource for DeltaLakeSource {
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
-        match operation {
+        let catalog_updated = match operation {
             LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
                 not_impl_err!("Snapshot references require an Iceberg table")
             }
@@ -652,11 +653,12 @@ impl LakeSource for DeltaLakeSource {
                     CommitProperties::from_session_config(ctx.session_config())?;
                 self.add_check_constraint(runtime_env, path, &name, &expression, commit_properties)
                     .await
+                    .map(|()| false)
             }
         }?;
         Ok(
             sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
-                catalog_updated: catalog_managed_commit_context(lakehouse_table.as_ref()).is_some(),
+                catalog_updated,
                 ..Default::default()
             },
         )
@@ -1072,7 +1074,7 @@ impl DeltaLakeSource {
         lakehouse_table: Option<&LakehouseExecutionContext>,
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if let Some((key, _)) = changes
             .iter()
             .find(|(key, _)| is_check_constraint_property(key))
@@ -1384,7 +1386,7 @@ impl DeltaLakeSource {
         lakehouse_table: Option<&LakehouseExecutionContext>,
         column_path: Vec<String>,
         data_type: ArrowDataType,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let table = crate::ddl::open_table(ctx, path, lakehouse_table).await?;
 
         let snapshot = table
@@ -1406,7 +1408,7 @@ impl DeltaLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         if type_changes.is_empty() {
-            return Ok(());
+            return Ok(catalog_managed_snapshot_context(lakehouse_table, &snapshot).is_some());
         }
         if !snapshot.table_properties().enable_type_widening() {
             return plan_err!(
@@ -1465,7 +1467,7 @@ impl DeltaLakeSource {
         lakehouse_table: Option<&LakehouseExecutionContext>,
         column_path: Vec<String>,
         default: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if column_path.len() != 1 {
             return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
         }
@@ -1484,7 +1486,7 @@ impl DeltaLakeSource {
             alter_delta_column_default(&current_kernel, &column_path, default.clone())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if candidate_kernel == current_kernel {
-            return Ok(());
+            return Ok(catalog_managed_snapshot_context(lakehouse_table, &snapshot).is_some());
         }
 
         let updated_metadata = snapshot

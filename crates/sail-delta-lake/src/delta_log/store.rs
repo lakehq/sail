@@ -17,13 +17,15 @@ use log::{debug, error};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 use sail_common_datafusion::error::CommitStateUnknownError;
+use serde::Deserialize;
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
 
 use crate::delta_log::latest_version_from_listing;
 use crate::spec::{
-    Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError, commit_path,
+    Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, Protocol, TransactionError,
+    commit_path,
 };
 
 mod config;
@@ -103,6 +105,32 @@ pub fn get_actions(version: i64, commit_log_bytes: &Bytes) -> Result<Vec<Action>
             })
         })
         .collect()
+}
+
+/// A log record that keeps only a protocol action. Other actions are skipped without being decoded.
+#[derive(Deserialize)]
+struct ProtocolRecord {
+    protocol: Option<Protocol>,
+}
+
+/// Returns the protocol action of a commit or compacted log file, if it has one, without
+/// decoding the other actions.
+pub fn get_protocol_action(
+    version: i64,
+    commit_log_bytes: &Bytes,
+) -> Result<Option<Protocol>, DeltaTableError> {
+    for record in JsonDeserializer::from_slice(commit_log_bytes).into_iter::<ProtocolRecord>() {
+        let record = record.map_err(|e| {
+            let line = format!("Error at line {}, column {}", e.line(), e.column());
+            DeltaTableError::generic(format!(
+                "Invalid JSON in log record, version={version}, {line}"
+            ))
+        })?;
+        if record.protocol.is_some() {
+            return Ok(record.protocol);
+        }
+    }
+    Ok(None)
 }
 
 #[async_trait]
@@ -314,5 +342,34 @@ fn to_uri(root: &Url, location: &Path) -> String {
         format!("{}{}", root.as_ref(), location.as_ref())
     } else {
         format!("{}/{}", root.as_ref(), location.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::{get_actions, get_protocol_action};
+    use crate::spec::{Action, DeltaResult, Protocol};
+
+    #[test]
+    fn protocol_action_is_read_without_decoding_other_actions() -> DeltaResult<()> {
+        let protocol = Protocol::new(1, 2, None, None);
+        let bytes = Bytes::from(format!(
+            "{}\n{}\n",
+            r#"{"add":{"unexpected":true}}"#,
+            serde_json::to_string(&Action::Protocol(protocol.clone()))?
+        ));
+
+        // The `add` action is invalid, so decoding every action fails.
+        assert!(get_actions(1, &bytes).is_err());
+        assert_eq!(get_protocol_action(1, &bytes)?, Some(protocol));
+
+        let result = get_protocol_action(3, &Bytes::from("{not valid delta json"));
+        assert!(
+            matches!(&result, Err(error) if error.to_string().contains("Invalid JSON in log record, version=3")),
+            "{result:?}"
+        );
+        Ok(())
     }
 }

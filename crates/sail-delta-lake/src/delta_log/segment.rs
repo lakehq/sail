@@ -344,7 +344,7 @@ impl<'a> LogSegmentResolver<'a> {
     }
 }
 
-async fn try_read_checksum_header(
+pub(crate) async fn try_read_checksum_header(
     store: Arc<dyn ObjectStore>,
     version: i64,
 ) -> Option<ReplayedTableHeader> {

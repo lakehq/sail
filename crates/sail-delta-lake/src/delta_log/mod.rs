@@ -17,6 +17,7 @@ pub(crate) use listing::{
 };
 pub(crate) use replay::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+    protocol_satisfies_up_to,
 };
 pub(crate) use segment::{
     LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_log_files,
@@ -25,7 +26,9 @@ pub(crate) use segment::{
 pub use store::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,
 };
-pub(crate) use store::{default_logstore, get_actions, get_object_store_from_context};
+pub(crate) use store::{
+    default_logstore, get_actions, get_object_store_from_context, get_protocol_action,
+};
 pub(crate) use timestamps::{
     resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
     resolve_version_timestamp, version_uses_in_commit_timestamps,

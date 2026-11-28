@@ -370,6 +370,8 @@ fn resolved_lakehouse_authority(
     capabilities: &[LakehouseCapability],
 ) -> LakehouseAuthority {
     match format {
+        // The catalog may ratify commits for this table. The Delta lake source still reads
+        // the table's protocol and only uses the catalog when it has `catalogManaged`.
         LakehouseFormat::Delta
             if lifecycle == TableLifecycle::Managed
                 && is_unity_delta_table(properties)
