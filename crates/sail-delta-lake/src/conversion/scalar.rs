@@ -808,6 +808,18 @@ mod tests {
             (ArrowDataType::Float64, "abc"),
             (ArrowDataType::Boolean, "maybe"),
             (ArrowDataType::Decimal128(5, 2), "abc"),
+            (ArrowDataType::Int8, "300"),
+            (ArrowDataType::Int16, "abc"),
+            (ArrowDataType::Float32, "abc"),
+            (ArrowDataType::Decimal128(5, 2), "12345.67"),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                "3000-01-01 00:00:00",
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Second, Some("America/Los_Angeles".into())),
+                "not a timestamp",
+            ),
         ] {
             let parser = PartitionValueParser::try_new(&data_type, "America/Los_Angeles")?;
             let null = ScalarValue::try_new_null(&data_type)?;

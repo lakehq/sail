@@ -1789,6 +1789,9 @@ mod tests {
             ("America/Los_Angeles", 1_710_037_800, 1_710_066_600),
             ("+05:30:15", 1_704_099_600, 1_704_079_785),
             ("-03:30:45", 1_704_070_800, 1_704_083_445),
+            // Spark-only spellings of the same zones.
+            ("PST", 1_730_597_400, 1_730_622_600),
+            ("UTC+05:30:15", 1_704_099_600, 1_704_079_785),
         ] {
             assert_eq!(
                 adapt_timestamp_ntz(vec![wall_clock * 1_000_000], time_zone)?,
