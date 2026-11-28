@@ -190,6 +190,17 @@ pub trait LakeSource: DataSource {
         None
     }
 
+    /// Whether the read options select a version of the table instead of its current version.
+    fn selects_table_version(&self, _options: &[(String, String)]) -> bool {
+        false
+    }
+
+    /// Whether the source of a read of a table version reports the columns of the current
+    /// table instead of the version's.
+    fn reports_table_columns_for_versions(&self) -> bool {
+        false
+    }
+
     fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
         None
     }

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import re
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -151,6 +153,36 @@ def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+def test_temporary_view_read_loads_its_table_once_per_statement(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    table = f"{NAMESPACE}.viewed"
+    views = ["viewed_sql", "viewed_data_frame"]
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        spark.sql(f"CREATE TEMPORARY VIEW viewed_sql AS SELECT id FROM {table}")
+        spark.table(table).createOrReplaceTempView("viewed_data_frame")
+        spark.sql(f"INSERT INTO {table} VALUES (2)")
+        for view in views:
+            # Each read of a temporary view loads the table and sees its latest version.
+            start = len(records)
+            assert [row.id for row in spark.table(view).orderBy("id").collect()] == [1, 2]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/viewed", 200, None)]
+            # The view and the other references to the table share one load.
+            start = len(records)
+            rows = spark.sql(
+                f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table} t ON v.id = t.id "
+                f"WHERE v.id IN (SELECT id FROM viewed_sql) AND t.id IN (SELECT id FROM viewed_data_frame)"
+            ).collect()
+            assert sorted(tuple(row) for row in rows) == [(1, 1), (2, 2)]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/viewed", 200, None)]
+    finally:
+        for view in views:
+            spark.catalog.dropTempView(view)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_invalid_scan_planning_mode_is_reported_after_read_validation(
     spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
 ):
@@ -226,3 +258,160 @@ def test_rejected_access_delegation_is_reported_when_table_access_begins(
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view}")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_read_loads_a_table_once_however_its_name_is_written(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.spelled"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1), (2)")
+        start = len(records)
+        rows = spark.sql(
+            f"SELECT a.id FROM {name} a JOIN sail.{name} b ON a.id = b.id JOIN `sail`.{name} c ON a.id = c.id"
+        ).collect()
+        assert sorted(row.id for row in rows) == [1, 2]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/spelled", 200, None)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _writes(name):
+    """Returns statements that write to the empty table `name`, each with the rows that it leaves."""
+    return [
+        (f"INSERT INTO {name} VALUES (1, 10), (2, 20)", [(1, 10), (2, 20)]),
+        # The target and the source are the same table under two names.
+        (f"INSERT INTO {name} SELECT id + 2, v FROM sail.{name}", [(1, 10), (2, 20), (3, 10), (4, 20)]),
+        (f"UPDATE {name} SET v = 0 WHERE id = 1", [(1, 0), (2, 20), (3, 10), (4, 20)]),
+        (f"DELETE FROM {name} WHERE id = 2", [(1, 0), (3, 10), (4, 20)]),
+        (
+            f"MERGE INTO {name} t USING sail.{name} s ON t.id = s.id AND s.id = 3 "
+            "WHEN MATCHED THEN UPDATE SET v = s.v + 1",
+            [(1, 0), (3, 11), (4, 20)],
+        ),
+        (f"TRUNCATE TABLE {name}", []),
+    ]
+
+
+@pytest.mark.parametrize("delegation", [None, "vended-credentials"])
+def test_write_loads_the_target_table_once_to_plan_the_statement(
+    spark, recording_catalog, seaweedfs_host_endpoint, delegation
+):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    table = "delegated_write" if delegation else "written"
+    name = f"{NAMESPACE}.{table}"
+    load = f"{NAMESPACE}/tables/{table}"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
+        with contextlib.ExitStack() as stack:
+            session = spark
+            if delegation:
+                options = f', access_delegation="{delegation}"'
+                server = stack.enter_context(_server(recording_catalog, seaweedfs_host_endpoint, options))
+                session = stack.enter_context(spark_session_factory(server.remote)).create()
+            for sql, expected in _writes(name):
+                start = len(records)
+                session.sql(sql).collect()
+                # The table is loaded once to plan the statement, which is the only load that asks
+                # for access delegation, and once more when the statement commits, to detect a
+                # concurrent change to the table.
+                assert _requests(records, start) == [(load, 200, delegation), (load, 200, None)], sql
+                assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+# The error of a commit of a version of a table that changed since the statement read it.
+CONFLICT = (
+    r"Iceberg commit failed(: reference '\w+' expected snapshot .* but found "
+    r"| after \d+ retries due to concurrent)"
+)
+
+
+def test_write_keeps_a_change_made_to_the_table_after_the_statement_is_planned(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
+):
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.raced"
+    pending = []
+
+    def change_table(method, path):
+        # Another session adds a row right after the table is loaded to plan a statement.
+        if method == "GET" and path.endswith("/tables/raced") and pending:
+            spark.sql(pending.pop()).collect()
+
+    def rows():
+        return [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()]
+
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1, 10), (2, 20)")
+        with (
+            recording_proxy(iceberg_rest_endpoint, before_response=change_table) as catalog,
+            _server(catalog, seaweedfs_host_endpoint) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            # The target of each statement shares the table load of the statement, which
+            # is older than the added row. The commit loads the table again and sees the row.
+            # The statements that rewrite data files fail since the table changed, and the
+            # statement that only adds files is applied to the table with the added row, with the
+            # rows that it adds for the version that it read.
+            statements = [
+                (f"UPDATE {name} SET v = 0 WHERE id = 1", None),
+                (f"DELETE FROM {name} WHERE id = 2", None),
+                (
+                    f"INSERT INTO {name} SELECT id + 10, v FROM sail.{name} WHERE id < 100",
+                    lambda before: [*before, *((i + 10, v) for i, v in before if i < 100)],
+                ),
+            ]
+            for added, (sql, change) in enumerate(statements, start=100):
+                before = rows()
+                pending.append(f"INSERT INTO {name} VALUES ({added}, 0)")
+                try:
+                    session.sql(sql).collect()
+                    error = None
+                except Exception as e:  # noqa: BLE001
+                    error = str(e)
+                assert not pending, sql
+                if change is None:
+                    # The catalog rejects the commit of the version that the statement read.
+                    assert error is not None, sql
+                    assert re.search(CONFLICT, error), error
+                    assert rows() == sorted([*before, (added, 0)]), sql
+                else:
+                    assert error is None, error
+                    assert rows() == sorted([*change(before), (added, 0)]), sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_metadata_table_shares_the_load_of_its_table(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.inspected"
+    load = (f"{NAMESPACE}/tables/inspected", 200, None)
+    # The name of a metadata table is looked up as a table and as a view first.
+    missing = [
+        (f"{NAMESPACE}\x1finspected/tables/snapshots", 404, None),
+        (f"{NAMESPACE}\x1finspected/views/snapshots", 404, None),
+    ]
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1), (2)")
+        # The metadata table and the table, under another name, share one load of the table.
+        for sql, expected in [
+            (f"SELECT count(*) AS n FROM {name}.snapshots s CROSS JOIN sail.{name} t", [*missing, load]),
+            (f"SELECT count(*) AS n FROM sail.{name} t CROSS JOIN {name}.snapshots s", [load, *missing]),
+            (
+                f"SELECT count(*) AS n FROM {name}.snapshots s CROSS JOIN {name}.snapshots r CROSS JOIN {name} t",
+                [*missing, load, *missing],
+            ),
+        ]:
+            start = len(records)
+            assert [row.n for row in spark.sql(sql).collect()] == [2], sql
+            assert _requests(records, start) == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

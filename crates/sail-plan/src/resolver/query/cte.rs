@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::physical_plan::collect;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan};
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_data_source::reuse::{is_python_source, is_reusable_source};
@@ -23,6 +23,7 @@ use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 
+use super::temp_view::executable_plan;
 use crate::error::PlanResult;
 use crate::plan_with_shared_ctes;
 use crate::resolver::PlanResolver;
@@ -31,6 +32,7 @@ use crate::scalar_subquery_key::is_volatile_call;
 use crate::shared_cte::{
     CteDefinition, CteReference, contains_reference, inline_deterministic_references,
     inline_references, project_in_references, renew_cte_definitions,
+    renew_cte_definitions_with_scans,
 };
 
 /// Whether a named relation is a CTE definition or a parameter view.
@@ -337,17 +339,22 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the plan of a stored view in which the references to shared CTE definitions
-    /// refer to copies of the definitions, which the query evaluates with its own CTEs.
+    /// refer to copies of the definitions, which the query evaluates with its own CTEs, and
+    /// in which `map_scan` replaces the other scans (see [`renew_cte_definitions_with_scans`]).
     pub(in crate::resolver) fn renew_shared_cte_definitions(
         &self,
         plan: LogicalPlan,
+        map_scan: &mut dyn FnMut(TableScan) -> datafusion_common::Result<Transformed<LogicalPlan>>,
+        recompute_schemas: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let mut definitions = vec![];
-        let plan = renew_cte_definitions(
+        let plan = renew_cte_definitions_with_scans(
             plan,
             &mut || state.next_cte_definition_index(),
             &mut |definition| definitions.push(definition),
+            map_scan,
+            recompute_schemas,
         )?;
         for definition in definitions {
             state.register_shared_cte_definition(definition);
@@ -372,7 +379,7 @@ impl PlanResolver<'_> {
         // Keep auxiliary execution out of the recursive resolver futures, including
         // the ordinary planning path used when there are no shared references.
         Box::pin(async move {
-            let plan = inline_deterministic_references(plan)?;
+            let plan = executable_plan(inline_deterministic_references(plan)?)?;
             if !contains_reference(&plan)? {
                 return Ok(self.ctx.execute_logical_plan(plan).await?.collect().await?);
             }

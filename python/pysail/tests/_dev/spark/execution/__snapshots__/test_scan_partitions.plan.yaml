@@ -32,66 +32,66 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(1), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_parquet_partitions_follow_row_groups[scan_settings0-sizes1]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(3), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_parquet_partitions_follow_row_groups[scan_settings1-sizes0]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(1), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_parquet_partitions_follow_row_groups[scan_settings1-sizes1]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(3), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_parquet_partitions_follow_row_groups[scan_settings2-sizes0]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(1), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_parquet_partitions_follow_row_groups[scan_settings2-sizes1]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as pid]
-      ProjectionExec: expr=[#0@0 as #3, #2@2 as #4]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
         SparkPartitionIdExec: col=#2
-          ProjectionExec: expr=[id@0 as #0, payload@1 as #1]
+          ProjectionExec: expr=[id@0 as #0]
             FilterExec: id@0 % 7 = 0
-              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id, payload], file_type=parquet, predicate=id@0 % 7 = 0
+              DataSourceExec: file_groups={3 groups: [[<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>], [<tmp>/groups.parquet:<range>]]}, projection=[id], output_partitioning=UnknownPartitioning(3), file_type=parquet, predicate=id@0 % 7 = 0
 ---
 name: "test_small_filtered_build_is_materialized_once[scan_settings0-sizes0]"
 data:

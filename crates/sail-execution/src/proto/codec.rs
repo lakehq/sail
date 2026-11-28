@@ -135,6 +135,7 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use sail_data_source::options::r#gen::RateReadOptions;
+use sail_delta_lake::datasource::pruning::PartitionPredicate;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaLogReplayExec,
@@ -1126,10 +1127,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context,
                 lakehouse_table_json,
                 output,
+                read_partition_schema,
+                read_partition_predicate,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
                 let sink_schema = try_decode_schema(&sink_schema)?;
+                let read_partition_predicate =
+                    match (read_partition_schema, read_partition_predicate) {
+                        (Some(schema), Some(predicate)) => {
+                            let schema = Arc::new(try_decode_schema(&schema)?);
+                            let predicate = try_decode_physical_expr_with_converter(
+                                ctx,
+                                self,
+                                proto_converter,
+                                &predicate,
+                                &schema,
+                            )?;
+                            Some(PartitionPredicate::new(schema, predicate))
+                        }
+                        (None, None) => None,
+                        _ => {
+                            return plan_err!(
+                                "Incomplete read partition predicate for DeltaCommitExec"
+                            );
+                        }
+                    };
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
 
@@ -1158,7 +1181,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         commit_context,
                         lakehouse_table,
                     )
-                    .with_output(Self::try_decode_command_output(output)?),
+                    .with_output(Self::try_decode_command_output(output)?)
+                    .with_read_partition_predicate(read_partition_predicate),
                 ))
             }
             NodeKind::DeltaScanByAdds(r#gen::DeltaScanByAddsExecNode {
@@ -2933,6 +2957,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 delta_commit_exec.input().clone(),
             )?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
+            let (read_partition_schema, read_partition_predicate) =
+                match delta_commit_exec.read_partition_predicate() {
+                    Some(predicate) => (
+                        Some(try_encode_schema(predicate.schema())?),
+                        Some(try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            predicate.predicate(),
+                        )?),
+                    ),
+                    None => (None, None),
+                };
             NodeKind::DeltaCommit(r#gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
@@ -2947,6 +2983,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_commit_exec.lakehouse_table())?,
+                read_partition_schema,
+                read_partition_predicate,
             })
         } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -8144,6 +8182,53 @@ mod tests {
                 assert_eq!(commit.dynamic_partition_overwrite(), dynamic);
                 assert_eq!(commit.removed_data_file_paths(), &["data/old.parquet"]);
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_delta_commit_preserves_read_partition_predicate() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{binary, col, lit};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_delta_lake::physical_plan::DeltaCommitContext;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let url = Url::parse("file:///tmp/delta-commit-read-partitions-codec/")
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new("p", DataType::Int32, true)]));
+        let predicate = binary(col("p", &schema)?, Operator::Eq, lit(1i32), &schema)?;
+        let codec = RemoteExecutionCodec;
+        for read_partition_predicate in [
+            None,
+            Some(PartitionPredicate::new(Arc::clone(&schema), predicate)),
+        ] {
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                DeltaCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    vec!["p".to_string()],
+                    true,
+                    input.schema(),
+                    PhysicalSinkMode::Append,
+                    None,
+                    DeltaCommitContext::default(),
+                    None,
+                )
+                .with_read_partition_predicate(read_partition_predicate.clone()),
+            );
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<DeltaCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected Delta commit"))?
+                .read_partition_predicate()
+                .map(|p| (Arc::clone(p.schema()), p.predicate().to_string()));
+            let expected = read_partition_predicate
+                .as_ref()
+                .map(|p| (Arc::clone(p.schema()), p.predicate().to_string()));
+            assert_eq!(decoded, expected);
         }
         Ok(())
     }

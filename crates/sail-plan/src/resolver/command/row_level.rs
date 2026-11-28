@@ -64,6 +64,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_row_level_target(
         &self,
         table: &spec::ObjectName,
+        state: &mut PlanResolverState,
     ) -> PlanResult<RowLevelTarget> {
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
@@ -83,6 +84,7 @@ impl PlanResolver<'_> {
                             sort_order: vec![],
                             options: vec![],
                             read_case_sensitive: self.config.case_sensitive,
+                            snapshot_pins: None,
                         },
                     )
                     .await?;
@@ -100,10 +102,11 @@ impl PlanResolver<'_> {
         }
 
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let status = catalog_manager
-            .get_table_or_view(table.parts())
-            .await
-            .map_err(PlanError::from)?;
+        let table_name: Vec<String> = table.clone().into();
+        // The target shares the catalog lookup of its scan and of the other reads in the
+        // statement, so that the operation is planned on the table metadata that it reads.
+        let (status, resolved) =
+            Self::lookup_catalog_table_or_view(&catalog_manager, &table_name, state).await?;
         match status.kind {
             TableKind::Table {
                 location,
@@ -116,14 +119,11 @@ impl PlanResolver<'_> {
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
-                let table_name: Vec<String> = table.clone().into();
+                let resolved = resolved.ok_or_else(|| {
+                    PlanError::internal("catalog table without lakehouse resolution")
+                })?;
                 let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
-                        &table_name,
-                        LakehouseOperation::Write,
-                        Some(&normalized_format),
-                        vec![],
-                    )
+                    .begin_resolved_table_access(&table_name, resolved, LakehouseOperation::Write)
                     .await?;
                 Ok(RowLevelTarget {
                     table_name,

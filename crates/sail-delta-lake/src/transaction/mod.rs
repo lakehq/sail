@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::checkpoint::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
+use crate::datasource::pruning::PartitionPredicate;
 use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
 use crate::delta_log::{
     CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
@@ -30,9 +31,9 @@ use crate::delta_log::{
 use crate::options::session_user_metadata;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
-    Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
-    temp_commit_path,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, SaveMode,
+    TableFeature, Transaction, VersionChecksum, checksum_path, logical_file_key,
+    staged_commit_path, temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::table::DeltaSnapshot;
@@ -1151,6 +1152,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 impl Default for CommitBuilder {
@@ -1165,6 +1167,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            read_partition_predicate: None,
         }
     }
 }
@@ -1176,6 +1179,13 @@ impl CommitBuilder {
     /// `CheckpointMetadata`) are rejected at compile time.
     pub fn with_actions(mut self, actions: Vec<CommitAction>) -> Self {
         self.actions = actions;
+        self
+    }
+
+    /// The partitions that the transaction read, if it read only the partitions that satisfy
+    /// the predicate, against which the commit checks the files that concurrent commits add.
+    pub fn with_read_partition_predicate(mut self, predicate: Option<PartitionPredicate>) -> Self {
+        self.read_partition_predicate = predicate;
         self
     }
 
@@ -1235,6 +1245,7 @@ impl CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            read_partition_predicate: self.read_partition_predicate,
         }
     }
 }
@@ -1248,6 +1259,7 @@ pub struct PreCommit {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 impl std::future::IntoFuture for PreCommit {
@@ -1290,6 +1302,7 @@ impl PreCommit {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                read_partition_predicate: this.read_partition_predicate,
             })
         })
     }
@@ -1318,6 +1331,7 @@ pub struct PreparedCommit {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 // impl PreparedCommit<'_> {
@@ -1352,11 +1366,19 @@ impl std::future::IntoFuture for PreparedCommit {
                     _ => None,
                 })
                 .unwrap_or(false);
-            // OPTIMIZE can reuse completed rewrites after checking intervening commits.
+            // OPTIMIZE can reuse completed rewrites after checking intervening commits, and an
+            // overwrite checks intervening commits against what it read.
             let effective_max_retries = if creation_intent
                 || current_is_blind_append
-                || matches!(this.data.operation, DeltaOperation::Optimize { .. })
-            {
+                || matches!(
+                    this.data.operation,
+                    DeltaOperation::Optimize { .. }
+                        | DeltaOperation::Write {
+                            mode: SaveMode::Overwrite,
+                            ..
+                        }
+                        | DeltaOperation::DynamicPartitionOverwrite { .. }
+                ) {
                 this.max_retries
             } else {
                 0
@@ -1481,7 +1503,8 @@ impl std::future::IntoFuture for PreparedCommit {
                                 let transaction_info = TransactionInfo::try_new(
                                     snapshot,
                                     &local_actions,
-                                    this.data.operation.read_whole_table(),
+                                    &this.data.operation,
+                                    this.read_partition_predicate.as_ref(),
                                 )?;
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,
@@ -3102,6 +3125,15 @@ mod tests {
                 assert_eq!(result.metrics.num_retries, 1);
                 assert_eq!(result.snapshot.unwrap().version(), version + 1);
                 version + 1
+            } else if matches!(case, CommitCase::Overwrite) {
+                // An overwrite reads the whole table, to which the blind append that won added.
+                assert!(matches!(
+                    result,
+                    Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                        CommitConflictError::ConcurrentAppend
+                    )))
+                ));
+                version
             } else {
                 assert!(matches!(
                     result,

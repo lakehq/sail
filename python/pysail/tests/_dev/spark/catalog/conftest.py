@@ -3,6 +3,7 @@
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
+from pysail.tests._dev.spark.catalog.temp_view_utils import Table
 
 
 @pytest.fixture(scope="package")
@@ -18,3 +19,17 @@ def remote():
         }
     ) as server:
         yield server.remote
+
+
+@pytest.fixture
+def tables(spark, tmp_path):
+    """Returns a function that creates a `Table`, which is dropped with its views after the test."""
+    created = []
+
+    def create(fmt, columns="id BIGINT", properties=""):
+        created.append(Table(spark, tmp_path, fmt, columns, properties))
+        return created[-1]
+
+    yield create
+    for table in created:
+        table.drop()

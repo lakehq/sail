@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use datafusion::common::{Result, internal_datafusion_err};
+use sail_common_datafusion::session::config::SessionConfigProvider;
 use sail_plan::config::{
     DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
 };
@@ -39,10 +41,34 @@ impl From<ConfigKeyValue> for connect::KeyValue {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SparkRuntimeConfig {
     entries:
         &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,
     config: HashMap<String, String>,
+}
+
+/// The configuration of a session, which a clone of it keeps as it is now.
+impl SessionConfigProvider for SparkRuntimeConfig {
+    fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
+        Ok(keys
+            .iter()
+            .map(|key| self.get_option(key).map(str::to_owned))
+            .collect())
+    }
+
+    fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
+        Ok(self
+            .get_all(Some(prefix))
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .into_iter()
+            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
+            .collect())
+    }
+
+    fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+        Ok(Arc::new(self.clone()))
+    }
 }
 
 impl SparkRuntimeConfig {

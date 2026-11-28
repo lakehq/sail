@@ -163,6 +163,12 @@ mod tests {
         ) -> Result<std::collections::BTreeMap<String, String>> {
             Ok(Default::default())
         }
+
+        fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+            Err(DataFusionError::NotImplemented(
+                "snapshot of a test provider".to_string(),
+            ))
+        }
     }
 
     fn state(provider: Arc<Provider>) -> SessionState {
@@ -255,6 +261,7 @@ mod tests {
                 ],
             }],
             lakehouse_table: None,
+            snapshot_pins: None,
         };
         let checked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
         *provider.value.lock().unwrap() = Some("false".to_string());

@@ -24,6 +24,7 @@ use sail_common_datafusion::catalog::delta::{
 use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableColumnStatus, identity_partition_fields,
 };
+use sail_common_datafusion::datasource::LakeSnapshotPins;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::LakeSourceMetadata;
 use url::Url;
@@ -265,10 +266,19 @@ pub async fn create_delta_source(
     schema: Option<Schema>,
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    pins: Option<&LakeSnapshotPins>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let read_options = options.clone();
-    let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
+    let (snapshot, log_store, scan_config) = load_delta_read_state(
+        ctx,
+        table_url,
+        schema,
+        options,
+        false,
+        lakehouse_table,
+        pins,
+    )
+    .await?;
 
     if read_options.read_change_feed {
         return Ok(Arc::new(
@@ -310,7 +320,7 @@ pub async fn infer_delta_logical_metadata(
 ) -> Result<LakeSourceMetadata> {
     let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table, None).await?;
 
     let schema = if read_options.read_change_feed {
         use datafusion::logical_expr::TableSource;
@@ -353,7 +363,7 @@ pub(crate) async fn delta_table_properties(
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Vec<(String, String)>> {
     let (snapshot, _, _) =
-        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table, None).await?;
     let mut properties = snapshot.metadata().configuration().clone();
     properties.remove("path");
     let protocol = snapshot.protocol();
@@ -801,6 +811,28 @@ where
     }
 }
 
+/// Loads the version of the table that the statement read earlier. A table that was created
+/// again at the location has another ID, and the statement would read two tables.
+pub(crate) async fn load_pinned_version(
+    table: &mut DeltaTable,
+    pinned: &DeltaSnapshot,
+    table_url: &Url,
+) -> Result<()> {
+    let id = pinned.metadata().id();
+    let version = pinned.version();
+    let loaded = table.load_version(version).await;
+    if loaded.is_err() || table.snapshot()?.metadata().id() != id {
+        let cause = loaded.err().map(|e| format!(" ({e})")).unwrap_or_default();
+        return Err(DataFusionError::Plan(format!(
+            "The Delta Lake table at {table_url} was replaced by another table, \
+            or no longer has the version {version} that the statement read \
+            earlier, while the statement was planned{cause}. Run the statement \
+            again."
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) async fn load_delta_read_state(
     ctx: &dyn Session,
     table_url: Url,
@@ -808,6 +840,7 @@ pub(crate) async fn load_delta_read_state(
     options: DeltaReadOptions,
     metadata_only: bool,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    pins: Option<&LakeSnapshotPins>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
@@ -816,28 +849,64 @@ pub(crate) async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
-        Some(lakehouse_table) => {
-            load_catalog_managed_commits_for_snapshot(
-                &ctx,
-                lakehouse_table,
-                &table_url,
-                log_store.clone(),
-                options.version_as_of,
-            )
-            .await?
-        }
-        None => None,
-    };
-
+    let managed_commit_context = catalog_managed_commit_context(lakehouse_table.as_ref());
+    let catalog_managed = managed_commit_context.is_some();
     let mut table_config = delta_read_snapshot_config(metadata_only, &options);
-    table_config.catalog_managed_commits = catalog_managed_commits;
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
+    let require_files = table_config.require_files;
 
-    // Load the table state according to the provided time travel options.
-    load_table_by_options(&mut deltalake_table, &options).await?;
-
-    let snapshot = deltalake_table.snapshot()?.clone();
+    // The reads of a table in a statement read the snapshot that the first of them read,
+    // unless they travel in time or read changes. A read that needs the files of the
+    // snapshot loads them for the version of a snapshot that was read without them.
+    let pins = pins.filter(|_| {
+        options.version_as_of.is_none()
+            && options.timestamp_as_of.is_none()
+            && !options.read_change_feed
+    });
+    let pinned = pins
+        .map(|pins| pins.get::<DeltaSnapshot>(table_url.as_str(), catalog_managed))
+        .transpose()?
+        .flatten();
+    let snapshot = match pinned {
+        Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
+        pinned => {
+            // The commits that the catalog ratified. A read with the files of a snapshot that
+            // an earlier read read without them loads the version with the commits of that
+            // snapshot, without asking the catalog again.
+            if let Some(context) = managed_commit_context {
+                table_config.catalog_managed_commits = match &pinned {
+                    Some(pinned) => pinned.load_config().catalog_managed_commits.clone(),
+                    None => {
+                        load_catalog_managed_commits_for_snapshot(
+                            &ctx,
+                            context,
+                            &table_url,
+                            log_store.clone(),
+                            options.version_as_of,
+                        )
+                        .await?
+                    }
+                };
+            }
+            let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
+            match pinned {
+                // The read loads the files of the version that the statement read.
+                Some(pinned) => {
+                    load_pinned_version(&mut deltalake_table, &pinned, &table_url).await?
+                }
+                // Load the table state according to the provided time travel options.
+                None => load_table_by_options(&mut deltalake_table, &options).await?,
+            }
+            let snapshot = Arc::clone(deltalake_table.snapshot()?);
+            if let Some(pins) = pins {
+                pins.insert(
+                    table_url.to_string(),
+                    catalog_managed,
+                    Arc::clone(&snapshot),
+                )?;
+            }
+            snapshot
+        }
+    };
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,

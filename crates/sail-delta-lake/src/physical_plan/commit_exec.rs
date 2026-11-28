@@ -31,6 +31,8 @@ use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
+use crate::datasource::actions::PartitionKeys;
+use crate::datasource::pruning::PartitionPredicate;
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
@@ -115,6 +117,8 @@ pub struct DeltaCommitExec {
     user_metadata: Option<String>,
     commit_context: DeltaCommitContext,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The partitions that the commit read, if it read only some partitions.
+    read_partition_predicate: Option<PartitionPredicate>,
     metrics: ExecutionPlanMetricsSet,
     output: CommandOutput,
     cache: Arc<PlanProperties>,
@@ -171,6 +175,7 @@ impl DeltaCommitExec {
             user_metadata,
             commit_context,
             lakehouse_table,
+            read_partition_predicate: None,
             metrics: ExecutionPlanMetricsSet::new(),
             output,
             cache,
@@ -181,6 +186,15 @@ impl DeltaCommitExec {
         self.output = output;
         self.cache = Self::compute_properties(output.schema());
         self
+    }
+
+    pub fn with_read_partition_predicate(mut self, predicate: Option<PartitionPredicate>) -> Self {
+        self.read_partition_predicate = predicate;
+        self
+    }
+
+    pub fn read_partition_predicate(&self) -> Option<&PartitionPredicate> {
+        self.read_partition_predicate.as_ref()
     }
 
     pub fn output(&self) -> CommandOutput {
@@ -610,7 +624,8 @@ impl ExecutionPlan for DeltaCommitExec {
                 self.commit_context.clone(),
                 self.lakehouse_table.clone(),
             )
-            .with_output(self.output),
+            .with_output(self.output)
+            .with_read_partition_predicate(self.read_partition_predicate.clone()),
         ))
     }
 
@@ -645,6 +660,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
+        let read_partition_predicate = self.read_partition_predicate.clone();
         let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let output = self.output;
         let future = async move {
@@ -918,43 +934,11 @@ impl ExecutionPlan for DeltaCommitExec {
             if matches!(sink_mode, PhysicalSinkMode::OverwritePartitions)
                 && let Some(snapshot) = &reference
             {
-                let partition_schema = final_actions
-                    .iter()
-                    .rev()
-                    .find_map(|action| match action {
-                        CommitAction::Metadata(metadata) => Some(metadata.parse_schema_arrow()),
-                        _ => None,
-                    })
-                    .transpose()
-                    .map_err(|error| DataFusionError::External(Box::new(error)))?
-                    .unwrap_or_else(|| snapshot.schema().clone());
-                let partition_fields = snapshot
-                    .physical_partition_columns()
-                    .into_iter()
-                    .map(|column| {
-                        let field = partition_schema.field_with_name(&column.logical_name)?;
-                        Ok((column.physical_name, field.data_type().clone()))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let keys = PartitionKeys::try_new(snapshot, &final_actions)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
                 let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
-                    partition_fields
-                        .iter()
-                        .map(|(name, data_type)| {
-                            crate::conversion::parse_optional_partition_value(
-                                add.partition_values
-                                    .get(name)
-                                    .and_then(|value| value.as_deref()),
-                                data_type,
-                            )
-                            // ScalarValue compares float bits, while Spark equates signed zeros.
-                            .map(|value| match value {
-                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
-                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
-                                value => value,
-                            })
-                            .map_err(|error| DataFusionError::External(Box::new(error)))
-                        })
-                        .collect()
+                    keys.key(add)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))
                 };
                 let partitions = final_actions
                     .iter()
@@ -1091,6 +1075,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             .with_user_metadata(user_metadata),
                     )
                     .with_actions(final_actions)
+                    .with_read_partition_predicate(read_partition_predicate)
                     .build(reference, log_store.clone(), operation)
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -1129,6 +1114,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             .with_user_metadata(user_metadata),
                     )
                     .with_actions(final_actions.clone())
+                    .with_read_partition_predicate(read_partition_predicate)
                     .build(reference, log_store.clone(), operation);
                     let staged = pre_commit
                         .into_staged_commit_future_with_catalog_latest_version(
@@ -1173,6 +1159,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         .with_user_metadata(user_metadata),
                 )
                 .with_actions(final_actions)
+                .with_read_partition_predicate(read_partition_predicate)
                 .build(reference.clone(), log_store.clone(), operation);
                 pre_commit
                     .await

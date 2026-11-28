@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::execution::SessionState;
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
 use sail_catalog::lakehouse::RegisteredFileTable;
@@ -16,6 +17,7 @@ use sail_data_source::listing::{RegisteredTableSource, cast_catalog_partition_va
 use sail_data_source::parse_absolute_directory_url;
 use url::Position;
 
+use super::temp_view::{CatalogTableOrigin, TableOrigin};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -24,8 +26,9 @@ impl PlanResolver<'_> {
     pub(super) async fn create_catalog_table_sources(
         &self,
         manager: &CatalogManager,
+        ctx: &SessionState,
         registry: &DataSourceRegistry,
-        reference: &[String],
+        origin: &CatalogTableOrigin,
         format: &str,
         registered: Option<RegisteredFileTable>,
         info: SourceInfo,
@@ -44,17 +47,16 @@ impl PlanResolver<'_> {
         });
         let listing = match registered {
             Some(table) => manager
-                .list_file_partitions(reference, &vec![None; info.partition_by.len()])
+                .list_file_partitions(&origin.name, &vec![None; info.partition_by.len()])
                 .await?
                 .map(|partitions| (partitions, table.read_options)),
             None => None,
         };
-        let ctx = self.ctx.state();
         let Some((partitions, file_read_options)) = listing else {
             return Ok(vec![
                 registry
                     .get_data_source(format)?
-                    .create_source(&ctx, info)
+                    .create_source(ctx, info)
                     .await?,
             ]);
         };
@@ -71,6 +73,7 @@ impl PlanResolver<'_> {
             )?)]);
         }
         let (fields, _) = get_partition_columns_and_file_schema(schema, info.partition_by.clone())?;
+        let (ansi_mode, session_timezone) = &origin.partition_value_cast;
         // Each file scan uses one reader and one object store. Most tables need only one scan.
         let mut groups = BTreeMap::new();
         for partition in partitions {
@@ -92,8 +95,8 @@ impl PlanResolver<'_> {
                     cast_catalog_partition_value(
                         value,
                         field.data_type(),
-                        self.config.ansi_mode,
-                        &self.config.session_timezone,
+                        *ansi_mode,
+                        session_timezone,
                     )
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
@@ -136,10 +139,13 @@ impl PlanResolver<'_> {
         Ok(scans)
     }
 
+    /// Resolves the scans of the sources of a catalog table read. `origin` is what the read
+    /// reads, which a temporary view reads again at each read.
     pub(super) fn resolve_catalog_table_scans(
         &self,
         sources: Vec<Arc<dyn TableSource>>,
         reference: TableReference,
+        origin: TableOrigin,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         if let [source] = sources.as_slice() {
@@ -149,8 +155,14 @@ impl PlanResolver<'_> {
                 None,
                 vec![],
                 None,
+                Some(origin),
                 state,
             );
+        }
+        // The stored plan of a temporary view reads a table in one scan, so a view over the
+        // partitions of a table in several scans resolves its query at each read instead.
+        if let Some(reads) = state.view_definition_mut() {
+            reads.resolves_at_each_read = true;
         }
         let inputs = sources
             .into_iter()

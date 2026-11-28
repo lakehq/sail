@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -247,6 +248,55 @@ pub struct SourceInfo {
     /// reconcile a requested schema against files on read (e.g. Parquet); it is
     /// inert for formats that resolve their schema from metadata.
     pub read_case_sensitive: bool,
+    /// The table snapshots that the reads of the statement share, for a read of the data
+    /// of a table.
+    pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
+}
+
+/// The key of the snapshot of a lake table: the type of the snapshot, which is the format of
+/// the table, the location of the table, and a flag that each format uses for its own second
+/// kind of snapshot: for Delta Lake, whether the snapshot was read with the commits that the
+/// catalog ratified, and for Iceberg, whether the read names a metadata file.
+type LakeSnapshotKey = (TypeId, String, bool);
+
+/// The snapshots of the lake tables that the reads of one statement read, so that all the
+/// reads of a table in the statement read one snapshot of it, whether they read it by name
+/// or by path and whatever their read options are.
+#[derive(Debug, Default)]
+pub struct LakeSnapshotPins {
+    snapshots: Mutex<HashMap<LakeSnapshotKey, Arc<dyn Any + Send + Sync>>>,
+}
+
+impl LakeSnapshotPins {
+    /// Returns the snapshot of the type that the reads of the table read.
+    pub fn get<T: Any + Send + Sync>(
+        &self,
+        location: &str,
+        catalog_managed: bool,
+    ) -> Result<Option<Arc<T>>> {
+        let snapshots = self
+            .snapshots
+            .lock()
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
+        let key = (TypeId::of::<T>(), location.to_string(), catalog_managed);
+        Ok(snapshots
+            .get(&key)
+            .and_then(|snapshot| Arc::clone(snapshot).downcast::<T>().ok()))
+    }
+
+    /// Records the snapshot that the reads of the table read.
+    pub fn insert<T: Any + Send + Sync>(
+        &self,
+        location: String,
+        catalog_managed: bool,
+        snapshot: Arc<T>,
+    ) -> Result<()> {
+        self.snapshots
+            .lock()
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?
+            .insert((TypeId::of::<T>(), location, catalog_managed), snapshot);
+        Ok(())
+    }
 }
 
 impl SourceInfo {
@@ -275,6 +325,9 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The table snapshots that the reads of the statement read, so that a write that reads
+    /// its own table writes on the snapshot that it read.
+    pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
 }
 
 impl SinkInfo {
@@ -538,6 +591,31 @@ impl DataSourceRegistry {
         }
     }
 
+    /// Returns a registry of the data sources that are registered now, which later
+    /// registrations do not change.
+    pub fn snapshot(&self) -> Result<Self> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        Ok(Self {
+            sources: RwLock::new(sources.clone()),
+        })
+    }
+
+    /// Whether the two registries have the same data sources under the same names.
+    pub fn has_same_sources(&self, other: &Self) -> Result<bool> {
+        let error = || plan_datafusion_err!("data source registry poisoned");
+        let sources = self.sources.read().map_err(|_| error())?;
+        let others = other.sources.read().map_err(|_| error())?;
+        Ok(sources.len() == others.len()
+            && sources.iter().all(|(name, source)| {
+                others
+                    .get(name)
+                    .is_some_and(|other| Arc::ptr_eq(source, other))
+            }))
+    }
+
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
         let mut sources = self
             .sources
@@ -782,6 +860,30 @@ mod tests {
     }
 
     impl LakeSource for TestLakeSource {}
+
+    #[test]
+    fn lake_snapshot_pins_keep_a_snapshot_for_each_table_and_commit_kind() -> Result<()> {
+        let pins = LakeSnapshotPins::default();
+        let location = "memory:///d/";
+        let version = |pinned: Option<Arc<i64>>| pinned.map(|x| *x);
+        pins.insert(location.to_string(), false, Arc::new(1_i64))?;
+        // A snapshot of the same location with the commits that the catalog ratified is
+        // another snapshot.
+        pins.insert(location.to_string(), true, Arc::new(2_i64))?;
+        // A snapshot of another format of the same location is another snapshot as well.
+        pins.insert(location.to_string(), false, Arc::new("other".to_string()))?;
+        assert_eq!(version(pins.get(location, false)?), Some(1));
+        assert_eq!(version(pins.get(location, true)?), Some(2));
+        assert_eq!(
+            pins.get::<String>(location, false)?
+                .as_deref()
+                .map(String::as_str),
+            Some("other")
+        );
+        assert!(pins.get::<String>(location, true)?.is_none());
+        assert!(pins.get::<i64>("memory:///e/", false)?.is_none());
+        Ok(())
+    }
 
     #[test]
     fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {

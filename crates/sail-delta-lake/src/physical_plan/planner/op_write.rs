@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
@@ -20,6 +21,7 @@ use super::utils::{
     LogReplayOptions, align_schemas_for_union, build_log_replay_pipeline_with_options,
     build_standard_write_layers, prepare_delta_writer_input,
 };
+use crate::datasource::pruning::PartitionPredicate;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
     DeltaWriterExec, DeltaWriterExecOptions,
@@ -279,6 +281,21 @@ async fn build_overwrite_if_plan(
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    // As in Delta Lake, the overwrite read the partitions that the conjuncts of its condition on
+    // partition columns only select, or else the whole table.
+    let read_partition_predicate = conjunction(
+        split_conjunction(&condition_expr)
+            .into_iter()
+            .filter(|conjunct| {
+                !conjunct.column_refs().is_empty()
+                    && !predicate_requires_stats(conjunct, &partition_columns)
+            })
+            .cloned(),
+    )
+    .map(|predicate| {
+        PartitionPredicate::try_new(ctx.session(), &snapshot_state, &table_schema, predicate)
+    })
+    .transpose()?;
     let log_replay_options = LogReplayOptions {
         // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
         // for partition-only overwrites where data-skipping itself does not need stats_json.
@@ -326,7 +343,8 @@ async fn build_overwrite_if_plan(
             write_context.commit_context.clone(),
             ctx.lakehouse_table().cloned(),
         )
-        .with_output(ctx.config().output),
+        .with_output(ctx.config().output)
+        .with_read_partition_predicate(read_partition_predicate),
     ))
 }
 

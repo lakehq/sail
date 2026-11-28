@@ -37,6 +37,7 @@ mod sample;
 mod set_op;
 mod sort;
 mod stat;
+mod temp_view;
 mod time_travel;
 mod udf;
 mod udtf;
@@ -46,6 +47,7 @@ mod with_relations;
 
 pub(super) use cte::{CteInfo, CteKind};
 pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
+pub(super) use temp_view::{TableOrigin, ViewSourceSettings};
 
 impl PlanResolver<'_> {
     /// Resolve query plan.

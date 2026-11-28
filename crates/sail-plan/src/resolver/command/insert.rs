@@ -202,9 +202,9 @@ impl PlanResolver<'_> {
         has_partition_clause: bool,
     ) -> PlanResult<Option<(TemporaryViewSource, Vec<TableColumnStatus>)>> {
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let status = match manager.get_table_or_view(table.parts()).await {
-            Ok(status) => status,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
+        let status = match manager.find_temporary_view(table.parts()).await {
+            Ok(Some(status)) => status,
+            Ok(None) | Err(CatalogError::NotFound(_, _)) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
         match status.kind {

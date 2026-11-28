@@ -385,6 +385,12 @@ impl DeltaOperation {
     pub fn read_whole_table(&self) -> bool {
         match self {
             Self::Clone { .. } | Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
+            // An overwrite reads the whole table, unless its commit checks the partitions that it
+            // read.
+            Self::Write {
+                mode: SaveMode::Overwrite,
+                ..
+            } => true,
             // UPDATE predicates are not yet evaluated against concurrent file additions, so
             // conservatively retain the full read set until predicate conflict checks are wired.
             Self::Update { .. } => true,

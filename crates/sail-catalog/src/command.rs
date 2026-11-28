@@ -885,7 +885,7 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
-                let input = manager.get_tracked_logical_plan(options.input)?;
+                let (input, definition) = manager.get_tracked_logical_plan(options.input)?;
                 let options = CreateTemporaryViewOptions {
                     input,
                     columns: options.columns,
@@ -896,9 +896,13 @@ impl CatalogCommand {
                     source: options.source,
                 };
                 if is_global {
-                    manager.create_global_temporary_view(&view, options).await?;
+                    manager
+                        .create_global_temporary_view(&view, options, definition)
+                        .await?;
                 } else {
-                    manager.create_temporary_view(&view, options).await?;
+                    manager
+                        .create_temporary_view(&view, options, definition)
+                        .await?;
                 }
                 display.bools().to_record_batch(vec![true])?
             }

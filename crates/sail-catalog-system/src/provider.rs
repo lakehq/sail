@@ -79,6 +79,7 @@ impl SystemCatalogProvider {
                 comment: Some(t.description().to_string()),
                 properties: vec![],
                 source: None,
+                definition: None,
             },
         };
         Ok(status)

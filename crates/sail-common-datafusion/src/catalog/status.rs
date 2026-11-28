@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{LogicalPlan, ScalarUDF};
+use sail_common::spec::QueryPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
@@ -153,6 +156,8 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
         /// The data source backing the view, if it was created with `USING`.
         source: Option<TemporaryViewSource>,
+        /// The definition of the view, if it reads tables.
+        definition: Option<Arc<TemporaryViewDefinition>>,
     },
     GlobalTemporaryView {
         plan: Arc<LogicalPlan>,
@@ -161,7 +166,61 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
         /// The data source backing the view, if it was created with `USING`.
         source: Option<TemporaryViewSource>,
+        /// The definition of the view, if it reads tables.
+        definition: Option<Arc<TemporaryViewDefinition>>,
     },
+}
+
+/// The query that defines a temporary view, as a SQL query or a DataFrame defined it, and what
+/// it was resolved with when the view was created. The view resolves the query again when its
+/// plan no longer fits the tables that it reads, as Spark analyzes the SQL text of a temporary
+/// view at each read and as the DataFrame resolves its plan at each action.
+#[derive(Debug, Clone)]
+pub struct TemporaryViewDefinition {
+    pub query: QueryPlan,
+    /// The names of the outputs of the query.
+    pub output_names: Vec<String>,
+    /// The current catalog and database of the session that created the view.
+    pub catalog: String,
+    pub database: Vec<String>,
+    /// The temporary views and the functions of the session that the query resolved.
+    pub objects: TemporaryViewObjects,
+    /// The configuration that the query was resolved with.
+    pub config: Arc<dyn Any + Send + Sync>,
+    /// The catalogs of the session that each session has its own instance of, in which the
+    /// query resolves again in any session.
+    pub catalogs: Arc<dyn Any + Send + Sync>,
+    /// The settings that the session that created the view had when the view was created:
+    /// its configuration and its data sources, by which the query builds the sources of its
+    /// tables again in any session. They hold no reference to the session.
+    pub settings: Arc<dyn Any + Send + Sync>,
+    /// Whether the query resolves again at each read of the view, as Spark analyzes it: the
+    /// query read tables that the plan of the view does not scan, or persistent views, which
+    /// can be defined again.
+    pub resolves_at_each_read: bool,
+}
+
+impl PartialEq for TemporaryViewDefinition {
+    fn eq(&self, other: &Self) -> bool {
+        self.query == other.query
+            && self.output_names == other.output_names
+            && self.catalog == other.catalog
+            && self.database == other.database
+            && Arc::ptr_eq(&self.config, &other.config)
+            && Arc::ptr_eq(&self.catalogs, &other.catalogs)
+            && Arc::ptr_eq(&self.settings, &other.settings)
+            && self.resolves_at_each_read == other.resolves_at_each_read
+    }
+}
+
+impl Eq for TemporaryViewDefinition {}
+
+/// The temporary views by the references that name them, and the functions of the session
+/// by their names, that the query of a temporary view resolved.
+#[derive(Debug, Clone, Default)]
+pub struct TemporaryViewObjects {
+    pub temporary_views: HashMap<Vec<String>, TableStatus>,
+    pub functions: HashMap<String, ScalarUDF>,
 }
 
 /// The data source backing a temporary view created with

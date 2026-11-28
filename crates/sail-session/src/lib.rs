@@ -14,6 +14,7 @@ pub mod shutdown;
 
 #[cfg(test)]
 mod tests {
+    mod catalog_table_lookup;
     mod clone;
 
     use std::collections::HashMap;
@@ -56,17 +57,27 @@ mod tests {
     fn create_session_with_catalog(
         catalog: Arc<dyn CatalogProvider>,
     ) -> Result<SessionContext, Box<dyn std::error::Error>> {
+        create_session_with_catalogs(catalog, vec![])
+    }
+
+    /// Creates a session with the default catalog `sail` and more catalogs by name.
+    fn create_session_with_catalogs(
+        catalog: Arc<dyn CatalogProvider>,
+        others: Vec<(String, Arc<dyn CatalogProvider>)>,
+    ) -> Result<SessionContext, Box<dyn std::error::Error>> {
         let mut state = SessionStateBuilder::new()
             .with_query_planner(crate::planner::new_query_planner())
             .build();
+        let mut catalogs = HashMap::from([
+            ("sail".to_string(), catalog),
+            (
+                SYSTEM_CATALOG_NAME.to_string(),
+                Arc::new(SystemCatalogProvider) as Arc<dyn CatalogProvider>,
+            ),
+        ]);
+        catalogs.extend(others);
         let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([
-                ("sail".to_string(), catalog),
-                (
-                    SYSTEM_CATALOG_NAME.to_string(),
-                    Arc::new(SystemCatalogProvider) as Arc<dyn CatalogProvider>,
-                ),
-            ]),
+            catalogs,
             default_catalog: "sail".to_string(),
             default_database: vec!["default".to_string()],
             global_temporary_database: vec!["global_temp".to_string()],
@@ -478,8 +489,14 @@ mod tests {
             inner: create_memory_catalog()?,
             lookups: AtomicUsize::new(0),
         });
-        let session =
-            create_session_with_catalog(Arc::clone(&catalog) as Arc<dyn CatalogProvider>)?;
+        // The catalog has two names, so that one query can look up one table twice.
+        let session = create_session_with_catalogs(
+            Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
+            vec![(
+                "other".to_string(),
+                Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
+            )],
+        )?;
         let source = Arc::new(CountingDataSource {
             calls: AtomicUsize::new(0),
         });
@@ -493,12 +510,13 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         session.execute_logical_plan(plan).await?.collect().await?;
 
-        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t)";
+        // Each name of the catalog looks the table up, and the catalog returns the
+        // same table for both, with the properties in two orders.
+        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM other.default.t)";
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let lookups = catalog.lookups.load(Ordering::SeqCst);
         resolver.resolve_named_plan(plan).await?;
         let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
-        // Each spelling looks the table up, and the lookups return different orders.
         assert_eq!(lookups, 2);
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
         Ok(())
@@ -787,12 +805,20 @@ mod tests {
         session: &SessionContext,
         query: &str,
     ) -> Result<Arc<dyn ExecutionPlan>, Box<dyn std::error::Error>> {
-        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
-
         let resolver =
             PlanResolver::new(session, Arc::new(PlanConfig::default())).with_shared_ctes();
         let plan = from_ast_statement(parse_one_statement(query)?)?;
         let plan = resolver.resolve_named_plan(plan).await?.plan;
+        plan_shared_ctes(session, plan).await
+    }
+
+    /// Plans a resolved plan whose CTE definitions are shared, as the session does.
+    async fn plan_shared_ctes(
+        session: &SessionContext,
+        plan: LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>, Box<dyn std::error::Error>> {
+        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+
         let state = session.state();
         let state = &state;
         let mut restart = false;

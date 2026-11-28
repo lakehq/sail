@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datafusion_expr::{LogicalPlan, ScalarUDF};
+use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
+use crate::manager::scope::ViewDefinitionScope;
+use crate::manager::tracker::{
+    CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker, TrackedLogicalPlan,
+};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
 pub mod catalog;
 pub mod database;
 pub mod function;
+pub mod scope;
 pub mod table;
 pub mod tracker;
 pub mod view;
@@ -25,6 +30,9 @@ pub struct CatalogManager {
     pub(super) temporary_views: TemporaryViewManager,
     pub(super) tracker: CatalogObjectTracker,
 }
+
+/// The catalogs of a session that each session has its own instance of, by name.
+pub(super) type SessionLocalCatalogs = HashMap<Arc<str>, Arc<dyn CatalogProvider>>;
 
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
@@ -77,12 +85,18 @@ impl CatalogManager {
             .map_err(|e| CatalogError::Internal(e.to_string()))
     }
 
+    /// Returns the catalog and the database that unqualified names refer to: those of the
+    /// session, or those of the session that created a temporary view while the view
+    /// resolves its query again.
+    pub fn current_namespace(&self) -> CatalogResult<(Arc<str>, Namespace)> {
+        Ok(self.state()?.current_namespace())
+    }
+
     pub(super) fn resolve_default_database(
         &self,
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
-        let catalog = state.default_catalog.clone();
-        let database = state.default_database.clone();
+        let (catalog, database) = state.current_namespace();
         Ok((state.get_catalog(&catalog)?, database))
     }
 
@@ -101,8 +115,7 @@ impl CatalogManager {
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
         if qualifier.is_empty() {
-            let catalog = state.default_catalog.clone();
-            let database = state.default_database.clone();
+            let (catalog, database) = state.current_namespace();
             Ok((state.get_catalog(&catalog)?, database))
         } else {
             let (catalog, database) = state.resolve_database_reference(qualifier)?;
@@ -140,6 +153,20 @@ impl CatalogManager {
         Ok(parts)
     }
 
+    /// Returns the catalogs of this session that each session has its own instance of (see
+    /// [`CatalogProvider::is_session_local`]), in which the query of a temporary view
+    /// resolves again in any session (see [`ViewDefinitionScope`]).
+    pub fn session_local_catalogs(&self) -> CatalogResult<Arc<dyn Any + Send + Sync>> {
+        let catalogs: SessionLocalCatalogs = self
+            .state()?
+            .catalogs
+            .iter()
+            .filter(|(_, provider)| provider.is_session_local())
+            .map(|(name, provider)| (Arc::clone(name), Arc::clone(provider)))
+            .collect();
+        Ok(Arc::new(catalogs))
+    }
+
     pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
         self.tracker.track_function(udf)
     }
@@ -150,7 +177,7 @@ impl CatalogManager {
 
     pub fn track_logical_plan(
         &self,
-        plan: Arc<LogicalPlan>,
+        plan: TrackedLogicalPlan,
     ) -> CatalogResult<CatalogLogicalPlanId> {
         self.tracker.track_logical_plan(plan)
     }
@@ -158,12 +185,19 @@ impl CatalogManager {
     pub fn get_tracked_logical_plan(
         &self,
         id: CatalogLogicalPlanId,
-    ) -> CatalogResult<Arc<LogicalPlan>> {
+    ) -> CatalogResult<TrackedLogicalPlan> {
         self.tracker.get_tracked_logical_plan(id)
     }
 }
 
 impl CatalogManagerState {
+    /// The current catalog and database, which are those of the session that created a
+    /// temporary view while the view resolves its query again.
+    fn current_namespace(&self) -> (Arc<str>, Namespace) {
+        ViewDefinitionScope::namespace()
+            .unwrap_or_else(|| (self.default_catalog.clone(), self.default_database.clone()))
+    }
+
     pub fn resolve_database_reference<T: AsRef<str>>(
         &self,
         reference: &[T],
@@ -172,13 +206,13 @@ impl CatalogManagerState {
             [] => Err(CatalogError::InvalidArgument(
                 "empty database reference".to_string(),
             )),
-            [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
+            [head, tail @ ..] if self.catalog(head.as_ref()).is_some() => {
                 let catalog = head.as_ref().into();
                 let database = tail.try_into()?;
                 Ok((catalog, database))
             }
             x => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 let database = x.try_into()?;
                 Ok((catalog, database))
             }
@@ -191,15 +225,15 @@ impl CatalogManagerState {
     ) -> CatalogResult<(Arc<str>, Option<Namespace>)> {
         match reference {
             [] => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 Ok((catalog, None))
             }
-            [name] if self.catalogs.contains_key(name.as_ref()) => {
+            [name] if self.catalog(name.as_ref()).is_some() => {
                 let catalog = name.as_ref().into();
                 Ok((catalog, None))
             }
             x => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 let database = x.try_into()?;
                 Ok((catalog, Some(database)))
             }
@@ -210,7 +244,8 @@ impl CatalogManagerState {
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
-        self.resolve_object_reference_with_default_catalog(&self.default_catalog, reference)
+        let (catalog, _) = self.current_namespace();
+        self.resolve_object_reference_with_default_catalog(&catalog, reference)
     }
 
     pub fn resolve_object_reference_with_default_catalog<T: AsRef<str>>(
@@ -226,8 +261,9 @@ impl CatalogManagerState {
             [name] => {
                 let table = name.as_ref().into();
                 let catalog = Arc::from(default_catalog);
-                let database = if default_catalog == self.default_catalog.as_ref() {
-                    self.default_database.clone()
+                let (current_catalog, current_database) = self.current_namespace();
+                let database = if default_catalog == current_catalog.as_ref() {
+                    current_database
                 } else {
                     provider.default_namespace()
                 };
@@ -236,7 +272,7 @@ impl CatalogManagerState {
             [x @ .., last] => {
                 let table = last.as_ref().into();
                 let (catalog, database) = match x {
-                    [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
+                    [head, tail @ ..] if self.catalog(head.as_ref()).is_some() => {
                         (head.as_ref().into(), tail.try_into()?)
                     }
                     database => (Arc::from(default_catalog), database.try_into()?),
@@ -254,13 +290,15 @@ impl CatalogManagerState {
     }
 
     pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
-        let Some(provider) = self.catalogs.get(catalog) else {
-            return Err(CatalogError::NotFound(
-                CatalogObject::Catalog,
-                catalog.to_string(),
-            ));
-        };
-        Ok(Arc::clone(provider))
+        self.catalog(catalog)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Catalog, catalog.to_string()))
+    }
+
+    /// Returns the catalog of the name, which is the one of the session that created a
+    /// temporary view while the view resolves its query again, if that session has its own
+    /// instance of the catalog.
+    fn catalog(&self, catalog: &str) -> Option<Arc<dyn CatalogProvider>> {
+        ViewDefinitionScope::pinned_catalog(catalog).or_else(|| self.catalogs.get(catalog).cloned())
     }
 }
 

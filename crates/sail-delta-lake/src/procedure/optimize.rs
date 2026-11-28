@@ -65,6 +65,7 @@ pub(crate) async fn plan(
         read_options,
         false,
         node.lakehouse_table.clone(),
+        None,
     )
     .await?;
     super::maintenance::validate_snapshot(&snapshot, invocation)?;

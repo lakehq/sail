@@ -2,9 +2,11 @@
 
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+    BeginTableAccessRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
 };
@@ -35,30 +37,50 @@ impl PlanResolver<'_> {
             .await?;
         self.begin_lakehouse_table_access(
             table,
+            None,
             resolved.execution,
             table_access_purpose(operation),
         )
         .await
     }
 
-    /// Begins access to a table that the catalog has already resolved.
+    /// Begins access for `operation` to a table from a catalog table lookup of the query.
+    pub(super) async fn begin_resolved_table_access(
+        &self,
+        table: &[String],
+        resolved: LakehouseResolvedTable,
+        operation: LakehouseOperation,
+    ) -> PlanResult<LakehouseExecutionContext> {
+        self.begin_lakehouse_table_access(
+            table,
+            None,
+            resolved.execution.for_operation(operation),
+            table_access_purpose(operation),
+        )
+        .await
+    }
+
+    /// Begins access to a table that the catalog has already resolved. A table in the
+    /// catalog of another session is accessed in that catalog.
     pub(super) async fn begin_lakehouse_table_access(
         &self,
         table: &[String],
+        session_table: Option<&SessionCatalogTable>,
         execution: LakehouseExecutionContext,
         access_purpose: TableAccessPurpose,
     ) -> PlanResult<LakehouseExecutionContext> {
-        let manager = self.ctx.extension::<CatalogManager>()?;
-        match manager
-            .begin_table_access(
-                table,
-                BeginTableAccessRequest {
-                    context: execution.clone(),
-                    purpose: access_purpose,
-                },
-            )
-            .await
-        {
+        let request = BeginTableAccessRequest {
+            context: execution.clone(),
+            purpose: access_purpose,
+        };
+        let session = match session_table {
+            Some(table) => table.begin_table_access(request).await,
+            None => {
+                let manager = self.ctx.extension::<CatalogManager>()?;
+                manager.begin_table_access(table, request).await
+            }
+        };
+        match session {
             Ok(session) => Ok(session.context),
             Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
                 Ok(execution)

@@ -55,6 +55,7 @@ use crate::operations::metadata_commit::{
     PreviousMetadataFile, previous_metadata_log_entry,
 };
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
+use crate::options::snapshot_selector;
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::action_schema::iceberg_action_schema;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
@@ -124,6 +125,7 @@ impl DataSource for IcebergLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            snapshot_pins: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
@@ -203,6 +205,13 @@ impl LakeRelationProvider for IcebergLakeSource {
 impl LakeSource for IcebergLakeSource {
     fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
         Some(self)
+    }
+
+    /// A branch read follows the branch. A ref can name a tag, which is a version.
+    fn selects_table_version(&self, options: &[(String, String)]) -> bool {
+        options
+            .iter()
+            .any(|(key, _)| snapshot_selector(key).is_some_and(|x| x != "branch"))
     }
 
     fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
@@ -1257,16 +1266,43 @@ pub(crate) enum IcebergReadPurpose {
 
 pub(crate) async fn load_iceberg_read_table(
     ctx: &dyn Session,
-    info: SourceInfo,
+    mut info: SourceInfo,
     read_purpose: IcebergReadPurpose,
-) -> Result<(Table, IcebergReadOptions)> {
+) -> Result<(Arc<Table>, IcebergReadOptions)> {
+    // The reads of a table in one statement read one version of its metadata, whatever
+    // their read options are, and each read selects its snapshot in that version. A read
+    // of a metadata file reads that file, which is at the path of the metadata location in
+    // the object store of the table.
+    let pins = info.snapshot_pins.take();
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
-    let table = Table::load_with_metadata_location(
-        ctx.runtime_env().as_ref(),
-        read.table_url,
-        read.metadata_location,
-    )
-    .await?;
+    let location = match &read.metadata_location {
+        Some(location) => {
+            let mut file = read.table_url.clone();
+            file.set_path(&format!(
+                "/{}",
+                metadata_location_to_object_path_string(location)?
+            ));
+            file.to_string()
+        }
+        None => read.table_url.to_string(),
+    };
+    let names_metadata_file = read.metadata_location.is_some();
+    if let Some(pins) = &pins
+        && let Some(table) = pins.get::<Table>(&location, names_metadata_file)?
+    {
+        return Ok((table, read.options));
+    }
+    let table = Arc::new(
+        Table::load_with_metadata_location(
+            ctx.runtime_env().as_ref(),
+            read.table_url,
+            read.metadata_location,
+        )
+        .await?,
+    );
+    if let Some(pins) = &pins {
+        pins.insert(location, names_metadata_file, Arc::clone(&table))?;
+    }
     Ok((table, read.options))
 }
 
@@ -1291,6 +1327,7 @@ async fn resolve_iceberg_read(
         sort_order: _,
         options,
         read_case_sensitive: _,
+        snapshot_pins: _,
     } = info;
 
     match read_purpose {

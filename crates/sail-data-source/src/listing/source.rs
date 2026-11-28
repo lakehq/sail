@@ -186,6 +186,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             sort_order,
             options,
             read_case_sensitive,
+            snapshot_pins: _,
         } = info;
 
         let recursive = boolean_option(
@@ -479,6 +480,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             lakehouse_table,
             sql_insert: _,
             identity_columns_to_track: _,
+            snapshot_pins: _,
         } = info;
         let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {

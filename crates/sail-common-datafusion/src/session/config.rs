@@ -23,6 +23,10 @@ pub trait SessionConfigProvider: Send + Sync + 'static {
     /// Returns owned values by key. Keys keep the prefix, and keys that are not set
     /// are absent. Read failures must return errors, not missing values.
     fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>>;
+
+    /// Returns a provider of the configuration as it is now, which later changes of this
+    /// provider do not change.
+    fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>>;
 }
 
 /// A session extension exposing a shared, live configuration provider.
@@ -57,6 +61,11 @@ impl SessionConfigService {
     pub fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
         self.provider.get_options_with_prefix(prefix)
     }
+
+    /// Returns a service of the configuration as it is now.
+    pub fn snapshot(&self) -> Result<Self> {
+        Ok(Self::new(self.provider.snapshot()?))
+    }
 }
 
 impl SessionExtension for SessionConfigService {
@@ -80,6 +89,10 @@ mod tests {
 
         fn get_options_with_prefix(&self, _prefix: &str) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
+        }
+
+        fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+            Ok(Arc::new(FixedProvider(self.0.clone())))
         }
     }
 

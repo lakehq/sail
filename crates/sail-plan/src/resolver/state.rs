@@ -2,17 +2,22 @@
 
 use std::sync::Arc;
 
-use datafusion_common::arrow::datatypes::{Field, FieldRef};
+use datafusion_common::arrow::datatypes::{Field, FieldRef, Schema};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::lakehouse::CatalogTableIdentity;
+use sail_common_datafusion::datasource::LakeSnapshotPins;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+use crate::resolver::query::{
+    CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
+};
 use crate::shared_cte::CteDefinition;
 
 /// Identifies what a catalog table read scans.
@@ -26,21 +31,63 @@ pub(super) struct TableSourceKey {
     pub properties: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
+    /// How the source matches the letter case of column names, for a source that matches
+    /// the columns of the table with the columns of its files.
+    pub read_case_sensitive: Option<bool>,
+    /// The ANSI mode and the session time zone of the read, which cast the values of the
+    /// partitions that the catalog lists, for a source other than Delta Lake and Iceberg.
+    pub partition_value_cast: Option<(bool, Arc<str>)>,
+    /// The address of the settings that build the source, for a source that a temporary view
+    /// builds with the settings that the session that created it had then (see
+    /// [`PlanResolver::source_build_settings`]).
+    pub settings: Option<usize>,
+    /// The catalog instance of the table, for a table that a global temporary view reads
+    /// in a catalog of the session that created the view.
+    pub session_catalog: Option<usize>,
 }
 
-/// Identifies a catalog table lookup by the table reference as written and the
-/// format required by the read, if any.
+/// Identifies a lookup of a name as the query wrote it, so that the references to a name in a
+/// statement find what the first one found, even if a temporary view of the name or the
+/// current database changes meanwhile.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct CatalogTableLookupKey {
-    pub reference: Vec<String>,
-    pub required_format: Option<String>,
+pub(super) struct WrittenLookupKey {
+    reference: Vec<String>,
+    /// Whether the lookup finds tables only, for writes and reads in a required format.
+    tables_only: bool,
+    /// The address of the definition of the temporary view whose query is resolved again,
+    /// in which the name refers to what it referred to when the view was created.
+    scope: Option<usize>,
 }
 
-struct SharedTableSources(Vec<Arc<dyn TableSource>>);
+impl WrittenLookupKey {
+    pub fn new(reference: &[String], tables_only: bool) -> Self {
+        Self {
+            reference: reference.to_vec(),
+            tables_only,
+            scope: ViewDefinitionScope::pinned_definition_address(),
+        }
+    }
+}
 
-impl std::fmt::Debug for SharedTableSources {
+#[derive(Clone)]
+struct SharedTableSource(Arc<dyn TableSource>);
+
+/// Identifies what a read of a Delta Lake or Iceberg table by its path scans.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct LakePathSourceKey {
+    /// The format in lower case.
+    pub format: String,
+    pub paths: Vec<String>,
+    /// The options of the read, sorted by key.
+    pub options: Vec<(String, String)>,
+    pub schema: Option<Schema>,
+    /// The address of the settings that build the source (see [`TableSourceKey::settings`]).
+    pub settings: Option<usize>,
+}
+
+impl std::fmt::Debug for SharedTableSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SharedTableSources").finish_non_exhaustive()
+        f.debug_tuple("SharedTableSource").finish_non_exhaustive()
     }
 }
 
@@ -161,10 +208,88 @@ pub(super) struct PlanResolverState {
     windows: std::collections::HashMap<String, spec::Window>,
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
-    table_sources: HashMap<TableSourceKey, SharedTableSources>,
+    table_sources: HashMap<TableSourceKey, Vec<SharedTableSource>>,
+    /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
+    /// reads of a path in the query read one version of the table.
+    lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
+    /// Whether the settings of each address, of the session that created a temporary view
+    /// that the query reads, build sources as this session does.
+    same_source_sessions: HashMap<usize, bool>,
+    /// The versions of the lake tables read so far, so that the reads of a table in the
+    /// query read one version of it, by name or by path and with any read options.
+    lake_snapshot_pins: Arc<LakeSnapshotPins>,
     /// The successful catalog table lookups so far, shared by repeated references to
-    /// the same table within the query.
-    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
+    /// the same table within the query. The key is the catalog instance of another session
+    /// for a table that a global temporary view reads in a catalog of the session that
+    /// created it (see `SessionCatalogTable::catalog_id`), and the fully qualified name
+    /// of the table (the catalog, the database, and the table), which is the same for all
+    /// the ways to write the name of the table. Names that the catalog returned the same
+    /// table for have the same lookup, see [`PlanResolverState::share_catalog_table`].
+    catalog_table_lookups: HashMap<(Option<usize>, Vec<String>), CatalogTableLookup>,
+    /// The successful lookups of names as the query wrote them (see [`WrittenLookupKey`]).
+    written_lookups: HashMap<WrittenLookupKey, CatalogTableLookup>,
+    /// The first lookup of each table that the catalogs returned (see
+    /// [`PlanResolverState::share_catalog_table`]).
+    shared_catalog_tables: HashMap<SharedCatalogTableKey, (TableStatus, LakehouseResolvedTable)>,
+    /// What the definition of a temporary view reads, while the definition is resolved.
+    view_definition: Option<ViewDefinitionReads>,
+}
+
+/// The key of a table that the catalogs returned: the catalog instance of another session,
+/// the catalog name, and the database, the name and the identity that the catalog returned.
+type SharedCatalogTableKey = (
+    Option<usize>,
+    Option<String>,
+    Vec<String>,
+    String,
+    CatalogTableIdentity,
+);
+
+/// What the definition of a temporary view reads, which is recorded while the definition is
+/// resolved.
+#[derive(Debug, Default, Clone)]
+pub(super) struct ViewDefinitionReads {
+    /// What the table sources of the scans read, by the address of the source, for the
+    /// sources that the view obtains again at each read.
+    table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
+    /// The columns that the definition reads although its plan does not refer to them: the
+    /// columns of the arguments of a function that its expression no longer refers to,
+    /// such as the argument of `typeof`.
+    pub folded_columns: HashSet<String>,
+    /// The columns that the temporary views that the definition reads read of their tables,
+    /// by the address of the source and the positions of the columns in the source.
+    pub view_reads: HashMap<usize, HashSet<usize>>,
+    /// Whether the view resolves its query at each read, since the definition reads what
+    /// its stored plan cannot read again: a persistent view, which can be defined again, or
+    /// a catalog table in several scans of its partitions, which can be grouped in other
+    /// scans.
+    pub resolves_at_each_read: bool,
+}
+
+impl ViewDefinitionReads {
+    /// Records what the source of a scan reads. The first record of a source remains.
+    pub fn record_table_origin(&mut self, source: &Arc<dyn TableSource>, origin: Arc<TableOrigin>) {
+        self.table_origins
+            .entry(table_source_address(source))
+            .or_insert_with(|| (SharedTableSource(Arc::clone(source)), origin));
+    }
+
+    /// Returns the addresses of the sources that the definition read.
+    pub fn sources(&self) -> impl Iterator<Item = usize> + '_ {
+        self.table_origins.keys().copied()
+    }
+
+    /// Returns what the source of a scan reads, if the view obtains it again.
+    pub fn table_origin(&self, source: &Arc<dyn TableSource>) -> Option<&Arc<TableOrigin>> {
+        self.table_origins
+            .get(&table_source_address(source))
+            .map(|(_, origin)| origin)
+    }
+}
+
+/// Returns the address of a table source, which identifies the source while it is alive.
+pub(super) fn table_source_address(source: &Arc<dyn TableSource>) -> usize {
+    Arc::as_ptr(source) as *const () as usize
 }
 
 /// A catalog table or view, with the lakehouse resolution of a catalog table.
@@ -201,7 +326,13 @@ impl PlanResolverState {
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
+            lake_path_sources: HashMap::new(),
+            same_source_sessions: HashMap::new(),
+            lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
+            written_lookups: HashMap::new(),
+            shared_catalog_tables: HashMap::new(),
+            view_definition: None,
         }
     }
 
@@ -505,7 +636,9 @@ impl PlanResolverState {
     }
 
     pub fn get_table_sources(&self, key: &TableSourceKey) -> Option<Vec<Arc<dyn TableSource>>> {
-        self.table_sources.get(key).map(|sources| sources.0.clone())
+        self.table_sources
+            .get(key)
+            .map(|sources| sources.iter().map(|source| Arc::clone(&source.0)).collect())
     }
 
     pub fn insert_table_sources(
@@ -513,22 +646,152 @@ impl PlanResolverState {
         key: TableSourceKey,
         sources: Vec<Arc<dyn TableSource>>,
     ) {
-        self.table_sources.insert(key, SharedTableSources(sources));
+        self.table_sources
+            .insert(key, sources.into_iter().map(SharedTableSource).collect());
+    }
+
+    pub fn get_lake_path_source(&self, key: &LakePathSourceKey) -> Option<Arc<dyn TableSource>> {
+        self.lake_path_sources
+            .get(key)
+            .map(|source| Arc::clone(&source.0))
+    }
+
+    pub fn insert_lake_path_source(
+        &mut self,
+        key: LakePathSourceKey,
+        source: Arc<dyn TableSource>,
+    ) {
+        self.lake_path_sources
+            .insert(key, SharedTableSource(source));
+    }
+
+    pub fn get_same_source_session(&self, session: usize) -> Option<bool> {
+        self.same_source_sessions.get(&session).copied()
+    }
+
+    pub fn insert_same_source_session(&mut self, session: usize, same: bool) {
+        self.same_source_sessions.insert(session, same);
+    }
+
+    pub fn lake_snapshot_pins(&self) -> Arc<LakeSnapshotPins> {
+        Arc::clone(&self.lake_snapshot_pins)
+    }
+
+    pub fn get_written_lookup(&self, key: &WrittenLookupKey) -> Option<CatalogTableLookup> {
+        self.written_lookups.get(key).cloned()
+    }
+
+    pub fn insert_written_lookup(&mut self, key: WrittenLookupKey, lookup: CatalogTableLookup) {
+        self.written_lookups.insert(key, lookup);
     }
 
     pub fn get_catalog_table_lookup(
         &self,
-        key: &CatalogTableLookupKey,
+        session_catalog: Option<usize>,
+        table: &[String],
     ) -> Option<CatalogTableLookup> {
-        self.catalog_table_lookups.get(key).cloned()
+        self.catalog_table_lookups
+            .get(&(session_catalog, table.to_vec()))
+            .cloned()
     }
 
     pub fn insert_catalog_table_lookup(
         &mut self,
-        key: CatalogTableLookupKey,
+        session_catalog: Option<usize>,
+        table: Vec<String>,
         lookup: CatalogTableLookup,
     ) {
-        self.catalog_table_lookups.insert(key, lookup);
+        self.catalog_table_lookups
+            .insert((session_catalog, table), lookup);
+    }
+
+    /// Records what the definition of a temporary view reads, while the definition is resolved.
+    pub fn begin_view_definition(&mut self) {
+        self.view_definition = Some(ViewDefinitionReads::default());
+    }
+
+    /// Returns what the definition of a temporary view read, once it is resolved.
+    pub fn end_view_definition(&mut self) -> ViewDefinitionReads {
+        self.view_definition.take().unwrap_or_default()
+    }
+
+    /// Returns what the definition of a temporary view reads, while it is resolved.
+    pub fn view_definition_mut(&mut self) -> Option<&mut ViewDefinitionReads> {
+        self.view_definition.as_mut()
+    }
+
+    /// Replaces what the definition of a temporary view reads, if one is resolved and
+    /// `reads` is given, and returns what it read.
+    pub fn replace_view_definition(
+        &mut self,
+        reads: Option<ViewDefinitionReads>,
+    ) -> Option<ViewDefinitionReads> {
+        match (self.view_definition.as_mut(), reads) {
+            (Some(current), Some(reads)) => Some(std::mem::replace(current, reads)),
+            _ => None,
+        }
+    }
+
+    /// Swaps the parts of the state that belong to the whole statement with those of another
+    /// state: the generators of IDs, the fields, the sources and lookups of the tables that the
+    /// statement reads, its shared CTE definitions, and what the definition of a view that the
+    /// statement creates reads. The query of a temporary view is resolved again in a new
+    /// state that has these parts of the state of the query, and none of its scopes, such as
+    /// its CTEs or its outer query.
+    pub fn swap_statement(&mut self, other: &mut Self) {
+        macro_rules! swap {
+            ($($field:ident),*) => { $(std::mem::swap(&mut self.$field, &mut other.$field);)* };
+        }
+        swap!(
+            next_id,
+            next_lateral_id,
+            next_origin,
+            relation_names,
+            fields,
+            next_cte_definition_index,
+            shared_cte_definitions,
+            table_sources,
+            lake_path_sources,
+            same_source_sessions,
+            lake_snapshot_pins,
+            catalog_table_lookups,
+            written_lookups,
+            shared_catalog_tables,
+            view_definition
+        );
+    }
+
+    /// Stores what the catalog returned for the table `name` and returns the lookup that
+    /// the query uses for it. A catalog can return one table for names that are
+    /// written differently, such as names that differ in letter case in a catalog that
+    /// ignores it. Such a table uses its first lookup in the query, so that all the
+    /// references to the table read the same table metadata. A table is the same as
+    /// an earlier one when both are in the same catalog instance and the catalog returned
+    /// the same database, name, table ID, and location for both.
+    pub fn share_catalog_table(
+        &mut self,
+        session_catalog: Option<usize>,
+        name: Vec<String>,
+        status: TableStatus,
+        resolved: LakehouseResolvedTable,
+    ) -> (TableStatus, LakehouseResolvedTable) {
+        let key = (
+            session_catalog,
+            name.first().cloned(),
+            status.database.clone(),
+            status.name.clone(),
+            resolved.execution.table_identity.clone(),
+        );
+        let (status, resolved) = self
+            .shared_catalog_tables
+            .entry(key)
+            .or_insert_with(|| (status, resolved))
+            .clone();
+        self.catalog_table_lookups.insert(
+            (session_catalog, name),
+            (status.clone(), Some(resolved.clone())),
+        );
+        (status, resolved)
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.

@@ -6,7 +6,7 @@
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use chrono::TimeZone;
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_common::extensions::Extensions;
@@ -14,7 +14,8 @@ use object_store::ObjectMeta;
 
 use crate::conversion::parse_optional_partition_value;
 use crate::schema::PhysicalPartitionColumn;
-use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
+use crate::snapshot::DeltaSnapshot;
+use crate::spec::{Add, CommitAction, DeltaError as DeltaTableError, DeltaResult, Remove};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
@@ -76,6 +77,56 @@ pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<Remove> {
     adds.into_iter()
         .map(|add| add.into_remove(deletion_timestamp))
         .collect()
+}
+
+/// The typed values of the partition columns of the files of a table.
+pub(crate) struct PartitionKeys {
+    fields: Vec<(String, DataType)>,
+}
+
+impl PartitionKeys {
+    /// Types the partition columns of the snapshot by the schema of the last metadata action of
+    /// the commit, or else of the snapshot.
+    pub(crate) fn try_new(snapshot: &DeltaSnapshot, actions: &[CommitAction]) -> DeltaResult<Self> {
+        let schema = actions
+            .iter()
+            .rev()
+            .find_map(|action| match action {
+                CommitAction::Metadata(metadata) => Some(metadata.parse_schema_arrow()),
+                _ => None,
+            })
+            .transpose()?
+            .unwrap_or_else(|| snapshot.schema().clone());
+        let fields = snapshot
+            .physical_partition_columns()
+            .into_iter()
+            .map(|column| {
+                let field = schema.field_with_name(&column.logical_name)?;
+                Ok((column.physical_name, field.data_type().clone()))
+            })
+            .collect::<DeltaResult<Vec<_>>>()?;
+        Ok(Self { fields })
+    }
+
+    pub(crate) fn key(&self, add: &Add) -> DeltaResult<Vec<ScalarValue>> {
+        self.fields
+            .iter()
+            .map(|(name, data_type)| {
+                parse_optional_partition_value(
+                    add.partition_values
+                        .get(name)
+                        .and_then(|value| value.as_deref()),
+                    data_type,
+                )
+                // ScalarValue compares float bits, while Spark equates signed zeros.
+                .map(|value| match value {
+                    ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
+                    ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
+                    value => value,
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

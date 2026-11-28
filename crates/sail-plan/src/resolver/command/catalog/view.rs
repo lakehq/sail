@@ -1,23 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_catalog::manager::tracker::CatalogLogicalPlanId;
 use sail_catalog::provider::{
     CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions, CreateViewColumnOptions,
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::TemporaryViewSource;
+use sail_common_datafusion::catalog::{TemporaryViewDefinition, TemporaryViewSource};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::query::ViewSourceSettings;
 use crate::resolver::state::PlanResolverState;
 use crate::shared_cte::inline_deterministic_references;
 impl PlanResolver<'_> {
@@ -118,7 +121,27 @@ impl PlanResolver<'_> {
                 }),
             _ => None,
         };
-        let input = self.resolve_query_plan(*input, state).await?;
+        // The view resolves the query again when its plan no longer fits the tables that it
+        // reads, in the scope that records what the query resolves now.
+        let query = input.as_ref().clone();
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        // The query resolves its names, and resolves them again later, in the catalog and the
+        // database that are current now, even if the session changes them meanwhile.
+        let namespace = manager.current_namespace()?;
+        // The query builds the sources of its tables, and builds them again later, with the
+        // configuration and the data sources of the session as they are now.
+        let settings = Arc::new(ViewSourceSettings::try_new(&self.ctx.session_config())?)
+            as Arc<dyn Any + Send + Sync>;
+        let scope = Arc::new(ViewDefinitionScope::create(
+            namespace.clone(),
+            Arc::clone(&settings),
+        ));
+        state.begin_view_definition();
+        let input = Arc::clone(&scope)
+            .run(self.resolve_query_plan(*input, state))
+            .await;
+        let reads = state.end_view_definition();
+        let input = input?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
         // that the references to a volatile CTE read one evaluation for each read of the view.
         let input = inline_deterministic_references(input)?;
@@ -129,6 +152,7 @@ impl PlanResolver<'_> {
             },
         )?);
 
+        let output_names = Self::get_field_names(input.schema(), state)?;
         let (fields, columns) = match columns {
             Some(columns) => {
                 let fields = columns.iter().map(|x| x.name.clone()).collect();
@@ -141,11 +165,32 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>();
                 (fields, columns)
             }
-            None => (Self::get_field_names(input.schema(), state)?, vec![]),
+            None => (output_names.clone(), vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
-        let manager = self.ctx.extension::<CatalogManager>()?;
-        let input: CatalogLogicalPlanId = manager.track_logical_plan(Arc::new(input))?;
+        // The view reads its tables again at each read, so its plan does not keep the
+        // table sources that the definition was resolved with.
+        let (input, resolves_at_each_read) = Self::store_view_plan(input, &reads)?;
+        let (catalog, database) = namespace;
+        // A view that reads no table and no persistent view has a plan that always fits, and
+        // keeps no query, which can hold the rows of a local relation.
+        let definition = if reads.sources().next().is_some() || resolves_at_each_read {
+            Some(Arc::new(TemporaryViewDefinition {
+                query,
+                output_names,
+                catalog: catalog.to_string(),
+                database: database.into(),
+                objects: scope.recorded()?,
+                config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
+                catalogs: manager.session_local_catalogs()?,
+                settings,
+                resolves_at_each_read,
+            }))
+        } else {
+            None
+        };
+        let input: CatalogLogicalPlanId =
+            manager.track_logical_plan((Arc::new(input), definition))?;
         let command = CatalogCommand::CreateTemporaryView {
             view: view.into(),
             is_global,

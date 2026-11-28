@@ -311,6 +311,7 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            snapshot_pins: Some(state.lake_snapshot_pins()),
         };
         let mut preconditions = vec![];
         let mut skip_preconditions_on_empty_exec = false;
@@ -352,7 +353,7 @@ impl PlanResolver<'_> {
                 table,
                 column_match,
             } => {
-                let info = self.resolve_table_info(&table).await?;
+                let info = self.resolve_table_info(&table, state).await?;
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {
@@ -825,17 +826,18 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_table_info(
         &self,
         table: &spec::ObjectName,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Option<TableInfo>> {
-        let status = match self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table(table.parts())
-            .await
-        {
-            Ok(x) => x,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
+        let catalog_table: Vec<String> = table.clone().into();
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        // The table shares the catalog lookup of the reads in the query, so that the query
+        // writes to the table metadata that it reads.
+        let (status, resolved) =
+            match Self::lookup_catalog_table(&manager, &catalog_table, state).await {
+                Ok(x) => x,
+                Err(CatalogError::NotFound(_, _)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
         match status.kind {
             TableKind::Table {
                 mut columns,
@@ -849,18 +851,8 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
-                let catalog_table = table
-                    .parts()
-                    .iter()
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>();
                 let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
-                        &catalog_table,
-                        LakehouseOperation::Read,
-                        Some(&format),
-                        vec![],
-                    )
+                    .begin_resolved_table_access(&catalog_table, resolved, LakehouseOperation::Read)
                     .await?;
                 let write_precondition_lakehouse_table =
                     Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));
@@ -892,6 +884,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        snapshot_pins: None,
                     };
                     if let Some(lake_source) = registry
                         .get_lake_source_if_supported(&format)
@@ -965,6 +958,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        snapshot_pins: None,
                     };
                     match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {

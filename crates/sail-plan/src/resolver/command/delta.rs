@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
         if !self.alter_table_target_is_delta(table, false).await? {
             return Ok(());
         }
-        let Some(info) = self.resolve_table_info(table).await? else {
+        let Some(info) = self.resolve_table_info(table, state).await? else {
             return Ok(());
         };
         let generated = requested
@@ -205,6 +205,7 @@ impl PlanResolver<'_> {
             sort_order: vec![],
             options: vec![],
             read_case_sensitive: self.config.case_sensitive,
+            snapshot_pins: None,
         };
         let metadata = match lake_source
             .infer_metadata(&self.ctx.state(), source_info)
@@ -658,6 +659,7 @@ impl PlanResolver<'_> {
                 items: info.properties.clone(),
             }],
             read_case_sensitive: self.config.case_sensitive,
+            snapshot_pins: None,
         };
         match lake_source.infer_metadata(&self.ctx.state(), source).await {
             Ok(metadata) => Ok(Some(metadata)),

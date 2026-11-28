@@ -94,3 +94,15 @@ def test_missing_table_gets_table_and_view(spark, moto_endpoint):
     # Each name is looked up as a table and as a view, and the database name is
     # looked up as the base table of a metadata table.
     assert calls == {"missing": 2, DATABASE: 2}
+
+
+@pytest.mark.usefixtures("tables")
+def test_insert_gets_target_table_once(spark, moto_endpoint):
+    name = f"{DATABASE}.t_parquet"
+    # The target and the source of the second statement are the same table under two names.
+    for sql in [f"INSERT INTO {name} VALUES (3)", f"INSERT INTO {name} SELECT id + 10 FROM sail.{name}"]:
+        with _get_table_calls(moto_endpoint) as calls:
+            spark.sql(sql)
+        assert calls == {"t_parquet": 1}, sql
+    rows = spark.sql(f"SELECT id FROM {name} ORDER BY id").collect()
+    assert [row.id for row in rows] == [1, 2, 3, 11, 12, 13]

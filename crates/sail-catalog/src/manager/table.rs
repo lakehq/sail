@@ -13,9 +13,10 @@ use crate::lakehouse::{
     ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
+use crate::manager::scope::ViewDefinitionScope;
 use crate::provider::{
-    AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace, StageTableOptions,
+    AlterTableOptions, CatalogProvider, CreateTableMetadataRequirement, CreateTableOptions,
+    DropTableOptions, Namespace, StageTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -32,7 +33,77 @@ impl ResolvedCatalogTableReference {
     }
 }
 
+/// A table of a catalog that each session has its own instance of (see
+/// [`CatalogProvider::is_session_local`]). A global temporary view reads such a table
+/// in the catalog of the session that created the view, from every session.
+#[derive(Clone)]
+pub struct SessionCatalogTable {
+    provider: Arc<dyn CatalogProvider>,
+    database: Namespace,
+    table: Arc<str>,
+}
+
+impl std::fmt::Debug for SessionCatalogTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionCatalogTable")
+            .field("catalog", &self.provider.get_name())
+            .field("database", &self.database)
+            .field("table", &self.table)
+            .finish()
+    }
+}
+
+impl SessionCatalogTable {
+    /// Identifies the catalog instance of the table among the catalogs of all sessions.
+    pub fn catalog_id(&self) -> usize {
+        Arc::as_ptr(&self.provider) as *const () as usize
+    }
+
+    /// Loads the table like [`CatalogManager::get_lakehouse_table`].
+    pub async fn get_lakehouse_table(
+        &self,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        self.provider
+            .get_lakehouse_table(&self.database, &self.table, request)
+            .await
+    }
+
+    /// Begins a table access like [`CatalogManager::begin_table_access`].
+    pub async fn begin_table_access(
+        &self,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        self.provider
+            .begin_table_access(&self.database, &self.table, request)
+            .await
+    }
+}
+
 impl CatalogManager {
+    /// Returns the table in the catalog instance of this session, if each session has
+    /// its own instance of the catalog of the table.
+    pub fn session_catalog_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+    ) -> CatalogResult<Option<SessionCatalogTable>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        Ok(provider.is_session_local().then_some(SessionCatalogTable {
+            provider,
+            database,
+            table,
+        }))
+    }
+
+    /// Returns whether the table is in a catalog instance of this session.
+    pub fn has_session_catalog_table(&self, table: &SessionCatalogTable) -> CatalogResult<bool> {
+        let state = self.state()?;
+        Ok(state
+            .catalogs
+            .get(table.provider.get_name())
+            .is_some_and(|provider| Arc::ptr_eq(provider, &table.provider)))
+    }
+
     /// In the delta namespace, an unqualified file name can also be a table name.
     pub async fn delta_table_path<'a, T: AsRef<str>>(
         &self,
@@ -367,7 +438,10 @@ impl CatalogManager {
         &self,
         reference: &[T],
     ) -> CatalogResult<TableStatus> {
-        self.get_table_or_view_with(reference, self.get_table(reference), |status| status)
+        if let Some(view) = self.find_temporary_view(reference).await? {
+            return Ok(view);
+        }
+        self.get_catalog_table_or_view_with(reference, self.get_table(reference), |status| status)
             .await
     }
 
@@ -384,9 +458,10 @@ impl CatalogManager {
             .await
     }
 
-    /// Like [`Self::get_table_or_view`], but a catalog table also comes with its lakehouse
+    /// Looks up a table or view in the catalogs only, without the temporary views that
+    /// [`Self::find_temporary_view`] returns. A catalog table also comes with its lakehouse
     /// resolution, as returned by [`Self::get_lakehouse_table`].
-    pub async fn get_lakehouse_table_or_view<T: AsRef<str>>(
+    pub async fn get_catalog_lakehouse_table_or_view<T: AsRef<str>>(
         &self,
         reference: &[T],
         request: ResolveLakehouseTableRequest,
@@ -395,21 +470,35 @@ impl CatalogManager {
             let (status, resolved) = self.get_lakehouse_table(reference, request).await?;
             Ok((status, Some(resolved)))
         };
-        self.get_table_or_view_with(reference, table, |status| (status, None))
+        self.get_catalog_table_or_view_with(reference, table, |status| (status, None))
             .await
     }
 
-    /// Looks up temporary views, then the catalog table with `table`, then catalog views.
-    /// Views are converted with `view`.
-    async fn get_table_or_view_with<T: AsRef<str>, R>(
+    /// Returns the temporary view or global temporary view that `reference` names, if any.
+    /// Such a view takes precedence over the catalog table or view that the same reference
+    /// would otherwise name. A reference into the global temporary view database names
+    /// nothing in the catalogs, so a missing view there is an error.
+    pub async fn find_temporary_view<T: AsRef<str>>(
         &self,
         reference: &[T],
-        table: impl Future<Output = CatalogResult<R>>,
-        view: impl Fn(TableStatus) -> R,
-    ) -> CatalogResult<R> {
+    ) -> CatalogResult<Option<TableStatus>> {
+        if let Some(view) = ViewDefinitionScope::pinned_temporary_view(reference) {
+            return Ok(view);
+        }
+        let view = self.find_session_temporary_view(reference).await?;
+        if let Some(view) = &view {
+            ViewDefinitionScope::record_temporary_view(reference, view);
+        }
+        Ok(view)
+    }
+
+    async fn find_session_temporary_view<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+    ) -> CatalogResult<Option<TableStatus>> {
         if let [name] = reference {
             match self.get_temporary_view(name.as_ref()).await {
-                Ok(x) => return Ok(view(x)),
+                Ok(x) => return Ok(Some(x)),
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
@@ -420,8 +509,19 @@ impl CatalogManager {
             return self
                 .get_global_temporary_view(name.as_ref())
                 .await
-                .map(view);
+                .map(Some);
         }
+        Ok(None)
+    }
+
+    /// Looks up the catalog table with `table`, then catalog views.
+    /// Views are converted with `view`.
+    async fn get_catalog_table_or_view_with<T: AsRef<str>, R>(
+        &self,
+        reference: &[T],
+        table: impl Future<Output = CatalogResult<R>>,
+        view: impl Fn(TableStatus) -> R,
+    ) -> CatalogResult<R> {
         match table.await {
             Ok(x) => return Ok(x),
             Err(CatalogError::NotFound(_, _)) => {}

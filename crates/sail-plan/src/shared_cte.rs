@@ -14,7 +14,7 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, 
 use datafusion_expr::utils::{conjunction, disjunction};
 use datafusion_expr::{
     Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
-    TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource,
+    TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource, Union,
 };
 use indexmap::IndexMap;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
@@ -70,12 +70,17 @@ impl CteDefinition {
     }
 
     /// Returns a copy of the definition at another position, with the given plan, in which
-    /// the references refer to copies of the definitions as well.
-    fn renew(&self, index: usize, resolved: LogicalPlan) -> Self {
+    /// the references refer to copies of the definitions as well. The copy has the schema
+    /// of the plan if `recompute_schema` is set, for a plan whose schema was computed again.
+    fn renew(&self, index: usize, resolved: LogicalPlan, recompute_schema: bool) -> Self {
         Self {
             index,
             name: self.name.clone(),
-            schema: Arc::clone(&self.schema),
+            schema: if recompute_schema {
+                Arc::clone(resolved.schema().inner())
+            } else {
+                Arc::clone(&self.schema)
+            },
             resolved: Arc::new(resolved),
             plan: OnceLock::new(),
             volatile: self.volatile,
@@ -335,6 +340,22 @@ pub fn renew_cte_definitions(
     next_index: &mut dyn FnMut() -> usize,
     register: &mut dyn FnMut(Arc<CteDefinition>),
 ) -> Result<LogicalPlan> {
+    let mut keep = |scan| Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+    renew_cte_definitions_with_scans(plan, next_index, register, &mut keep, false)
+}
+
+/// Returns the plan like [`renew_cte_definitions`], in which `map_scan` also replaces
+/// each scan that is not a reference to a CTE definition, in the plan, in its subqueries,
+/// and in the definitions. The schemas of the plan and of the definitions are computed
+/// again from the new scans if `recompute_schemas` is set, for scans that are replaced
+/// by scans with another schema.
+pub fn renew_cte_definitions_with_scans(
+    plan: LogicalPlan,
+    next_index: &mut dyn FnMut() -> usize,
+    register: &mut dyn FnMut(Arc<CteDefinition>),
+    map_scan: &mut dyn FnMut(TableScan) -> Result<Transformed<LogicalPlan>>,
+    recompute_schemas: bool,
+) -> Result<LogicalPlan> {
     fn collect(
         plan: &LogicalPlan,
         definitions: &mut BTreeMap<usize, Arc<CteDefinition>>,
@@ -357,35 +378,160 @@ pub fn renew_cte_definitions(
     fn bind(
         plan: LogicalPlan,
         renewed: &HashMap<usize, Arc<CteDefinition>>,
+        map_scan: &mut dyn FnMut(TableScan) -> Result<Transformed<LogicalPlan>>,
+        recompute_schemas: bool,
     ) -> Result<LogicalPlan> {
-        plan.transform_down_with_subqueries(|plan| {
-            let LogicalPlan::TableScan(mut scan) = plan else {
-                return Ok(Transformed::no(plan));
-            };
-            let Some(definition) = CteReference::try_from_scan(&scan)
-                .and_then(|reference| renewed.get(&reference.definition.index))
-            else {
-                return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
-            };
-            scan.source = Arc::new(CteReference {
-                definition: Arc::clone(definition),
-                body: None,
-            });
-            Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
-        })
-        .data()
+        let plan = plan
+            .transform_down_with_subqueries(|plan| {
+                let LogicalPlan::TableScan(mut scan) = plan else {
+                    return Ok(Transformed::no(plan));
+                };
+                let Some(reference) = CteReference::try_from_scan(&scan) else {
+                    return map_scan(scan);
+                };
+                let Some(definition) = renewed.get(&reference.definition.index) else {
+                    return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+                };
+                if recompute_schemas {
+                    scan.projected_schema =
+                        definition.projected_schema(scan.projection.as_deref())?;
+                }
+                scan.source = Arc::new(CteReference {
+                    definition: Arc::clone(definition),
+                    body: None,
+                });
+                Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
+            })
+            .data()?;
+        if recompute_schemas {
+            recompute_plan_schemas(plan)
+        } else {
+            Ok(plan)
+        }
     }
     let mut definitions = BTreeMap::new();
     collect(&plan, &mut definitions)?;
     let mut renewed = HashMap::new();
     // A definition refers only to the definitions at earlier positions.
     for (index, definition) in definitions {
-        let resolved = bind(definition.resolved.as_ref().clone(), &renewed)?;
-        let copy = Arc::new(definition.renew(next_index(), resolved));
+        let resolved = bind(
+            definition.resolved.as_ref().clone(),
+            &renewed,
+            map_scan,
+            recompute_schemas,
+        )?;
+        let copy = Arc::new(definition.renew(next_index(), resolved, recompute_schemas));
         register(Arc::clone(&copy));
         renewed.insert(index, copy);
     }
-    bind(plan, &renewed)
+    bind(plan, &renewed, map_scan, recompute_schemas)
+}
+
+/// Returns the plan in which `replace` replaces each scan that `replaced` selects, in the
+/// plan, in its subqueries, and in the CTE definitions that it refers to, which the plan
+/// then refers to copies of. The new scans have the schemas of the scans that they replace.
+/// A plan without such a scan is returned as it is.
+pub fn replace_scans(
+    plan: LogicalPlan,
+    replaced: &dyn Fn(&TableScan) -> bool,
+    replace: &mut dyn FnMut(TableScan) -> Result<LogicalPlan>,
+) -> Result<LogicalPlan> {
+    let mut found = false;
+    visit_scans(&plan, &mut |scan| {
+        found |= replaced(scan);
+        Ok(())
+    })?;
+    if !found {
+        return Ok(plan);
+    }
+    let mut index = 0;
+    renew_cte_definitions_with_scans(
+        plan,
+        &mut || {
+            index += 1;
+            index - 1
+        },
+        &mut |_| {},
+        &mut |scan| {
+            if replaced(&scan) {
+                Ok(Transformed::yes(replace(scan)?))
+            } else {
+                Ok(Transformed::no(LogicalPlan::TableScan(scan)))
+            }
+        },
+        false,
+    )
+}
+
+/// Returns the plan in which each node, also in the subqueries, has the schema that it
+/// computes from its inputs, for a plan in which a scan was replaced by a scan with
+/// another schema.
+pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| match plan {
+        LogicalPlan::TableScan(_) => Ok(Transformed::no(plan)),
+        // DataFusion keeps the schema of a union of the same width. An output of a union
+        // has nulls if the column of any input has nulls, and the metadata of the columns
+        // of all the inputs, as the physical plan of the union.
+        LogicalPlan::Union(Union { inputs, schema })
+            if inputs
+                .iter()
+                .all(|x| x.schema().fields().len() == schema.fields().len()) =>
+        {
+            let fields = schema
+                .iter()
+                .enumerate()
+                .map(|(i, (qualifier, field))| {
+                    let fields = inputs.iter().map(|x| x.schema().field(i));
+                    let nullable = fields.clone().any(|x| x.is_nullable());
+                    let metadata: HashMap<_, _> =
+                        fields.flat_map(|x| x.metadata().clone()).collect();
+                    let field = field
+                        .as_ref()
+                        .clone()
+                        .with_nullable(nullable)
+                        .with_metadata(metadata);
+                    (qualifier.cloned(), Arc::new(field))
+                })
+                .collect();
+            let schema = DFSchema::new_with_metadata(fields, schema.metadata().clone())?;
+            Ok(Transformed::yes(LogicalPlan::Union(Union {
+                inputs,
+                schema: Arc::new(schema),
+            })))
+        }
+        plan => Ok(Transformed::yes(plan.recompute_schema()?)),
+    })
+    .data()
+}
+
+/// Calls `visit` for each scan that is not a reference to a CTE definition, in the plan,
+/// in its subqueries, and in the CTE definitions that the plan refers to, once for each
+/// definition, in the order of [`LogicalPlan::apply_with_subqueries`]. The definition that
+/// a reference refers to is visited after the reference.
+pub fn visit_scans(
+    plan: &LogicalPlan,
+    visit: &mut dyn FnMut(&TableScan) -> Result<()>,
+) -> Result<()> {
+    fn apply(
+        plan: &LogicalPlan,
+        visit: &mut dyn FnMut(&TableScan) -> Result<()>,
+        visited: &mut HashSet<usize>,
+    ) -> Result<()> {
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                match CteReference::try_from_scan(scan) {
+                    Some(reference) if visited.insert(reference.definition.index) => {
+                        apply(&reference.definition.resolved, visit, visited)?;
+                    }
+                    Some(_) => {}
+                    None => visit(scan)?,
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    apply(plan, visit, &mut HashSet::new())
 }
 
 /// Returns the plan in which each reference to a definition whose top projection computes

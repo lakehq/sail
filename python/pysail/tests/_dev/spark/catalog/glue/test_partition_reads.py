@@ -10,6 +10,33 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+JSON_PARTITION = {
+    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+    "SerdeInfo": {"SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"},
+}
+
+
+def add_partition(glue, name, value, descriptor):
+    glue.create_partition(
+        DatabaseName="test_db",
+        TableName=name,
+        PartitionInput={"Values": [value], "StorageDescriptor": descriptor},
+    )
+
+
+def add_parquet_partition(glue, name, tmp_path, value, row):
+    path = tmp_path / f"parquet-{value}"
+    path.mkdir()
+    pq.write_table(pa.table({key: [x] for key, x in row.items()}), path / "data.parquet")
+    add_partition(glue, name, value, {"Location": str(path)})
+
+
+def add_json_partition(glue, name, tmp_path, value, row):
+    path = tmp_path / f"json-{value}"
+    path.mkdir()
+    (path / "data.json").write_text(json.dumps(row))
+    add_partition(glue, name, value, {"Location": f"file:{path}", **JSON_PARTITION})
+
 
 def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
     glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
@@ -396,3 +423,110 @@ def test_registered_partition_supplies_format(spark, moto_endpoint, tmp_path):
         assert spark.table(f"test_db.{name}").where("p > 1.0").collect() == [(42, 1.0 + 2**-23)]
     finally:
         glue.delete_table(DatabaseName="test_db", Name=name)
+
+
+def test_temporary_views_read_the_current_registered_partitions(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_views"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
+    try:
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1})
+        spark.sql(f"CREATE TEMPORARY VIEW one_scan AS SELECT id, p FROM {table}")  # noqa: S608
+        assert sorted(spark.table("one_scan").collect()) == [(1, 1)]
+        # The JSON partition is read in another scan than the Parquet partitions.
+        add_json_partition(glue, name, tmp_path, "2", {"id": 2})
+        assert sorted(spark.table("one_scan").collect()) == [(1, 1), (2, 2)]
+        spark.sql(f"CREATE TEMPORARY VIEW two_scans AS SELECT id, p FROM {table}")  # noqa: S608
+        assert sorted(spark.table("two_scans").collect()) == [(1, 1), (2, 2)]
+        add_parquet_partition(glue, name, tmp_path, "3", {"id": 3})
+        for view in ["one_scan", "two_scans"]:
+            assert sorted(spark.table(view).collect()) == [(1, 1), (2, 2), (3, 3)]
+    finally:
+        spark.sql("DROP VIEW IF EXISTS one_scan")
+        spark.sql("DROP VIEW IF EXISTS two_scans")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("scans", [1, 2])
+def test_views_cast_partition_values_with_their_creation_config(spark, moto_endpoint, tmp_path, scans):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = f"registered_partition_view_config_{scans}"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'")
+    ansi = "spark.sql.ansi.enabled"
+    previous = spark.conf.get(ansi)
+    try:
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1})
+        add_parquet_partition(glue, name, tmp_path, "bad", {"id": 9})
+        expected = [(1, 1), (9, None)]
+        if scans == 2:
+            # The JSON partition is read in another scan, so the view resolves its query at each read.
+            add_json_partition(glue, name, tmp_path, "2", {"id": 2})
+            expected = [(1, 1), (2, 2), (9, None)]
+        spark.conf.set(ansi, "false")
+        spark.sql(f"CREATE TEMPORARY VIEW lenient_partitions AS SELECT id, p FROM {table}")  # noqa: S608
+        spark.conf.set(ansi, "true")
+        # A direct read casts the partition values with the ANSI mode of the session,
+        # whichever read of the table comes first.
+        for query in [
+            f"SELECT id, p FROM {table}",  # noqa: S608
+            f"SELECT id, p FROM lenient_partitions UNION ALL SELECT id, p FROM {table}",  # noqa: S608
+            f"SELECT id, p FROM {table} UNION ALL SELECT id, p FROM lenient_partitions",  # noqa: S608
+        ]:
+            with pytest.raises(Exception, match="invalid integer partition value: bad"):
+                spark.sql(query).collect()
+        assert spark.table("lenient_partitions").orderBy("id").collect() == expected
+    finally:
+        spark.conf.set(ansi, previous)
+        spark.sql("DROP VIEW IF EXISTS lenient_partitions")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_view_over_one_scan_resolves_its_query_when_the_table_is_read_in_several_scans(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_view_rescan"
+    table = f"test_db.{name}"
+    root = tmp_path / "root"
+    root.mkdir()
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT, b INT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{root.as_uri()}'"
+    )
+    queries = {
+        "rescan_plain": f"SELECT id, p FROM {table}",  # noqa: S608
+        "rescan_filter": f"SELECT id, p FROM {table} WHERE b > 0",  # noqa: S608
+        "rescan_star": f"SELECT * FROM {table}",  # noqa: S608
+    }
+    try:
+        add_parquet_partition(glue, name, tmp_path, "1", {"id": 1, "b": 10})
+        for view, query in queries.items():
+            spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
+        # The JSON partition is read in another scan, so each view now resolves its query.
+        add_json_partition(glue, name, tmp_path, "2", {"id": 2, "b": 20})
+        stored = glue.get_table(DatabaseName="test_db", Name=name)["Table"]
+        table_input = {
+            key: stored[key]
+            for key in ["Name", "StorageDescriptor", "PartitionKeys", "TableType", "Parameters"]
+            if key in stored
+        }
+        columns = table_input["StorageDescriptor"]["Columns"]
+        table_input["StorageDescriptor"]["Columns"] = [column for column in columns if column["Name"] != "b"]
+        glue.update_table(DatabaseName="test_db", TableInput=table_input)
+
+        assert sorted(spark.table("rescan_plain").collect()) == [(1, 1), (2, 2)]
+        # The view fails as its query does.
+        with pytest.raises(Exception, match="resolve") as direct:
+            spark.sql(queries["rescan_filter"]).collect()
+        with pytest.raises(type(direct.value)) as viewed:
+            spark.table("rescan_filter").collect()
+        assert str(viewed.value).splitlines()[0] == str(direct.value).splitlines()[0]
+        with pytest.raises(Exception, match="INCOMPATIBLE_VIEW_SCHEMA_CHANGE"):
+            spark.table("rescan_star").collect()
+    finally:
+        for view in queries:
+            spark.sql(f"DROP VIEW IF EXISTS {view}")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

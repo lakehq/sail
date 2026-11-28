@@ -69,7 +69,8 @@ fn current_catalog(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .function_context
         .session_context
         .extension::<CatalogManager>()?;
-    Ok(lit(catalog_manager.default_catalog()?.to_string()))
+    let (catalog, _) = catalog_manager.current_namespace()?;
+    Ok(lit(catalog.to_string()))
 }
 
 fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -78,9 +79,8 @@ fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .function_context
         .session_context
         .extension::<CatalogManager>()?;
-    Ok(lit(quote_namespace_if_needed(
-        &catalog_manager.default_database()?,
-    )))
+    let (_, database) = catalog_manager.current_namespace()?;
+    Ok(lit(quote_namespace_if_needed(&database)))
 }
 
 fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

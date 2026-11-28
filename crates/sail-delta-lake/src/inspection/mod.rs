@@ -61,6 +61,7 @@ pub(crate) async fn load_state(
         options,
         metadata_only,
         info.lakehouse_table,
+        None,
     )
     .await?;
     Ok(InspectionState {

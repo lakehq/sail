@@ -26,6 +26,8 @@ pub struct PlanResolver<'a> {
     config: Arc<PlanConfig>,
     /// Whether the repeated references to a CTE are resolved as scans of the CTE.
     share_ctes: bool,
+    /// Whether the plan is resolved only for its schema.
+    schema_only: bool,
 }
 
 impl<'a> PlanResolver<'a> {
@@ -34,6 +36,7 @@ impl<'a> PlanResolver<'a> {
             ctx,
             config,
             share_ctes: false,
+            schema_only: false,
         }
     }
 
@@ -45,6 +48,13 @@ impl<'a> PlanResolver<'a> {
             .ctx
             .extension::<SharedCteConfig>()
             .is_ok_and(|config| config.enabled());
+        self
+    }
+
+    /// Resolves the plan only for its schema, so that a temporary view whose stored plan no
+    /// longer fits its tables reports the columns of the stored plan.
+    pub fn with_schema_only(mut self) -> Self {
+        self.schema_only = true;
         self
     }
 }

@@ -324,6 +324,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.create_table_metadata_requirement(options)
     }
 
+    fn is_session_local(&self) -> bool {
+        self.inner.is_session_local()
+    }
+
     fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
         self.inner.lakehouse_capabilities()
     }
