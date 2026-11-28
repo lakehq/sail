@@ -395,15 +395,13 @@ fn bin_key(
             continue;
         };
         if value.as_deref() == Some("") {
-            if parser.parse(value.as_deref())?.is_null() {
-                *value = None;
+            *value = None;
+        } else if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_))) {
+            let scalar = parser.parse(value.as_deref());
+            // A timestamp value that does not parse is NULL and keeps its spelling, as before.
+            if !scalar.is_null() {
+                *value = Some(scalar.serialize().into_owned());
             }
-        } else if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_)))
-            // A timestamp value that does not parse keeps its spelling, as before.
-            && let Ok(scalar) = parser.parse(value.as_deref())
-            && !scalar.is_null()
-        {
-            *value = Some(scalar.serialize().into_owned());
         }
     }
     Ok(key)
@@ -502,7 +500,7 @@ fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<R
                         .and_then(Option::as_deref),
                 )
             })
-            .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         columns.push(if values.is_empty() {
             datafusion::arrow::array::new_empty_array(field.data_type())
         } else {

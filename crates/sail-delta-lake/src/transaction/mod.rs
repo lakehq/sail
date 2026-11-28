@@ -4287,7 +4287,7 @@ mod tests {
                 ("offset.parquet", "2024-01-01T09:00:00.000000Z"),
             ] {
                 assert!(matches!(
-                    parser.parse(Some(value)).unwrap(),
+                    parser.parse(Some(value)),
                     ScalarValue::TimestampMicrosecond(Some(micros), _) if micros == parsed[path]
                 ));
             }

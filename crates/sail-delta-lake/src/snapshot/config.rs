@@ -148,7 +148,7 @@ mod tests {
             set_spark_session_time_zone(&mut options, session)?;
             let parser = PartitionValueParser::try_new(&data_type, &partition_time_zone(&options))?;
             assert_eq!(
-                parser.parse(Some("2024-01-01 09:00:00"))?,
+                parser.parse(Some("2024-01-01 09:00:00")),
                 ScalarValue::TimestampMicrosecond(Some(seconds * 1_000_000), Some("UTC".into())),
                 "{session}"
             );

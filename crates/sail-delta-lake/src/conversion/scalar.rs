@@ -538,6 +538,7 @@ pub struct PartitionValueParser {
     field_dt: ArrowDataType,
     /// The session time zone, for a TIMESTAMP type.
     session_zone: Option<SparkZone>,
+    null: ScalarValue,
 }
 
 impl PartitionValueParser {
@@ -546,9 +547,12 @@ impl PartitionValueParser {
             ArrowDataType::Timestamp(_, Some(_)) => Some(SparkZone::parse(time_zone)?),
             _ => None,
         };
+        let null = ScalarValue::try_new_null(field_dt)
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")))?;
         Ok(Self {
             field_dt: field_dt.clone(),
             session_zone,
+            null,
         })
     }
 
@@ -556,7 +560,7 @@ impl PartitionValueParser {
         &self.field_dt
     }
 
-    pub fn parse(&self, raw: Option<&str>) -> DeltaResultLocal<ScalarValue> {
+    pub fn parse(&self, raw: Option<&str>) -> ScalarValue {
         let value = match (raw, &self.session_zone, &self.field_dt) {
             (None | Some(""), _, _) => None,
             (Some(raw), Some(zone), ArrowDataType::Timestamp(unit, label)) => {
@@ -568,12 +572,7 @@ impl PartitionValueParser {
                 ScalarConverter::string_to_arrow_scalar_value(raw, &self.field_dt).ok()
             }
         };
-        match value {
-            Some(value) => Ok(value),
-            None => ScalarValue::try_new_null(&self.field_dt).map_err(|e| {
-                DeltaTableError::generic(format!("Failed to create null scalar: {e}"))
-            }),
-        }
+        value.unwrap_or_else(|| self.null.clone())
     }
 
     /// Parses values that are not empty, where a value that does not parse is null.
@@ -745,7 +744,7 @@ mod tests {
                         let expected =
                             ScalarValue::Int64(Some(seconds * per_second)).cast_to(&data_type)?;
                         let case = format!("{raw} as {data_type} in {session}");
-                        assert_eq!(parser.parse(Some(raw))?, expected, "{case}");
+                        assert_eq!(parser.parse(Some(raw)), expected, "{case}");
                         assert_eq!(
                             ScalarValue::try_from_array(&array, index)?,
                             expected,
@@ -770,7 +769,7 @@ mod tests {
         ] {
             let data_type = ArrowDataType::Timestamp(unit, Some("UTC".into()));
             assert_eq!(
-                PartitionValueParser::try_new(&data_type, "UTC")?.parse(Some(raw))?,
+                PartitionValueParser::try_new(&data_type, "UTC")?.parse(Some(raw)),
                 ScalarValue::Int64(Some(expected)).cast_to(&data_type)?,
                 "{raw} as {data_type}"
             );
@@ -778,7 +777,7 @@ mod tests {
         // Dates do not depend on the session time zone.
         assert_eq!(
             PartitionValueParser::try_new(&ArrowDataType::Date32, "America/Los_Angeles")?
-                .parse(Some("2024-01-01"))?,
+                .parse(Some("2024-01-01")),
             ScalarValue::Date32(Some(19_723))
         );
         Ok(())
@@ -823,7 +822,7 @@ mod tests {
         ] {
             let parser = PartitionValueParser::try_new(&data_type, "America/Los_Angeles")?;
             let null = ScalarValue::try_new_null(&data_type)?;
-            assert_eq!(parser.parse(Some(raw))?, null, "{raw} as {data_type}");
+            assert_eq!(parser.parse(Some(raw)), null, "{raw} as {data_type}");
             let array = parser.parse_array(&[Some(raw)])?;
             assert_eq!(
                 ScalarValue::try_from_array(&array, 0)?,
@@ -855,7 +854,7 @@ mod tests {
     fn partition_value_parser_preserves_hive_default_partition_string() {
         #[expect(clippy::expect_used)]
         let value = PartitionValueParser::try_new(&ArrowDataType::Utf8, "UTC")
-            .and_then(|parser| parser.parse(Some(NULL_PARTITION_VALUE_DATA_PATH)))
+            .map(|parser| parser.parse(Some(NULL_PARTITION_VALUE_DATA_PATH)))
             .expect("partition value should parse");
 
         assert_eq!(
@@ -868,7 +867,7 @@ mod tests {
     fn partition_value_parser_none_returns_typed_null() {
         #[expect(clippy::expect_used)]
         let value = PartitionValueParser::try_new(&ArrowDataType::Utf8, "UTC")
-            .and_then(|parser| parser.parse(None))
+            .map(|parser| parser.parse(None))
             .expect("partition value should parse");
 
         assert_eq!(value, ScalarValue::Utf8(None));

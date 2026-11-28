@@ -946,32 +946,25 @@ impl ExecutionPlan for DeltaCommitExec {
                         Ok((column.physical_name, parser))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
+                let partition_key = |add: &crate::spec::Add| -> Vec<ScalarValue> {
                     partition_fields
                         .iter()
                         .map(|(name, parser)| {
                             let raw = add.partition_values.get(name).and_then(Option::as_deref);
-                            parser
-                                .parse(raw)
+                            match parser.parse(raw) {
                                 // ScalarValue compares float bits, while Spark equates signed zeros.
-                                .map(|value| match value {
-                                    ScalarValue::Float32(Some(0.0)) => {
-                                        ScalarValue::Float32(Some(0.0))
-                                    }
-                                    ScalarValue::Float64(Some(0.0)) => {
-                                        ScalarValue::Float64(Some(0.0))
-                                    }
-                                    // Like Delta-Spark, a value that does not parse matches only
-                                    // its own spelling, not the NULL partition.
-                                    value
-                                        if value.is_null()
-                                            && raw.is_some_and(|raw| !raw.is_empty()) =>
-                                    {
-                                        ScalarValue::Utf8(raw.map(ToOwned::to_owned))
-                                    }
-                                    value => value,
-                                })
-                                .map_err(|error| DataFusionError::External(Box::new(error)))
+                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
+                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
+                                // Like Delta-Spark, a value that does not parse matches only its
+                                // own spelling, not the NULL partition.
+                                value
+                                    if value.is_null()
+                                        && raw.is_some_and(|raw| !raw.is_empty()) =>
+                                {
+                                    ScalarValue::Utf8(raw.map(ToOwned::to_owned))
+                                }
+                                value => value,
+                            }
                         })
                         .collect()
                 };
@@ -981,16 +974,13 @@ impl ExecutionPlan for DeltaCommitExec {
                         CommitAction::Add(add) => Some(partition_key(add)),
                         _ => None,
                     })
-                    .collect::<Result<std::collections::HashSet<_>>>()?;
-                let removed = snapshot.adds().iter().try_fold(
-                    Vec::new(),
-                    |mut removed, add| -> Result<_> {
-                        if partitions.contains(&partition_key(add)?) {
-                            removed.push(add.clone());
-                        }
-                        Ok(removed)
-                    },
-                )?;
+                    .collect::<std::collections::HashSet<_>>();
+                let removed = snapshot
+                    .adds()
+                    .iter()
+                    .filter(|add| partitions.contains(&partition_key(add)))
+                    .cloned()
+                    .collect::<Vec<_>>();
                 final_actions.extend(
                     crate::datasource::actions::adds_to_remove_actions(removed)
                         .into_iter()

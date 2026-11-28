@@ -205,7 +205,7 @@ fn constant_group_value(
             .get(column.physical_name)
             .or_else(|| add.partition_values.get(column.logical_name))
             .and_then(Option::as_deref);
-        return parser.parse(raw).ok();
+        return Some(parser.parse(raw));
     }
 
     let physical_nulls = u64::try_from(stats.null_count_value(column.physical_name)?).ok()?;

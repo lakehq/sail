@@ -53,7 +53,7 @@ pub fn partitioned_file_from_action(
                 .partition_values
                 .get(&column.physical_name)
                 .and_then(Option::as_deref);
-            parser.parse(raw).unwrap_or(ScalarValue::Null)
+            parser.parse(raw)
         })
         .collect::<Vec<_>>();
 

@@ -209,12 +209,8 @@ pub(crate) fn parse_partition_values_array(
             let parser = PartitionValueParser::try_new(arrow_dt, time_zone)?;
             let scalar_values: Vec<ScalarValue> = raw_values
                 .iter()
-                .map(|value| {
-                    parser.parse(value.as_deref()).map_err(|e| {
-                        DeltaTableError::generic(format!("partition value parse error: {e}"))
-                    })
-                })
-                .collect::<DeltaResult<Vec<_>>>()?;
+                .map(|value| parser.parse(value.as_deref()))
+                .collect();
             let array = if scalar_values.is_empty() {
                 new_empty_array(arrow_dt)
             } else {

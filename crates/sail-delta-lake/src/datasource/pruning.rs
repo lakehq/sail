@@ -167,7 +167,7 @@ pub(crate) fn partition_filter_mask(
                     .and_then(Option::as_deref);
                 parser.parse(raw)
             })
-            .collect::<crate::DeltaResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let column = if values.is_empty() {
             new_empty_array(field.data_type())
         } else {
@@ -461,8 +461,8 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         v: &Option<String>,
     ) -> ScalarValue {
         parser
-            .and_then(|parser| parser.parse(v.as_deref()).ok())
-            // If we can't parse the partition value into the target type, treat it as unknown.
+            .map(|parser| parser.parse(v.as_deref()))
+            // A column without a parser is unknown.
             .unwrap_or_else(|| Self::null_scalar(dt))
     }
 
@@ -598,9 +598,9 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             if let Some(pv) = a.partition_values.get(&storage_name) {
                 // A value that does not parse is NULL too.
                 if pv.as_deref().is_none_or(str::is_empty)
-                    || parser.as_ref().is_some_and(|parser| {
-                        parser.parse(pv.as_deref()).is_ok_and(|v| v.is_null())
-                    })
+                    || parser
+                        .as_ref()
+                        .is_some_and(|parser| parser.parse(pv.as_deref()).is_null())
                 {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
