@@ -532,18 +532,7 @@ async fn bootstrap_pointer_errors_preserve_publication_style_and_artifacts() {
         (NewTableMetadataStyle::Hadoop, true),
         (NewTableMetadataStyle::Uuid, true),
     ] {
-        let hadoop = matches!(style, NewTableMetadataStyle::Hadoop);
-        let faults = [
-            CasFault::Reject,
-            CasFault::Conflicts(1),
-            CasFault::Conflicts(usize::MAX),
-            CasFault::LostAck,
-        ];
-        for fault in faults {
-            // A lasting conflict retries the whole commit of a UUID-style table.
-            if !hadoop && matches!(fault, CasFault::Conflicts(usize::MAX)) {
-                continue;
-            }
+        for fault in [CasFault::Reject, CasFault::Conflicts(1), CasFault::LostAck] {
             let url = url::Url::parse("memory://bucket/bootstrap-pointer/").expect("URL");
             let store = Arc::new(TestStore::new(Arc::new(
                 object_store::memory::InMemory::new(),
@@ -571,6 +560,7 @@ async fn bootstrap_pointer_errors_preserve_publication_style_and_artifacts() {
             let old_pointer = pointer.clone();
             let (store, catalog, ctx, url, mut context) =
                 pointer_fixture(fault, store, url, pointer);
+            let hadoop = matches!(style, NewTableMetadataStyle::Hadoop);
             if hadoop {
                 context.commit = CommitAuthority::Filesystem;
             } else {
@@ -597,32 +587,17 @@ async fn bootstrap_pointer_errors_preserve_publication_style_and_artifacts() {
                 None,
                 crate::operations::SnapshotUpdateKind::FastAppend,
             );
-            let result = commit
+            let error = commit
                 .execute(0, ctx)
                 .expect("stream")
                 .try_collect::<Vec<_>>()
-                .await;
-            // The metadata file of a Hadoop-style table is its commit, and the catalog entry only
-            // mirrors it. A conflict on the entry is retried against the entry as it is now, so
-            // only a lasting conflict leaves the commit state unknown.
-            if hadoop && matches!(fault, CasFault::Conflicts(1)) {
-                result.expect("mirror published after a retry");
-                assert_eq!(catalog.attempts.load(Ordering::SeqCst), 2);
-                assert!(store.deletes.lock().expect("deletes").is_empty());
-                assert_ne!(*catalog.pointer.lock().expect("pointer"), old_pointer);
-                continue;
-            }
-            let error = result.expect_err("pointer failure");
+                .await
+                .expect_err("pointer failure");
             crate::io::test_store::assert_commit_retryability(
                 &error,
                 hadoop || matches!(fault, CasFault::LostAck),
             );
-            let attempts = if matches!(fault, CasFault::Conflicts(usize::MAX)) {
-                crate::physical_plan::commit::commit_exec::MAX_COMMIT_RETRIES
-            } else {
-                1
-            };
-            assert_eq!(catalog.attempts.load(Ordering::SeqCst), attempts);
+            assert_eq!(catalog.attempts.load(Ordering::SeqCst), 1);
             assert!(store.deletes.lock().expect("deletes").is_empty());
 
             // The classifier must retain the exact typed provider failure through the wrapper.

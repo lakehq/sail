@@ -8,7 +8,7 @@ use object_store::path::Path;
 use super::operation::{PreparedSnapshotOperation, SnapshotOperation};
 use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
-    IcebergCatalogCommitMode, catalog_requirements, is_catalog_conflict,
+    IcebergCatalogCommitMode, catalog_requirements,
 };
 use crate::io::StoreContext;
 use crate::lake_source::{
@@ -612,6 +612,12 @@ fn validate_expiration_response(
             ),
         ))
     })
+}
+
+fn is_catalog_conflict(error: &DataFusionError) -> bool {
+    matches!(error, DataFusionError::External(error)
+        if matches!(error.downcast_ref::<sail_catalog::error::CatalogError>(),
+            Some(sail_catalog::error::CatalogError::Conflict(_))))
 }
 
 fn procedure_commit_conflict() -> DataFusionError {

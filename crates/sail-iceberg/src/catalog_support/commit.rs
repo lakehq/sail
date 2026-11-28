@@ -19,7 +19,6 @@ use crate::lake_source::{
 };
 use crate::spec::catalog::TableUpdate;
 use crate::spec::{TableMetadata, TableRequirement};
-use crate::table::metadata_loader::metadata_file_version_from_path;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum CatalogCommitOutcome {
@@ -280,49 +279,6 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    /// Records a filesystem-authoritative commit in the catalog entry of the table.
-    ///
-    /// The versioned metadata file is the commit, and the catalog entry only mirrors its
-    /// location. The swap therefore expects the location the entry records now, not the one seen
-    /// when the write was planned, and an entry that already records this commit or a newer
-    /// version is left unchanged.
-    pub(crate) async fn publish_filesystem_metadata_location(
-        &self,
-        new_metadata_location: &str,
-        max_attempts: usize,
-    ) -> Result<()> {
-        let new_version = metadata_file_version_from_path(new_metadata_location);
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            let manager = self.context.extension::<CatalogManager>()?;
-            let status = manager
-                .get_table(self.catalog_table)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let properties = match status.kind {
-                TableKind::Table { properties, .. } => properties,
-                _ => vec![],
-            };
-            let recorded = metadata_location_from_properties(&properties);
-            if let Some(recorded) = recorded.as_deref()
-                && (recorded == new_metadata_location
-                    || metadata_file_version_from_path(recorded)
-                        .zip(new_version)
-                        .is_some_and(|(recorded, new)| recorded >= new))
-            {
-                return Ok(());
-            }
-            match self
-                .update_metadata_location(&properties, recorded.as_deref(), new_metadata_location)
-                .await
-            {
-                Err(error) if is_catalog_conflict(&error) && attempt < max_attempts => continue,
-                result => return result,
-            }
-        }
-    }
-
     pub(crate) async fn update_metadata_location_with_alter(
         &self,
         existing_properties: &[(String, String)],
@@ -360,11 +316,6 @@ fn metadata_location_update_options(
         ));
     }
     AlterTableOptions::SetTableProperties { properties }
-}
-
-pub(crate) fn is_catalog_conflict(error: &DataFusionError) -> bool {
-    matches!(error, DataFusionError::External(error)
-        if matches!(error.downcast_ref::<CatalogError>(), Some(CatalogError::Conflict(_))))
 }
 
 pub(crate) fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
