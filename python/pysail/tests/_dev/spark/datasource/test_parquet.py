@@ -2012,3 +2012,22 @@ def test_parquet_table_reads_not_null_struct_of_timestamps(spark, tmp_path, time
         assert rows == [Row(k=0, c=Row(y=expected.y0, z=0)), Row(k=1, c=Row(y=expected.y1, z=1))]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize("query", ["SELECT c FROM {t}", "SELECT c.s FROM {t}"])
+def test_parquet_table_rejects_nullable_struct_field_as_not_null(spark, tmp_path, query):
+    # The file stores the struct field `s` as a field that allows nulls, and the timestamp
+    # field inside `s` needs a cast when the file is read.
+    path = tmp_path / "table"
+    struct = "named_struct('s', IF(k >= 0, named_struct('y', TIMESTAMP '2020-01-01 00:00:00'), NULL))"
+    spark.sql(f"SELECT k, {struct} AS c FROM VALUES (0), (1) AS v(k)").write.parquet(str(path))  # noqa: S608
+    table_name = "parquet_nullable_struct_field_as_not_null"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} (k INT, c STRUCT<s: STRUCT<y: TIMESTAMP> NOT NULL> NOT NULL) "
+            f"USING parquet LOCATION '{escape_sql_string_literal(str(path))}'"
+        )
+        with pytest.raises(Exception, match="Cannot cast"):
+            spark.sql(query.format(t=table_name)).collect()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

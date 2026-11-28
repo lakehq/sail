@@ -860,10 +860,15 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         }
         // The nullability of the column itself is not part of its type: a column that the
         // file allows to have nulls is read as a column without nulls, as when no cast is
-        // needed.
-        let physical = physical_field
-            .clone()
-            .with_nullable(logical_field.is_nullable());
+        // needed. A struct field read on its own keeps the check, as when the whole struct
+        // is read.
+        let physical = if column_expr.downcast_ref::<Column>().is_some() {
+            physical_field
+                .clone()
+                .with_nullable(logical_field.is_nullable())
+        } else {
+            physical_field.clone()
+        };
         if !can_cast_field_with_schema_evolution(
             &physical,
             logical_field,
