@@ -3076,8 +3076,8 @@ data:
                     PlaceholderRowExec
           DeltaRemoveActionsExec
             CoalescePartitionsExec
-              DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+              FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+                DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                     CoalescePartitionsExec
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -3205,8 +3205,8 @@ data:
                       DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv_partition_pruning/, version=1, projection=Some([0, 3, 4, 1]), limit=None, pushdown=false)
                         DataSourceExec: partitions=1, partition_sizes=[1]
             RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
-              DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv_partition_pruning/)
-                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+              FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+                DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv_partition_pruning/)
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, tags@8, baseRowId@9, defaultRowCommitVersion@10, clusteringProvider@11, deletionVector@12]
                     CoalescePartitionsExec
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -3285,8 +3285,8 @@ data:
                     PlaceholderRowExec
           DeltaRemoveActionsExec
             CoalescePartitionsExec
-              DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+              FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+                DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                     CoalescePartitionsExec
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -3370,8 +3370,8 @@ data:
                     PlaceholderRowExec
           DeltaRemoveActionsExec
             CoalescePartitionsExec
-              DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+              FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END
+                DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                     CoalescePartitionsExec
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]

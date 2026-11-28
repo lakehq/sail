@@ -541,33 +541,52 @@ def active_partition_values(path, column):
     return list(active.values())
 
 
-def write_partitioned_log(path, data_type, values):
-    """Writes a Delta table `(id INT, v INT, p <data_type>) PARTITIONED BY (p)` with one file of one row
-    per raw partition value in `values`, for ids 1, 2 and so on."""
+def write_partitioned_log(path, data_type, values, *, deletion_vectors=False, rows_per_file=1):
+    """Writes a Delta table `(id INT, v INT, p <data_type>) PARTITIONED BY (p)` with one file per raw
+    partition value in `values`. The file of the n-th value has the ids n, n + 100 and so on, up to
+    `rows_per_file` rows, and `v` is 10 times n."""
     (path / "_delta_log").mkdir(parents=True)
     fields = [
         {"name": name, "type": kind, "nullable": True, "metadata": {}}
         for name, kind in [("id", "integer"), ("v", "integer"), ("p", data_type)]
     ]
+    protocol = {"minReaderVersion": 1, "minWriterVersion": 2}
+    configuration = {}
+    if deletion_vectors:
+        features = ["deletionVectors"]
+        protocol = {
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": features,
+            "writerFeatures": features,
+        }
+        configuration = {"delta.enableDeletionVectors": "true"}
     actions = [
-        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+        {"protocol": protocol},
         {
             "metaData": {
                 "id": "partition-values",
                 "format": {"provider": "parquet", "options": {}},
                 "schemaString": json.dumps({"type": "struct", "fields": fields}),
                 "partitionColumns": ["p"],
-                "configuration": {},
+                "configuration": configuration,
                 "createdTime": 0,
             }
         },
     ]
     for id_, value in enumerate(values, 1):
         name = f"part-{id_}.parquet"
+        ids = [id_ + 100 * row for row in range(rows_per_file)]
         pq.write_table(
-            pa.table({"id": pa.array([id_], pa.int32()), "v": pa.array([id_ * 10], pa.int32())}), path / name
+            pa.table({"id": pa.array(ids, pa.int32()), "v": pa.array([id_ * 10] * len(ids), pa.int32())}),
+            path / name,
         )
-        stats = {"numRecords": 1, "minValues": {"id": id_}, "maxValues": {"id": id_}, "nullCount": {"id": 0}}
+        stats = {
+            "numRecords": len(ids),
+            "minValues": {"id": ids[0]},
+            "maxValues": {"id": ids[-1]},
+            "nullCount": {"id": 0},
+        }
         actions.append(
             {
                 "add": {
@@ -704,3 +723,52 @@ def test_delta_rewrites_refuse_files_whose_partition_value_does_not_parse(
     with ansi_mode(spark, enabled=ansi):
         spark.sql(f"OPTIMIZE delta.`{path}`").collect()
     assert sorted(active_partition_values(path, "p"), key=str) == sorted([bad, bad, good, None], key=str)
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
+@pytest.mark.parametrize(
+    ("data_type", "bad", "good", "literal"),
+    [
+        ("decimal(5,2)", "-1.-25", "2.50", "2.50"),
+        ("integer", "abc", "2", "2"),
+        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z", "TIMESTAMP '2024-01-01 09:00:00'"),
+    ],
+    ids=["decimal", "integer", "timestamp"],
+)
+def test_delta_deletes_that_rewrite_no_file_whose_partition_value_does_not_parse(
+    spark, tmp_path, session_timezone, ansi, deletion_vectors, data_type, bad, good, literal
+):
+    """A DELETE that does not rewrite a file whose partition value does not parse succeeds, whatever other
+    files of the table have such a value. A DELETE with deletion vectors rewrites no file, so it keeps the
+    value of the file it deletes rows of. An UPDATE with deletion vectors writes the updated rows to new
+    files, so it is refused."""
+    _ = session_timezone
+    for name, condition, left in [
+        ("other-file", "id = 3", [1, 2, 4]),
+        ("other-files", "id >= 3", [1, 2]),
+        ("no-row", "id = 9", [1, 2, 3, 4]),
+        ("partition", f"p = {literal} AND v > 0", [1, 2, 4]),
+    ]:
+        path = tmp_path / name
+        write_partitioned_log(path, data_type, [bad, bad, good, None], deletion_vectors=deletion_vectors)
+        delete = f"DELETE FROM delta.`{path}` WHERE {condition}"  # noqa: S608
+        with ansi_mode(spark, enabled=ansi):
+            if ansi and name == "partition":
+                # The partition filter casts the value as the session does.
+                with pytest.raises(Exception, match=re.escape(bad)):
+                    spark.sql(delete).collect()
+                continue
+            spark.sql(delete).collect()
+        assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == left, name
+        assert active_partition_values(path, "p").count(bad) == 2, name
+    if deletion_vectors:
+        path = tmp_path / "rows"
+        write_partitioned_log(path, data_type, [bad, good], deletion_vectors=True, rows_per_file=2)
+        with ansi_mode(spark, enabled=ansi):
+            spark.sql(f"DELETE FROM delta.`{path}` WHERE id = 1").collect()  # noqa: S608
+            with pytest.raises(Exception, match=re.escape(bad)):
+                spark.sql(f"UPDATE delta.`{path}` SET v = 0 WHERE id = 101").collect()  # noqa: S608
+        assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [2, 101, 102]
+        assert sorted(active_partition_values(path, "p")) == sorted([bad, good])

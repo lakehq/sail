@@ -138,15 +138,14 @@ pub async fn build_adds_from_touched_files(
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
     let touched_meta = join_touched_file_metadata(touched_plan, meta_scan)?;
-    let touched_meta = build_rewrite_guard(ctx.session(), touched_meta, snapshot)?;
-
-    Ok(Arc::new(DeltaDiscoveryExec::new(
+    let discovery = DeltaDiscoveryExec::new(
         touched_meta,
         table_url.clone(),
         version,
         partition_columns.to_vec(),
         true, // partition_scan
-    )?))
+    )?;
+    build_rewrite_guard(ctx.session(), discovery, snapshot)
 }
 
 fn join_touched_file_metadata(
