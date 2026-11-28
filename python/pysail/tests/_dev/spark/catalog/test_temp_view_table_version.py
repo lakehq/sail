@@ -88,6 +88,7 @@ def test_view_reads_the_rows_committed_after_its_creation(spark, table, kind):
     assert rows(spark, f"SELECT count(*) FROM {view} a JOIN {view} b ON a.id = b.id") == [(3,)]
 
 
+@pytest.mark.spark(version=">=4", reason="Passes a DataFrame argument to SQL")
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
 def test_sql_view_over_a_data_frame_argument_reads_the_rows_committed_after_its_creation(spark, table):
     table.insert("(1)")
