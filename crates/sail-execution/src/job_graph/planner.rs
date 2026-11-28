@@ -501,10 +501,6 @@ enum DriverStageHandling {
 struct ScalarSubqueryContext<'a> {
     links: &'a [ScalarSubqueryLink],
     results: &'a ScalarSubqueryResults,
-    /// Whether every stage waits for the scalar subqueries, including the stages that do not
-    /// read them, such as the preconditions of a barrier that delete the data that the
-    /// subqueries read.
-    wait_in_every_stage: bool,
 }
 
 struct PlannedSubtree {
@@ -1052,7 +1048,6 @@ fn build_scalar_subquery_job_graph(
         Some(ScalarSubqueryContext {
             links: subqueries.as_slice(),
             results: scalar.results(),
-            wait_in_every_stage: false,
         }),
     )?;
     let plan = wrap_pending_scalar_subqueries(
@@ -1060,7 +1055,6 @@ fn build_scalar_subquery_job_graph(
         Some(ScalarSubqueryContext {
             links: subqueries.as_slice(),
             results: scalar.results(),
-            wait_in_every_stage: false,
         }),
     );
     Ok(PlannedSubtree::without_pending_scalar_subquery_expr(plan))
@@ -1252,12 +1246,6 @@ fn build_barrier_job_graph(
     graph: &mut JobGraph,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
-    // The preconditions run before the plan, which may read the scalar subqueries, so the
-    // subqueries complete before the preconditions run, as in local execution.
-    let precondition_scalar_context = scalar_context.map(|context| ScalarSubqueryContext {
-        wait_in_every_stage: true,
-        ..context
-    });
     let preconditions = barrier
         .preconditions()
         .iter()
@@ -1267,7 +1255,7 @@ fn build_barrier_job_graph(
                 usage,
                 graph,
                 DriverStageHandling::CreateStage,
-                precondition_scalar_context,
+                scalar_context,
             )
         })
         .collect::<ExecutionResult<Vec<_>>>()?;
@@ -1340,9 +1328,7 @@ fn wrap_pending_scalar_subqueries(
     let Some(scalar_context) = scalar_context else {
         return plan.plan;
     };
-    if scalar_context.links.is_empty()
-        || !(plan.has_pending_scalar_subquery_expr || scalar_context.wait_in_every_stage)
-    {
+    if scalar_context.links.is_empty() || !plan.has_pending_scalar_subquery_expr {
         return plan.plan;
     }
     Arc::new(ScalarSubqueryExec::new(
@@ -1729,7 +1715,6 @@ mod tests {
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
-    use sail_data_source::listing::delete::FileDeleteExec;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
@@ -3957,63 +3942,6 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
-    }
-
-    #[test]
-    fn test_job_graph_deletes_after_the_scalar_subqueries_of_the_write() {
-        for options in [
-            flight_shuffle_options(),
-            blocking_shuffle_options(),
-            celeborn_shuffle_options(),
-        ] {
-            let results = ScalarSubqueryResults::new(1);
-            let predicate = Arc::new(ScalarSubqueryExpr::new(
-                DataType::Boolean,
-                false,
-                SubqueryIndex::new(0),
-                results.clone(),
-            ));
-            let write = Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap());
-            let delete = Arc::new(FileDeleteExec::new(
-                ObjectStoreUrl::local_filesystem(),
-                object_store::path::Path::from("t"),
-                None,
-            ));
-            // The shape of an overwrite of a file table whose data reads a scalar subquery.
-            let overwrite = Arc::new(BarrierExec::new(vec![delete], write));
-            let plan = Arc::new(ScalarSubqueryExec::new(
-                Arc::new(BarrierExec::new(vec![overwrite], empty_plan())),
-                vec![ScalarSubqueryLink {
-                    plan: empty_plan(),
-                    index: SubqueryIndex::new(0),
-                }],
-                results,
-            ));
-
-            let graph = JobGraph::try_new(plan, options).unwrap();
-            let stage = graph
-                .stages()
-                .iter()
-                .find(|stage| {
-                    stage
-                        .plan
-                        .downcast_ref::<ScalarSubqueryExec>()
-                        .is_some_and(|scalar| scalar.input().is::<FileDeleteExec>())
-                })
-                .expect("the delete should wait for the scalar subquery");
-            let scalar = stage.plan.downcast_ref::<ScalarSubqueryExec>().unwrap();
-            let link = scalar.subqueries()[0]
-                .plan
-                .downcast_ref::<StageInputExec<usize>>()
-                .expect("the scalar subquery should be read from its stage");
-            assert!(matches!(
-                stage.inputs.as_slice(),
-                [StageInput {
-                    stage,
-                    mode: InputMode::Broadcast,
-                }] if stage == link.input()
-            ));
-        }
     }
 
     /// Plans a job, and returns for each stage and each of its inputs whether the

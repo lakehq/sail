@@ -428,9 +428,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after RejectSelfOverwrite:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#2@0 as k]
       ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]

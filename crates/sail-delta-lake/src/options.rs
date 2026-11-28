@@ -262,7 +262,6 @@ mod tests {
             }],
             lakehouse_table: None,
             snapshot_pins: None,
-            target_table: None,
         };
         let checked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
         *provider.value.lock().unwrap() = Some("false".to_string());

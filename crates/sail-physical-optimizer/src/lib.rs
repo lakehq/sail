@@ -33,7 +33,6 @@ use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
-use crate::self_overwrite::RejectSelfOverwrite;
 use crate::window_topn::WindowTopN;
 
 mod barrier;
@@ -49,7 +48,6 @@ mod partition_sensitive;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
-mod self_overwrite;
 mod window_topn;
 
 #[derive(Debug, Clone, Default)]
@@ -103,8 +101,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    // The overwrite check must see the final plan, after the reads that the other rules remove.
-    rules.push(Arc::new(RejectSelfOverwrite));
 
     rules
 }

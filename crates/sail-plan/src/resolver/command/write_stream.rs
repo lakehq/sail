@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::LogicalPlan;
 use sail_catalog::provider::CatalogPartitionField;
 use sail_common::spec;
-use sail_data_source::listing::write::FileWriteNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -72,18 +70,6 @@ impl PlanResolver<'_> {
                 })
             }
         }
-        let plan = self
-            .resolve_write_with_builder(input, builder, state)
-            .await?;
-        // A file sink writes once and keeps no progress of a stream.
-        if plan.exists(|plan| {
-            Ok(matches!(plan, LogicalPlan::Extension(extension)
-                if extension.node.as_any().is::<FileWriteNode>()))
-        })? {
-            return Err(PlanError::unsupported(
-                "writing a streaming query to a file sink is not supported",
-            ));
-        }
-        Ok(plan)
+        self.resolve_write_with_builder(input, builder, state).await
     }
 }

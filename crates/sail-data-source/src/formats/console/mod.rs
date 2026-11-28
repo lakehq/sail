@@ -49,7 +49,6 @@ impl DataSource for ConsoleDataSource {
             sort_order,
             options,
             lakehouse_table: _,
-            target_table: _,
             sql_insert: _,
             identity_columns_to_track: _,
             snapshot_pins: _,

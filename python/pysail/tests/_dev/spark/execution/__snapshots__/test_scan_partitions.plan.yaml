@@ -592,9 +592,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after RejectSelfOverwrite:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#5@0 as probe_id]
       ProjectionExec: expr=[#1@0 as #5]
@@ -1137,9 +1134,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -1691,9 +1685,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2253,9 +2244,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after RejectSelfOverwrite:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#5@0 as probe_id]
       ProjectionExec: expr=[#1@0 as #5]
@@ -2798,9 +2786,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -3352,9 +3337,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -3914,9 +3896,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after RejectSelfOverwrite:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#5@0 as probe_id]
       ProjectionExec: expr=[#1@0 as #5]
@@ -4459,9 +4438,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -5013,9 +4989,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after RejectSelfOverwrite:
     SAME TEXT AS ABOVE
 
     physical_plan:
