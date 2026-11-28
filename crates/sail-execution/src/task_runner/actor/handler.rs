@@ -20,8 +20,9 @@ use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::preparation::TaskPreparation;
-use crate::task_runner::{TaskRunnerActor, TaskRunnerPlacement};
-use crate::worker::{WorkerLocation, WorkerMessage};
+use crate::task_runner::{TaskBatchContext, TaskRunnerActor, TaskRunnerPlacement};
+use crate::worker::r#gen::JobSession;
+use crate::worker::{WorkerLocation, WorkerMessage, create_job_context};
 
 impl TaskRunnerActor {
     pub(super) fn handle_run_task_batch(
@@ -31,7 +32,7 @@ impl TaskRunnerActor {
         stage: usize,
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
-        context: Arc<TaskContext>,
+        context: TaskBatchContext,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         // Peer tracking is independent of task admission, including canceled or replayed batches.
@@ -59,6 +60,13 @@ impl TaskRunnerActor {
         if !self.tasks.check_batch(job_id, stage, &tasks)? {
             return Ok(());
         }
+        // The plan must be decoded with the job context, since decoding captures its options.
+        let context = match context {
+            TaskBatchContext::Driver(context) => context,
+            TaskBatchContext::Worker { worker, session } => {
+                self.job_context(job_id, &worker, &session)?
+            }
+        };
         // Validate shared descriptions before admitting any task. Only descriptions are shared;
         // every task gets a fresh converter, executable plan, and shuffle reader/writer.
         let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
@@ -93,8 +101,26 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
+    /// Returns the task context of a job on a worker, which is created on the first task batch
+    /// of the job and dropped when the job is closed (a lost `CleanUpJob` keeps it until the
+    /// worker stops, like the other per-job state).
+    pub(super) fn job_context(
+        &mut self,
+        job_id: JobId,
+        worker: &TaskContext,
+        session: &JobSession,
+    ) -> ExecutionResult<Arc<TaskContext>> {
+        if let Some(context) = self.job_contexts.get(&job_id) {
+            return Ok(context.clone());
+        }
+        let context = Arc::new(create_job_context(worker, session.config_options()?));
+        self.job_contexts.insert(job_id, context.clone());
+        Ok(context)
+    }
+
     pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
         self.tasks.close_job(job_id);
+        self.job_contexts.remove(&job_id);
         self.extensions.local_streams.remove_streams(job_id, None);
         self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue

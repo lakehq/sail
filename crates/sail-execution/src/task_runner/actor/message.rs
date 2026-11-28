@@ -16,6 +16,19 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
 use crate::worker::WorkerLocation;
+use crate::worker::r#gen::JobSession;
+
+/// Where the tasks of a batch get their task context from.
+pub enum TaskBatchContext {
+    /// The task context of the job, for tasks that run on the driver.
+    Driver(Arc<TaskContext>),
+    /// The task context of the worker session and the driver session settings of the job,
+    /// from which the worker builds the task context of the job.
+    Worker {
+        worker: Arc<TaskContext>,
+        session: Arc<JobSession>,
+    },
+}
 
 pub enum TaskRunnerMessage {
     RunTaskBatch {
@@ -23,7 +36,7 @@ pub enum TaskRunnerMessage {
         stage: usize,
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
-        context: Arc<TaskContext>,
+        context: TaskBatchContext,
         peers: Vec<WorkerLocation>,
         result: oneshot::Sender<ExecutionResult<()>>,
     },

@@ -157,11 +157,15 @@ pub struct MergeExpansion {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct MergePlanRequirements {
+pub struct MergePlanRequirements<'a> {
     /// Whether the write branch must retain unchanged target rows for file rewrites.
     pub preserve_unmodified_target_rows: bool,
     pub source_metrics: bool,
     pub effects: RowLevelEffectRequirements,
+    /// Pairs metadata columns of the target that carry a value of a target column with that
+    /// column. Such a column is kept for the rows the MERGE writes, except that it is NULL in the
+    /// rows whose clause writes the target column: by assigning it, or by generating it.
+    pub value_columns: &'a [(&'a str, &'a str)],
 }
 
 fn merge_name_key(name: &str, case_sensitive: bool) -> String {
@@ -233,6 +237,7 @@ pub fn expand_merge(
     row_delete_metadata_columns: &[&str],
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
+    let value_columns = requirements.value_columns;
     let target_plan = info.target.as_ref().clone();
     let source_plan = info.source.as_ref().clone();
     let mut options = info.options;
@@ -382,7 +387,10 @@ pub fn expand_merge(
                 row_index_column,
                 row_delete_metadata_columns,
                 options.case_sensitive,
-            ) {
+            ) || value_columns
+                .iter()
+                .any(|(name, _)| merge_names_equal(source_name, name, options.case_sensitive))
+            {
                 return plan_err!(
                     "MERGE schema evolution cannot add reserved internal column '{source_name}'"
                 );
@@ -412,7 +420,10 @@ pub fn expand_merge(
             );
         }
     }
-    for metadata_column in row_delete_metadata_columns {
+    for metadata_column in row_delete_metadata_columns
+        .iter()
+        .chain(value_columns.iter().map(|(name, _)| name))
+    {
         let already_present = target_proj_exprs
             .iter()
             .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == *metadata_column));
@@ -462,7 +473,10 @@ pub fn expand_merge(
     if let Some(row_index_column) = row_index_column {
         target_rename_map.insert(row_index_column.to_string(), row_index_column.to_string());
     }
-    for metadata_column in row_delete_metadata_columns {
+    for metadata_column in row_delete_metadata_columns
+        .iter()
+        .chain(value_columns.iter().map(|(name, _)| name))
+    {
         target_rename_map.insert(
             (*metadata_column).to_string(),
             (*metadata_column).to_string(),
@@ -881,6 +895,7 @@ fn build_default_merge_expansion(
         path_column,
         row_index_column,
         row_delete_metadata_columns,
+        requirements.value_columns,
     )?;
     let change_data_preimage =
         if single_stream_cdf {
@@ -2055,6 +2070,7 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
+    value_columns: &[(&str, &str)],
 ) -> Result<MergeProjection> {
     let matched_base = col(TARGET_PRESENT_COLUMN)
         .is_not_null()
@@ -2221,6 +2237,40 @@ fn build_merge_projection(
         }
     }
 
+    // A value column passes through, except in the rows whose clause writes its target column.
+    // Inserted rows have no target row, so the value is NULL there too.
+    for (value_column, column) in value_columns {
+        let generated = options
+            .generated_column_exprs
+            .iter()
+            .any(|(name, _)| merge_names_equal(name, column, options.case_sensitive));
+        let null = lit(ScalarValue::Utf8(None));
+        let matched = options
+            .matched_clauses
+            .iter()
+            .zip(&matched_clause_predicates)
+            .filter(|(clause, _)| match &clause.action {
+                MergeMatchedAction::Delete => false,
+                action => generated || matched_action_assigns(options, action, column),
+            });
+        let not_matched_by_source = options
+            .not_matched_by_source_clauses
+            .iter()
+            .zip(&not_matched_by_source_clause_predicates)
+            .filter(|(clause, _)| match &clause.action {
+                MergeNotMatchedBySourceAction::Delete => false,
+                action => {
+                    generated || not_matched_by_source_action_assigns(options, action, column)
+                }
+            });
+        let branches = matched
+            .map(|(_, predicate)| predicate)
+            .chain(not_matched_by_source.map(|(_, predicate)| predicate))
+            .map(|predicate| (predicate.clone(), null.clone()))
+            .collect();
+        cases.insert((*value_column).to_string(), branches);
+    }
+
     let mut projections = Vec::new();
     for field in target_schema.fields() {
         if is_merge_metadata_column(
@@ -2349,22 +2399,7 @@ fn build_merge_projection(
             .iter()
             .zip(&matched_clause_predicates)
         {
-            let explicitly_assigned = match &clause.action {
-                MergeMatchedAction::UpdateAll => {
-                    merge_source_expr(options, generated_column).is_some()
-                }
-                MergeMatchedAction::UpdateSet(assignments) => {
-                    assignments.iter().any(|assignment| {
-                        merge_names_equal(
-                            &assignment.column,
-                            generated_column,
-                            options.case_sensitive,
-                        )
-                    })
-                }
-                MergeMatchedAction::Delete => false,
-            };
-            if explicitly_assigned {
+            if matched_action_assigns(options, &clause.action, generated_column) {
                 branches.push((Box::new(predicate.clone()), Box::new(lit(true))));
             }
         }
@@ -2373,11 +2408,7 @@ fn build_merge_projection(
             .iter()
             .zip(&not_matched_by_source_clause_predicates)
         {
-            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &clause.action
-                && assignments.iter().any(|assignment| {
-                    merge_names_equal(&assignment.column, generated_column, options.case_sensitive)
-                })
-            {
+            if not_matched_by_source_action_assigns(options, &clause.action, generated_column) {
                 branches.push((Box::new(predicate.clone()), Box::new(lit(true))));
             }
         }
@@ -2394,6 +2425,37 @@ fn build_merge_projection(
     }
 
     Ok((projections, generated_assignment_markers))
+}
+
+/// Whether a matched `action` assigns the target column `column` explicitly.
+fn matched_action_assigns(
+    options: &MergeIntoOptions,
+    action: &MergeMatchedAction,
+    column: &str,
+) -> bool {
+    match action {
+        MergeMatchedAction::UpdateAll => merge_source_expr(options, column).is_some(),
+        MergeMatchedAction::UpdateSet(assignments) => assignments.iter().any(|assignment| {
+            merge_names_equal(&assignment.column, column, options.case_sensitive)
+        }),
+        MergeMatchedAction::Delete => false,
+    }
+}
+
+/// Whether a not-matched-by-source `action` assigns the target column `column` explicitly.
+fn not_matched_by_source_action_assigns(
+    options: &MergeIntoOptions,
+    action: &MergeNotMatchedBySourceAction,
+    column: &str,
+) -> bool {
+    match action {
+        MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
+            assignments.iter().any(|assignment| {
+                merge_names_equal(&assignment.column, column, options.case_sensitive)
+            })
+        }
+        MergeNotMatchedBySourceAction::Delete => false,
+    }
 }
 
 fn build_rewrite_predicates(

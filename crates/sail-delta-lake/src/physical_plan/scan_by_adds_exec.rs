@@ -154,7 +154,8 @@ impl ScanByAddsStreamState {
                     require_files: false,
                     catalog_managed_commits: Some(catalog_managed_commits),
                     ..Default::default()
-                },
+                }
+                .with_session_time_zone(self.context.session_config().options()),
             )
             .await?
         } else {

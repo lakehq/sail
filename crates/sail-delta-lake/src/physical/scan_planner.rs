@@ -79,6 +79,11 @@ pub(crate) async fn plan_delta_scan(
         &config.commit_timestamp_column_name,
         Some(schema.clone()),
     )?;
+    let full_logical_schema = if config.unparsed_partition_values {
+        crate::datasource::with_unparsed_partition_value_fields(&full_logical_schema, snapshot)
+    } else {
+        full_logical_schema
+    };
     let table_partition_cols = snapshot.metadata().partition_columns().clone();
     let logical_schema = if let Some(used_columns) = projection {
         let mut fields = vec![];
@@ -207,6 +212,7 @@ pub(crate) async fn plan_delta_scan(
                     Arc::clone(&logical_schema),
                     Arc::clone(predicate),
                     kmode,
+                    snapshot.partition_time_zone(),
                 )?;
                 let pruned_files = match Arc::try_unwrap(files) {
                     Ok(files) => files

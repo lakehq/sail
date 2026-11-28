@@ -6,15 +6,17 @@ use datafusion::arrow::array::{
     Array, BooleanArray, Int32Array, Int64Array, StringArray, StructArray,
 };
 use datafusion::arrow::compute::filter_record_batch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::{OPERATION_COLUMN, RowLevelOperationType};
 
 use super::writer_exec::change_data_schema;
+use crate::datasource::UNPARSED_PARTITION_VALUE_PREFIX;
 
 /// Expand accepted postimages once. The same arrays feed both main data and CDC output.
 /// Preimages were packed before postimage expressions and identity allocation were evaluated.
+/// The change data keeps the partition values that do not parse, after the table columns.
 pub(super) fn split_merge_change_data(
     batch: RecordBatch,
     preimage_column: Option<&str>,
@@ -52,6 +54,21 @@ pub(super) fn split_merge_change_data(
         is(tag, RowLevelOperationType::MatchedDelete)
             || is(tag, RowLevelOperationType::NotMatchedBySourceDelete)
     };
+    let unparsed = batch
+        .schema()
+        .fields()
+        .iter()
+        .filter(|field| field.name().starts_with(UNPARSED_PARTITION_VALUE_PREFIX))
+        .cloned()
+        .collect::<Vec<_>>();
+    let change_schema = Arc::new(Schema::new(
+        change_data_schema(table_schema)
+            .fields()
+            .iter()
+            .chain(&unparsed)
+            .cloned()
+            .collect::<Vec<_>>(),
+    ));
     let mut changes = Vec::new();
     for (change_type, before) in [
         ("insert", false),
@@ -85,6 +102,7 @@ pub(super) fn split_merge_change_data(
         let mut arrays = table_schema
             .fields()
             .iter()
+            .chain(&unparsed)
             .map(|field| {
                 let column = match preimage {
                     Some(preimage) => preimage.column_by_name(field.name()),
@@ -98,13 +116,14 @@ pub(super) fn split_merge_change_data(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        arrays.push(Arc::new(StringArray::from_iter_values(
-            std::iter::repeat_n(change_type, selected.num_rows()),
-        )));
-        changes.push(RecordBatch::try_new(
-            change_data_schema(table_schema),
-            arrays,
-        )?);
+        arrays.insert(
+            table_schema.fields().len(),
+            Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                change_type,
+                selected.num_rows(),
+            ))),
+        );
+        changes.push(RecordBatch::try_new(Arc::clone(&change_schema), arrays)?);
     }
     let main = if merge_on_read {
         let mask = BooleanArray::from_iter(

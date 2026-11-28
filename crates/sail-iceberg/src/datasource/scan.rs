@@ -28,6 +28,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use object_store::ObjectMeta;
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -724,8 +725,7 @@ impl IcebergScan {
             schema
         };
         Arc::new(
-            ParquetSource::new(schema.build())
-                .with_table_parquet_options(parquet_options)
+            with_parquet_options(ParquetSource::new(schema.build()), parquet_options)
                 .with_parquet_file_reader_factory(reader_factory),
         )
     }
@@ -758,8 +758,7 @@ impl IcebergScan {
             .with_virtual_columns(vec![parquet_row_position_field(&self.output_schema)])
             .build();
         Arc::new(
-            ParquetSource::new(table_schema)
-                .with_table_parquet_options(parquet_options)
+            with_parquet_options(ParquetSource::new(table_schema), parquet_options)
                 .with_parquet_file_reader_factory(reader_factory),
         )
     }

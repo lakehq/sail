@@ -144,3 +144,31 @@ def test_iceberg_merge_results(spark, tmp_path, dml_table):
         tmp_path,
     )
     assert _rows(spark, table) == [(6, 60, 1)]
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("mode", ["copy-on-write", "merge-on-read"])
+@pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
+@pytest.mark.parametrize("condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'"])
+def test_iceberg_delete_by_date_in_session_time_zone(spark, tmp_path, session_timezone, mode, partition, condition):
+    """A DELETE in a session time zone other than UTC takes the dates of TIMESTAMP values in that time
+    zone, as a query does."""
+    _ = session_timezone
+    table = "iceberg_delete_by_date"
+    spark.sql(f"""
+        CREATE TABLE {table} (id INT, ts TIMESTAMP) USING iceberg {partition}
+        LOCATION '{escape_sql_string_literal(str(tmp_path))}' TBLPROPERTIES (
+          'format-version'='2', 'write.delete.mode'='{mode}')
+    """)
+    try:
+        # December 31 and January 1 in the session time zone, both January 1 in UTC.
+        spark.sql(
+            f"INSERT INTO {table} VALUES "
+            "(1, TIMESTAMP '2024-01-01 04:00:00+00:00'), (2, TIMESTAMP '2024-01-01 12:00:00+00:00')"
+        ).collect()
+        spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+        assert [row.id for row in spark.sql(f"SELECT id FROM {table} WHERE {condition}").collect()] == [2]
+        spark.sql(f"DELETE FROM {table} WHERE {condition}").collect()
+        assert [row.id for row in _rows(spark, table)] == [1]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

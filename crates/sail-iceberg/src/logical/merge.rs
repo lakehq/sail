@@ -132,6 +132,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
                 || target_presence_only,
             source_metrics: false,
             effects: RowLevelEffectRequirements::default(),
+            value_columns: &[],
         },
     )?;
     let write_plan = match (mode, row_index_column) {

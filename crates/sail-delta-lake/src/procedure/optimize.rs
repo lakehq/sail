@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::array::{Array, RecordBatch};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema};
 use datafusion::catalog::Session;
 use datafusion::common::{Result, not_impl_err, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -24,12 +24,17 @@ use super::maintenance::{
 use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
+use crate::conversion::{PartitionValueParser, ScalarExt};
+use crate::datasource::{
+    DeltaScanConfig, partition_value_parsers, with_unparsed_partition_value_fields,
+};
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
     DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions, delta_action_schema,
     encode_actions, prepare_delta_write_context,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
     Action, Add, CommitAction, DeltaError, DeltaOperation, RemoveOptions, TableFeature,
@@ -108,7 +113,7 @@ pub(crate) async fn plan(
     }
     let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
-    let partition_columns = snapshot.physical_partition_columns();
+    let partition_columns = bin_key_columns(&snapshot)?;
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
     for add in candidates {
         let dv_rewrite = add.deletion_vector.as_ref().is_some_and(|dv| {
@@ -122,28 +127,7 @@ pub(crate) async fn plan(
             })
         });
         if add.size < min_size || dv_rewrite {
-            let mut key = add
-                .partition_values
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<BTreeMap<_, _>>();
-            // Normalize null encodings without changing nonempty partition spellings or Add actions.
-            for column in &partition_columns {
-                let Some(value) = key.get_mut(&column.physical_name) else {
-                    continue;
-                };
-                if value.as_deref() == Some("") {
-                    let field = snapshot.schema().field_with_name(&column.logical_name)?;
-                    if crate::conversion::parse_optional_partition_value(
-                        value.as_deref(),
-                        field.data_type(),
-                    )?
-                    .is_null()
-                    {
-                        *value = None;
-                    }
-                }
-            }
+            let key = bin_key(&snapshot, &partition_columns, &add)?;
             partitions.entry(key).or_default().push(add);
         }
     }
@@ -241,8 +225,11 @@ pub(crate) async fn plan(
             snapshot.table_url().clone(),
             snapshot.version(),
             schema.clone(),
-            schema.clone(),
-            scan_config,
+            with_unparsed_partition_value_fields(&schema, &snapshot),
+            DeltaScanConfig {
+                unparsed_partition_values: true,
+                ..scan_config
+            },
             None,
             None,
             None,
@@ -342,7 +329,10 @@ pub(super) async fn finish(
         ] {
             metrics.insert(key.to_string(), json!(value));
         }
-        CommitBuilder::from(CommitProperties::default().with_operation_metrics(metrics))
+        let properties = CommitProperties::default()
+            .with_operation_metrics(metrics)
+            .with_partition_time_zone(Arc::clone(snapshot.partition_time_zone()));
+        CommitBuilder::from(properties)
             .with_actions(actions)
             .build(Some(snapshot.clone()), log_store, operation)
             .await?;
@@ -372,6 +362,54 @@ pub(super) async fn finish(
     }});
     serde_arrow::to_record_batch(invocation.procedure.schema().fields(), &[row])
         .map_err(|e| DeltaError::generic_err(e).into())
+}
+
+/// Resolves the partition value parsers once for the bin keys of all files.
+fn bin_key_columns(
+    snapshot: &DeltaSnapshot,
+) -> Result<Vec<(PhysicalPartitionColumn, Option<PartitionValueParser>)>> {
+    let columns = snapshot.physical_partition_columns();
+    let parsers =
+        partition_value_parsers(&columns, snapshot.schema(), snapshot.partition_time_zone())?;
+    Ok(columns.into_iter().zip(parsers).collect())
+}
+
+/// Returns the partition of a file for grouping files into bins, without changing the `Add`.
+///
+/// Null encodings are normalized, and so are timestamp values, which are written as UTC with an
+/// offset now but without one by earlier versions, so that files of one partition share a bin.
+fn bin_key(
+    snapshot: &DeltaSnapshot,
+    partition_columns: &[(PhysicalPartitionColumn, Option<PartitionValueParser>)],
+    add: &Add,
+) -> Result<BTreeMap<String, Option<String>>> {
+    let mut key = add
+        .partition_values
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for (column, parser) in partition_columns {
+        let Some(value) = key.get_mut(&column.physical_name) else {
+            continue;
+        };
+        let Some(parser) = parser else {
+            // A column missing from the schema fails only for an empty value, as before.
+            if value.as_deref() == Some("") {
+                snapshot.schema().field_with_name(&column.logical_name)?;
+            }
+            continue;
+        };
+        if value.as_deref() == Some("") {
+            *value = None;
+        } else if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_))) {
+            let scalar = parser.parse(value.as_deref());
+            // A timestamp value that does not parse is NULL and keeps its spelling, as before.
+            if !scalar.is_null() {
+                *value = Some(scalar.serialize().into_owned());
+            }
+        }
+    }
+    Ok(key)
 }
 
 fn retain_bin(bins: &mut Vec<Vec<Add>>, bin: Vec<Add>) {
@@ -455,18 +493,19 @@ fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<R
             field,
             snapshot.effective_column_mapping_mode(),
         );
+        let parser =
+            PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())?;
         let values = snapshot
             .adds()
             .iter()
             .map(|add| {
-                crate::conversion::parse_optional_partition_value(
+                parser.parse(
                     add.partition_values
                         .get(physical)
                         .and_then(Option::as_deref),
-                    field.data_type(),
                 )
             })
-            .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         columns.push(if values.is_empty() {
             datafusion::arrow::array::new_empty_array(field.data_type())
         } else {
@@ -512,30 +551,21 @@ mod tests {
     use crate::spec::inspection::DeltaCommandType;
     use crate::spec::{DataType, Metadata, Protocol, SaveMode, StructField, StructType};
 
-    async fn predicate_snapshot(
-        data_columns: usize,
-        partitioned: bool,
-        num_files: usize,
+    async fn snapshot_with(
+        fields: impl IntoIterator<Item = StructField>,
+        partition_columns: Vec<String>,
+        adds: impl IntoIterator<Item = Add>,
+        config: DeltaSnapshotConfig,
     ) -> Result<DeltaSnapshot> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let url = url::Url::parse("memory:///").unwrap();
         let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
         let protocol = Protocol::new(1, 2, None, None);
-        let fields = (0..data_columns)
-            .map(|i| StructField::not_null(format!("value{i}"), DataType::LONG))
-            .chain([
-                StructField::not_null("p", DataType::LONG),
-                StructField::not_null("q", DataType::LONG),
-            ]);
         let metadata = Metadata::try_new(
             None,
             None,
             StructType::try_new(fields)?,
-            if partitioned {
-                vec!["p".into(), "q".into()]
-            } else {
-                vec![]
-            },
+            partition_columns,
             0,
             HashMap::new(),
         )?;
@@ -543,22 +573,7 @@ mod tests {
             CommitAction::Protocol(protocol.clone()),
             CommitAction::Metadata(metadata.clone()),
         ];
-        actions.extend((0..num_files).map(|i| {
-            CommitAction::Add(Add {
-                path: format!("{i}.parquet"),
-                partition_values: if partitioned {
-                    HashMap::from([
-                        ("p".into(), Some((i + 1).to_string())),
-                        ("q".into(), Some("10".into())),
-                    ])
-                } else {
-                    HashMap::new()
-                },
-                size: 10,
-                data_change: true,
-                ..Default::default()
-            })
-        }));
+        actions.extend(adds.into_iter().map(CommitAction::Add));
         CommitBuilder::default()
             .with_actions(actions)
             .build(
@@ -572,13 +587,79 @@ mod tests {
                 },
             )
             .await?;
-        Ok(DeltaSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaSnapshotConfig::default(),
-            None,
-            None,
+        Ok(DeltaSnapshot::try_new(log_store.as_ref(), config, None, None).await?)
+    }
+
+    async fn predicate_snapshot(
+        data_columns: usize,
+        partitioned: bool,
+        num_files: usize,
+    ) -> Result<DeltaSnapshot> {
+        let fields = (0..data_columns)
+            .map(|i| StructField::not_null(format!("value{i}"), DataType::LONG))
+            .chain([
+                StructField::not_null("p", DataType::LONG),
+                StructField::not_null("q", DataType::LONG),
+            ]);
+        let partition_columns = if partitioned {
+            vec!["p".into(), "q".into()]
+        } else {
+            vec![]
+        };
+        let adds = (0..num_files).map(|i| Add {
+            path: format!("{i}.parquet"),
+            partition_values: if partitioned {
+                HashMap::from([
+                    ("p".into(), Some((i + 1).to_string())),
+                    ("q".into(), Some("10".into())),
+                ])
+            } else {
+                HashMap::new()
+            },
+            size: 10,
+            data_change: true,
+            ..Default::default()
+        });
+        snapshot_with(fields, partition_columns, adds, Default::default()).await
+    }
+
+    #[tokio::test]
+    async fn bin_key_groups_timestamp_partition_values_of_both_formats() -> Result<()> {
+        let snapshot = snapshot_with(
+            [
+                StructField::not_null("value", DataType::LONG),
+                StructField::nullable("ts", DataType::TIMESTAMP),
+            ],
+            vec!["ts".into()],
+            [],
+            DeltaSnapshotConfig {
+                partition_time_zone: "America/Los_Angeles".into(),
+                ..Default::default()
+            },
         )
-        .await?)
+        .await?;
+        let columns = bin_key_columns(&snapshot)?;
+        let key = |value: &str| {
+            let add = Add {
+                path: format!("{value}.parquet"),
+                partition_values: HashMap::from([("ts".to_string(), Some(value.to_string()))]),
+                ..Default::default()
+            };
+            bin_key(&snapshot, &columns, &add)
+        };
+
+        // A file written without an offset shares the bin of a file written with one when both
+        // are the same instant in the session time zone.
+        let old = key("2024-01-01 01:00:00.000000")?;
+        let new = key("2024-01-01T09:00:00.000000Z")?;
+        assert_eq!(old, new);
+        assert_eq!(
+            new.get("ts"),
+            Some(&Some("2024-01-01T09:00:00.000000Z".to_string()))
+        );
+        assert_ne!(new, key("2024-01-01 09:00:00.000000")?);
+        assert_ne!(new, key("2024-01-01T10:00:00.000000Z")?);
+        Ok(())
     }
 
     #[tokio::test]

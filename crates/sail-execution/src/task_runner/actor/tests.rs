@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
+use datafusion::common::config::ConfigOptions;
+use datafusion::execution::TaskContext;
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
-use sail_common::actor::{ActorHandle, ActorSystem};
+use sail_common::actor::{Actor, ActorContext, ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, SystemCatalogStore};
 use sail_common::runtime::RuntimeHandle;
 use tokio::sync::oneshot;
@@ -15,14 +17,18 @@ use tokio::sync::oneshot;
 use crate::driver::job_scheduler::event_reporter;
 use crate::driver::{DriverActor, DriverComponents, DriverOptions};
 use crate::error::ExecutionResult;
-use crate::id::{DriverId, JobId, TaskKey, TaskStreamKeySet};
+use crate::id::{DriverId, JobId, TaskAttempt, TaskKey, TaskStreamKeySet};
 use crate::stream::local::LocalStreamManager;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState};
-use crate::task_runner::{
-    TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerMessage,
-    TaskRunnerPlacement,
+use crate::task::definition::{
+    TaskDefinition, TaskOutput, TaskOutputDistribution, TaskOutputLocator,
 };
+use crate::task_runner::{
+    TaskBatchContext, TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions,
+    TaskRunnerMessage, TaskRunnerPlacement,
+};
+use crate::worker::r#gen::JobSession;
 use crate::worker_manager::LocalWorkerManager;
 
 type TestError = Box<dyn std::error::Error>;
@@ -32,6 +38,11 @@ fn task_runner(
     system: &mut ActorSystem,
     name: &str,
 ) -> Result<ActorHandle<TaskRunnerActor>, TestError> {
+    let components = components(system, name)?;
+    Ok(system.spawn::<TaskRunnerActor>(components))
+}
+
+fn components(system: &mut ActorSystem, name: &str) -> Result<TaskRunnerComponents, TestError> {
     let mut config = AppConfig::load()?;
     config.cluster.task_stream_creation_timeout_secs = 1;
     config.catalog.system.store = SystemCatalogStore::Memory;
@@ -56,7 +67,7 @@ fn task_runner(
             event_reporter: reporter,
         },
     ));
-    Ok(system.spawn::<TaskRunnerActor>(TaskRunnerComponents {
+    Ok(TaskRunnerComponents {
         session_id: name.to_string(),
         extensions: TaskRunnerExtensions {
             local_streams,
@@ -64,7 +75,7 @@ fn task_runner(
             celeborn_streams: None,
         },
         placement: TaskRunnerPlacement::Driver { driver },
-    }))
+    })
 }
 
 fn schema() -> SchemaRef {
@@ -349,4 +360,62 @@ async fn reader_that_joins_a_released_stream_gets_a_creation_timeout_of_its_own(
         Ok(())
     })
     .await
+}
+
+#[tokio::test]
+async fn job_context_is_created_once_per_job_and_dropped_when_the_job_closes()
+-> Result<(), TestError> {
+    let mut system = ActorSystem::new();
+    let mut runner = TaskRunnerActor::new(components(&mut system, "job-context")?);
+    let worker = TaskContext::default();
+    let mut driver = ConfigOptions::default();
+    driver.execution.parquet.metadata_size_hint = Some(128);
+    let session = JobSession::capture(&driver)?;
+    let job_id = JobId::from(1);
+
+    let first = runner.job_context(job_id, &worker, &session)?;
+    let second = runner.job_context(job_id, &worker, &session)?;
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(
+        first
+            .session_config()
+            .options()
+            .execution
+            .parquet
+            .metadata_size_hint,
+        Some(128)
+    );
+
+    runner.handle_close_job(job_id);
+    assert!(runner.job_contexts.is_empty());
+
+    // A task batch that arrives after the job is closed must not create the context again.
+    let handle = task_runner(&mut system, "job-context-handle")?;
+    let mut ctx = ActorContext::new(&handle);
+    let definition = TaskDefinition {
+        plan: Arc::from(Vec::new()),
+        inputs: vec![],
+        output: TaskOutput {
+            distribution: TaskOutputDistribution::RoundRobinBatch { channels: 1 },
+            locator: TaskOutputLocator::Blocking,
+        },
+    };
+    let output = runner.handle_run_task_batch(
+        &mut ctx,
+        job_id,
+        0,
+        vec![TaskAttempt {
+            partition: 0,
+            attempt: 0,
+        }],
+        Arc::new(definition),
+        TaskBatchContext::Worker {
+            worker: Arc::new(worker),
+            session: Arc::new(session),
+        },
+        vec![],
+    );
+    assert!(output.is_err());
+    assert!(runner.job_contexts.is_empty());
+    Ok(())
 }

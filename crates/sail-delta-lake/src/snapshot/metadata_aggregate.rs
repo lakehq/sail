@@ -5,7 +5,7 @@ use datafusion::common::ScalarValue;
 use indexmap::IndexMap;
 
 use super::DeltaSnapshot;
-use crate::conversion::{ScalarConverter, parse_optional_partition_value};
+use crate::conversion::{PartitionValueParser, ScalarConverter};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{Add, Stats};
 
@@ -31,7 +31,7 @@ struct GroupColumn<'a> {
     logical_name: &'a str,
     physical_name: &'a str,
     field: &'a Field,
-    partition: bool,
+    partition_parser: Option<PartitionValueParser>,
 }
 
 enum FileContribution {
@@ -75,15 +75,24 @@ impl DeltaSnapshot {
             .iter()
             .map(|name| {
                 let field = self.schema().field_with_name(name).ok()?;
-                let partition = partition_columns.contains(name);
-                if !partition && !supports_data_column(field.data_type()) {
+                let partition_parser = if partition_columns.contains(name) {
+                    Some(
+                        PartitionValueParser::try_new(
+                            field.data_type(),
+                            self.partition_time_zone(),
+                        )
+                        .ok()?,
+                    )
+                } else if supports_data_column(field.data_type()) {
+                    None
+                } else {
                     return None;
-                }
+                };
                 Some(GroupColumn {
                     logical_name: name,
                     physical_name: arrow_field_physical_name(field, mapping_mode),
                     field,
-                    partition,
+                    partition_parser,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -190,13 +199,13 @@ fn constant_group_value(
     physical_rows: u64,
     logical_rows: i64,
 ) -> Option<ScalarValue> {
-    if column.partition {
+    if let Some(parser) = &column.partition_parser {
         let raw = add
             .partition_values
             .get(column.physical_name)
             .or_else(|| add.partition_values.get(column.logical_name))
             .and_then(Option::as_deref);
-        return parse_optional_partition_value(raw, column.field.data_type()).ok();
+        return Some(parser.parse(raw));
     }
 
     let physical_nulls = u64::try_from(stats.null_count_value(column.physical_name)?).ok()?;

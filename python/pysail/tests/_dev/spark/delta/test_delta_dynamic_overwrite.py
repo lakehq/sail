@@ -296,6 +296,38 @@ def test_dynamic_overwrite_matches_spark_partition_values(
     assert [r.id for r in delta_jvm_spark.sql(f"SELECT id FROM delta.`{tmp_path}` ORDER BY id").collect()] == [2, 3]
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+@pytest.mark.integration
+def test_timestamp_partitions_match_spark_in_session_time_zone(spark, delta_jvm_spark, tmp_path, session_timezone):
+    _ = session_timezone
+
+    def rows(session):
+        frame = session.read.format("delta").load(str(tmp_path)).selectExpr("id", "unix_micros(ts) AS micros")
+        return sorted((r.id, r.micros) for r in frame.collect())
+
+    # 09:00 and 10:00 UTC
+    first, second = 1704099600000000, 1704103200000000
+    previous = delta_jvm_spark.conf.get("spark.sql.session.timeZone")
+    delta_jvm_spark.conf.set("spark.sql.session.timeZone", spark.conf.get("spark.sql.session.timeZone"))
+    try:
+        spark.sql(
+            "SELECT 1 AS id, TIMESTAMP '2024-01-01 01:00:00' AS ts UNION ALL SELECT 2, TIMESTAMP '2024-01-01 02:00:00'"
+        ).write.format("delta").partitionBy("ts").save(str(tmp_path))
+        assert rows(delta_jvm_spark) == [(1, first), (2, second)]
+
+        delta_jvm_spark.sql("SELECT 3 AS id, TIMESTAMP '2024-01-01 02:00:00' AS ts").write.format("delta").mode(
+            "append"
+        ).save(str(tmp_path))
+        # The partition written by Sail and by Delta Lake on Spark is the same one.
+        spark.sql("SELECT 4 AS id, TIMESTAMP '2024-01-01 02:00:00' AS ts").write.format("delta").mode(
+            "overwrite"
+        ).option("partitionOverwriteMode", "dynamic").save(str(tmp_path))
+        assert rows(spark) == [(1, first), (4, second)]
+        assert rows(delta_jvm_spark) == [(1, first), (4, second)]
+    finally:
+        delta_jvm_spark.conf.set("spark.sql.session.timeZone", previous)
+
+
 @pytest.mark.parametrize(
     ("initial_type", "updated_type", "new_value"),
     [("INT", "BIGINT", 3000000000), ("FLOAT", "DOUBLE", 1.00000001)],

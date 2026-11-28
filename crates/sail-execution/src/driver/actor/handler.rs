@@ -29,7 +29,7 @@ use crate::id::{
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
-use crate::task_runner::TaskRunnerMessage;
+use crate::task_runner::{TaskBatchContext, TaskRunnerMessage};
 
 impl DriverActor {
     pub(super) fn handle_celeborn_get_lifecycle_manager(
@@ -709,7 +709,7 @@ impl DriverActor {
                 let result = self
                     .job_scheduler
                     .get_task_definition(first, &self.task_assigner)
-                    .map(|(definition, context)| (Arc::new(definition), context))
+                    .map(|(definition, context, session)| (Arc::new(definition), context, session))
                     .map_err(|error| {
                         (
                             error.to_string(),
@@ -722,8 +722,10 @@ impl DriverActor {
                 );
                 result
             });
-            let (definition, context) = match definition {
-                Ok((definition, context)) => (definition.clone(), context.clone()),
+            let (definition, context, session) = match definition {
+                Ok((definition, context, session)) => {
+                    (definition.clone(), context.clone(), session.clone())
+                }
                 Err((message, cause)) => {
                     for key in keys {
                         ctx.send(DriverMessage::UpdateTask {
@@ -750,7 +752,7 @@ impl DriverActor {
                 .collect::<Vec<_>>();
             if let Some(worker_id) = worker_id {
                 self.worker_pool
-                    .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
+                    .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition, session);
             } else {
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
@@ -766,7 +768,7 @@ impl DriverActor {
                                 stage,
                                 tasks: tasks.clone(),
                                 definition,
-                                context,
+                                context: TaskBatchContext::Driver(context),
                                 peers: vec![],
                                 result,
                             })

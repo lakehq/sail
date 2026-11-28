@@ -3,7 +3,7 @@
 import pyarrow as pa
 import pytest
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 pytestmark = pytest.mark.spark(
     version=">=4", skip_if_jvm=True, reason="Uses the Python DataSource API in Sail local-cluster mode"
@@ -27,15 +27,21 @@ def remote(batch_size):
 
 
 @pytest.mark.spark(cross_version=True)
-def test_python_datasource_respects_execution_batch_size(spark, batch_size):
+# A session override must reach the worker that runs the scan, not only the driver.
+@pytest.mark.parametrize("session_batch_size", [None, 64])
+def test_python_datasource_respects_execution_batch_size(remote, batch_size, session_batch_size):
     from pyspark.sql import datasource
 
-    row_count = batch_size * 3 + 7
+    expected_batch_size = session_batch_size or batch_size
+    row_count = expected_batch_size * 3 + 7
 
     class RowReader(datasource.DataSourceReader):
-        def read(self, partition):  # noqa: ARG002
+        def partitions(self):
+            return [datasource.InputPartition(i) for i in range(2)]
+
+        def read(self, partition):
             for i in range(row_count):
-                yield (i,)
+                yield (partition.value * row_count + i,)
 
     class RowSource(datasource.DataSource):
         @classmethod
@@ -52,6 +58,11 @@ def test_python_datasource_respects_execution_batch_size(spark, batch_size):
         for batch in batches:
             yield pa.record_batch([pa.array([batch.num_rows], type=pa.int64())], names=["length"])
 
-    spark.dataSource.register(RowSource)
-    rows = spark.read.format(RowSource.name()).load().mapInArrow(batch_lengths, "length long").collect()
-    assert [row.length for row in rows] == [batch_size, batch_size, batch_size, 7]
+    with spark_session_factory(remote) as sessions:
+        spark = sessions.create()
+        if session_batch_size is not None:
+            spark.sql(f"SET datafusion.execution.batch_size = {session_batch_size}").collect()
+        spark.dataSource.register(RowSource)
+        rows = spark.read.format(RowSource.name()).load().mapInArrow(batch_lengths, "length long").collect()
+    # Each of the two partitions yields three full batches and a remainder.
+    assert sorted(row.length for row in rows) == [7, 7] + [expected_batch_size] * 6

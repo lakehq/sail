@@ -22,7 +22,14 @@ pub async fn list_log_segment_files(
         return Ok(files);
     }
     let log_store = ctx.log_store()?;
-    let files = kernel_list_log_segment_files(&log_store, max_version)
+    let metadata_size_hint = ctx
+        .session()
+        .config()
+        .options()
+        .execution
+        .parquet
+        .metadata_size_hint;
+    let files = kernel_list_log_segment_files(&log_store, max_version, metadata_size_hint)
         .await
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
     ctx.set_cached_log_segment_files(max_version, files.clone());

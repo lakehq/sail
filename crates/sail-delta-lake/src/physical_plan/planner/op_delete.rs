@@ -117,13 +117,17 @@ pub async fn build_delete_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    // A rewritten file keeps the partition values that do not parse.
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         find_files_writer,
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema.clone(),
-        crate::datasource::DeltaScanConfig::default(),
+        crate::datasource::with_unparsed_partition_value_fields(&table_schema, snapshot_state),
+        crate::datasource::DeltaScanConfig {
+            unparsed_partition_values: true,
+            ..Default::default()
+        },
         None,
         None,
         None,

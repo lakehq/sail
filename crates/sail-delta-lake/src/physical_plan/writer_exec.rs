@@ -45,6 +45,7 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::datasource::UNPARSED_PARTITION_VALUE_PREFIX;
 use crate::delta_log::get_object_store_from_context;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
@@ -893,13 +894,15 @@ impl DeltaWriterExec {
                             &identity_steps,
                             &mut identity_candidates,
                         )?;
-                        let change = Self::validate_and_adapt_batch(
-                            change,
-                            &change_data_schema(&writer_schema),
-                            logical_cdc_schema.as_ref(),
-                            kernel_mode,
-                            timezone.as_ref().map(|tz| tz.as_str()),
-                        )?;
+                        let change = keeping_unparsed_partition_values(change, |change| {
+                            Self::validate_and_adapt_batch(
+                                change,
+                                &change_data_schema(&writer_schema),
+                                logical_cdc_schema.as_ref(),
+                                kernel_mode,
+                                timezone.as_ref().map(|tz| tz.as_str()),
+                            )
+                        })?;
                         change_writer
                             .write(&change)
                             .await
@@ -937,13 +940,15 @@ impl DeltaWriterExec {
                     target_names
                 );
 
-                let validated_batch = Self::validate_and_adapt_batch(
-                    batch,
-                    &writer_schema,
-                    logical_schema_for_mapping.as_ref(),
-                    kernel_mode,
-                    timezone.as_ref().map(|tz| tz.as_str()),
-                )?;
+                let validated_batch = keeping_unparsed_partition_values(batch, |batch| {
+                    Self::validate_and_adapt_batch(
+                        batch,
+                        &writer_schema,
+                        logical_schema_for_mapping.as_ref(),
+                        kernel_mode,
+                        timezone.as_ref().map(|tz| tz.as_str()),
+                    )
+                })?;
 
                 writer
                     .write(&validated_batch)
@@ -1534,6 +1539,47 @@ pub(super) fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
+/// Adapts `batch` without the columns that carry the partition values that do not parse, and
+/// appends them to the result, since the writer uses them as the partition values of the files it
+/// writes.
+fn keeping_unparsed_partition_values(
+    batch: RecordBatch,
+    adapt: impl FnOnce(RecordBatch) -> Result<RecordBatch>,
+) -> Result<RecordBatch> {
+    let schema = batch.schema();
+    let (unparsed, data): (Vec<usize>, Vec<usize>) =
+        (0..schema.fields().len()).partition(|&index| {
+            schema
+                .field(index)
+                .name()
+                .starts_with(UNPARSED_PARTITION_VALUE_PREFIX)
+        });
+    if unparsed.is_empty() {
+        return adapt(batch);
+    }
+    let adapted = adapt(batch.project(&data)?)?;
+    let adapted_schema = adapted.schema();
+    let fields = adapted_schema
+        .fields()
+        .iter()
+        .chain(unparsed.iter().map(|&index| &schema.fields()[index]))
+        .cloned()
+        .collect::<Vec<_>>();
+    let columns = adapted
+        .columns()
+        .iter()
+        .chain(unparsed.iter().map(|&index| batch.column(index)))
+        .cloned()
+        .collect();
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            adapted_schema.metadata().clone(),
+        )),
+        columns,
+    )?)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -1567,9 +1613,15 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StructArray};
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Int32Array, StructArray, TimestampSecondArray,
+    };
+    use datafusion::arrow::compute::cast;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatchOptions;
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
@@ -1606,6 +1658,141 @@ mod tests {
         assert!(!MergeRowMetrics::try_new(&Schema::empty())?.uses_operation);
         let invalid = Schema::new(vec![Field::new(OPERATION_COLUMN, DataType::Utf8, false)]);
         assert!(MergeRowMetrics::try_new(&invalid).is_err());
+        Ok(())
+    }
+
+    /// Partition values of every timestamp type reach the log and the directory name through the
+    /// cast to the table type, so the formats only need to handle microseconds.
+    #[tokio::test]
+    async fn timestamp_partition_values_of_every_time_unit() -> Result<()> {
+        const SESSION_TIME_ZONE: &str = "America/Los_Angeles";
+        // Instants (in UTC) for sources with a time zone: recent, before 1970, and before 1900.
+        const INSTANTS: [i64; 3] = [1_704_099_600, -1, -2_209_032_000];
+        // Wall clocks for sources without a time zone, which are 9:00, 23:59:59 and 20:00 UTC in
+        // the session time zone.
+        const WALL_CLOCKS: [i64; 3] = [1_704_070_800, -28_801, -2_209_032_000];
+
+        // The expected log value and directory name of each partition.
+        let to_timestamp_from_instant = [
+            ("2024-01-01T09:00:00.000000Z", "2024-01-01 09:00:00.000000"),
+            ("1969-12-31T23:59:59.000000Z", "1969-12-31 23:59:59.000000"),
+            ("1899-12-31T12:00:00.000000Z", "1899-12-31 12:00:00.000000"),
+        ];
+        let to_timestamp_from_wall_clock = [
+            ("2024-01-01T09:00:00.000000Z", "2024-01-01 09:00:00.000000"),
+            ("1969-12-31T23:59:59.000000Z", "1969-12-31 23:59:59.000000"),
+            ("1899-12-31T20:00:00.000000Z", "1899-12-31 20:00:00.000000"),
+        ];
+        let to_timestamp_ntz_from_wall_clock = [
+            ("2024-01-01 01:00:00.000000", "2024-01-01 01:00:00.000000"),
+            ("1969-12-31 15:59:59.000000", "1969-12-31 15:59:59.000000"),
+            ("1899-12-31 12:00:00.000000", "1899-12-31 12:00:00.000000"),
+        ];
+        // An instant written to a column without a time zone keeps its UTC wall clock, unlike Spark,
+        // which uses the session wall clock.
+        // TODO: Update these values when `validate_and_adapt_batch` casts TIMESTAMP to TIMESTAMP_NTZ
+        //   in the session time zone; that change is then a fix, not a regression.
+        let to_timestamp_ntz_from_instant = [
+            ("2024-01-01 09:00:00.000000", "2024-01-01 09:00:00.000000"),
+            ("1969-12-31 23:59:59.000000", "1969-12-31 23:59:59.000000"),
+            ("1899-12-31 12:00:00.000000", "1899-12-31 12:00:00.000000"),
+        ];
+
+        for (target, from_instant, from_wall_clock) in [
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                to_timestamp_from_instant,
+                to_timestamp_from_wall_clock,
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                to_timestamp_ntz_from_instant,
+                to_timestamp_ntz_from_wall_clock,
+            ),
+        ] {
+            for unit in [
+                TimeUnit::Second,
+                TimeUnit::Millisecond,
+                TimeUnit::Microsecond,
+                TimeUnit::Nanosecond,
+            ] {
+                for time_zone in [Some(SESSION_TIME_ZONE), Some("+05:30"), None] {
+                    let (seconds, expected) = match time_zone {
+                        Some(_) => (INSTANTS, from_instant),
+                        None => (WALL_CLOCKS, from_wall_clock),
+                    };
+                    let time_zone: Option<Arc<str>> = time_zone.map(Into::into);
+                    let source_type = DataType::Timestamp(unit, time_zone.clone());
+                    let values = cast(
+                        &TimestampSecondArray::from(seconds.to_vec()).with_timezone_opt(time_zone),
+                        &source_type,
+                    )?;
+                    let batch = RecordBatch::try_new(
+                        Arc::new(Schema::new(vec![
+                            Field::new("id", DataType::Int32, false),
+                            Field::new("ts", source_type.clone(), true),
+                        ])),
+                        vec![Arc::new(Int32Array::from(vec![1, 2, 3])), values],
+                    )?;
+                    let final_schema = Arc::new(Schema::new(vec![
+                        Field::new("id", DataType::Int32, false),
+                        Field::new("ts", target.clone(), true),
+                    ]));
+                    let batch = DeltaWriterExec::validate_and_adapt_batch(
+                        batch,
+                        &final_schema,
+                        None,
+                        ColumnMappingMode::None,
+                        Some(SESSION_TIME_ZONE),
+                    )?;
+
+                    let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+                    let config = WriterConfig::new(
+                        final_schema,
+                        vec!["ts".to_string()],
+                        vec!["ts".to_string()],
+                        None,
+                        1024 * 1024,
+                        1024,
+                        0,
+                        None,
+                        Default::default(),
+                        VariantShreddingConfig::default(),
+                    );
+                    let mut writer =
+                        DeltaWriter::new_unordered(object_store, Path::from("table"), config);
+                    writer
+                        .write(&batch)
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let adds = writer
+                        .close()
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let mut actual = adds
+                        .iter()
+                        .map(|add| {
+                            let path = crate::spec::utils::decode_path(&add.path)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            let directory = path.split('/').next().unwrap_or_default().to_string();
+                            Ok((add.partition_values["ts"].clone(), directory))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    actual.sort();
+                    let mut expected = expected
+                        .iter()
+                        .map(|(value, directory)| {
+                            (
+                                Some(value.to_string()),
+                                format!("ts={}", directory.replace(' ', "%20").replace(':', "%3A")),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    expected.sort();
+                    assert_eq!(actual, expected, "{source_type} to {target}");
+                }
+            }
+        }
         Ok(())
     }
 

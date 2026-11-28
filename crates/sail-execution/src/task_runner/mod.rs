@@ -2,7 +2,7 @@
 
 mod actor;
 
-pub(crate) use actor::{TaskRunnerActor, TaskRunnerMessage};
+pub(crate) use actor::{TaskBatchContext, TaskRunnerActor, TaskRunnerMessage};
 mod monitor;
 
 pub use actor::{TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement};

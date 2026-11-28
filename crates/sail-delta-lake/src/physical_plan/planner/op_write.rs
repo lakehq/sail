@@ -372,13 +372,17 @@ async fn build_old_data_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    // The rows that the overwrite keeps keep the partition values that do not parse.
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema.clone(),
-        crate::datasource::DeltaScanConfig::default(),
+        crate::datasource::with_unparsed_partition_value_fields(&table_schema, snapshot_state),
+        crate::datasource::DeltaScanConfig {
+            unparsed_partition_values: true,
+            ..Default::default()
+        },
         None,
         None,
         None,

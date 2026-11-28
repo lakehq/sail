@@ -55,8 +55,8 @@ mod stats;
 
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
-    CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
-    catalog_managed_commit_path,
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DEFAULT_PARTITION_TIME_ZONE,
+    catalog_managed_commit_file_name, catalog_managed_commit_path, partition_time_zone,
 };
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
@@ -396,6 +396,10 @@ impl DeltaSnapshot {
 
     pub fn load_config(&self) -> &DeltaSnapshotConfig {
         &self.config
+    }
+
+    pub fn partition_time_zone(&self) -> &Arc<str> {
+        &self.config.partition_time_zone
     }
 
     pub fn table_properties(&self) -> &TableProperties {

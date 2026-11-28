@@ -57,6 +57,7 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         MERGE_FILE_COLUMN,
         None,
         &metadata_columns,
+        &[],
     )?;
     let write_rows = expanded.effects().write_rows().ok_or_else(|| {
         datafusion_common::internal_datafusion_err!(

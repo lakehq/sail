@@ -10,10 +10,13 @@ use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::JobGraph;
+use crate::worker::r#gen::JobSession;
 
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
     pub context: Arc<TaskContext>,
+    /// The settings of the driver session for tasks that run on workers.
+    pub session: Arc<JobSession>,
     pub graph: JobGraph,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
@@ -86,8 +89,10 @@ impl JobDescriptor {
         let topology = JobTopology::try_new(&graph)?;
         let regions = TaskRegionDescriptor::new_regions(&topology);
         let range_shuffles = vec![RangeShuffleState::Sampling; graph.range_shuffles().len()];
+        let session = Arc::new(JobSession::capture(context.session_config().options())?);
         Ok(Self {
             context,
+            session,
             graph,
             topology,
             stages,

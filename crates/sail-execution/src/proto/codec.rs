@@ -115,6 +115,7 @@ use sail_common_datafusion::input_file::{
 };
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionCastMode, SchemaEvolutionDefaultExpr,
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
@@ -203,6 +204,7 @@ use sail_function::scalar::datetime::make_timestamp_ntz::MakeTimestampNtz;
 use sail_function::scalar::datetime::make_ym_interval::MakeYmInterval;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::next_day::NextDay;
+use sail_function::scalar::datetime::partition_timestamp::DeltaPartitionTimestamp;
 use sail_function::scalar::datetime::time::Time;
 use sail_function::scalar::datetime::time_diff::TimeDiff;
 use sail_function::scalar::datetime::time_trunc::TimeTrunc;
@@ -777,9 +779,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     } else {
                         Arc::new(cached_reader)
                     };
-                let mut source = ParquetSource::new(table_schema)
-                    .with_parquet_file_reader_factory(reader_factory)
-                    .with_table_parquet_options(options);
+                let mut source = with_parquet_options(ParquetSource::new(table_schema), options)
+                    .with_parquet_file_reader_factory(reader_factory);
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }
@@ -4143,6 +4144,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = Timestamp::try_new(timezone.map(Arc::from), ansi_mode, is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::DeltaPartitionTimestamp(r#gen::DeltaPartitionTimestampUdf { time_zone }) => {
+                let udf = DeltaPartitionTimestamp::new(Arc::from(time_zone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkDate(r#gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(Date::new(is_try))));
             }
@@ -4804,6 +4809,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 timezone,
                 is_try,
                 ansi_mode,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<DeltaPartitionTimestamp>() {
+            UdfKind::DeltaPartitionTimestamp(r#gen::DeltaPartitionTimestampUdf {
+                time_zone: func.time_zone().to_string(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<Date>() {
             let is_try = func.is_try();
@@ -8587,6 +8596,54 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_parquet_source_preserves_metadata_size_hint() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+        let mut options = TableParquetOptions::default();
+        options.global.metadata_size_hint = Some(12345);
+        let source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(options)
+            .with_metadata_size_hint(12345);
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            Arc::new(source),
+        )
+        .build();
+        let plan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+        let (_, parquet_source) = decoded
+            .downcast_to_file_source::<ParquetSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source is not Parquet"))?;
+
+        assert_eq!(
+            parquet_source
+                .table_parquet_options()
+                .global
+                .metadata_size_hint,
+            Some(12345)
+        );
+        // The source field is private, so compare against the same source with the hint applied.
+        assert_eq!(
+            format!("{parquet_source:?}"),
+            format!(
+                "{:?}",
+                parquet_source.clone().with_metadata_size_hint(12345)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_parquet_virtual_row_positions() -> Result<()> {
         use datafusion::datasource::listing::PartitionedFile;
         use datafusion::datasource::physical_plan::FileGroup;
@@ -11014,6 +11071,17 @@ mod tests {
             "expected at least 2 HigherOrderFunctionExpr nodes"
         );
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(arr2d)])
+    }
+
+    #[test]
+    fn test_round_trip_delta_partition_timestamp_preserves_time_zone() -> Result<()> {
+        let udf = DeltaPartitionTimestamp::new(Arc::from("+05:30:15"));
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+        let decoded = downcast_udf::<DeltaPartitionTimestamp>(&decoded, "DeltaPartitionTimestamp")?;
+        assert_eq!(decoded.time_zone(), "+05:30:15");
+
+        Ok(())
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::file_format::ensure_unique_field_names;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -26,6 +27,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::schema::{clear_metadata, mark_partially_present_fields_nullable};
 
 use super::context::PlannerContext;
@@ -158,15 +160,22 @@ async fn head_many(
 /// file metadata cache.
 ///
 /// This mirrors `ParquetFormat::infer_schema()` at the DataFusion commit credited above, with the
-/// default format options, except that it reads the footers through `file_metadata_cache` instead
-/// of the runtime's unscoped file metadata cache.
+/// default format options except the session's metadata size hint. It reads the footers through
+/// `file_metadata_cache` instead of the runtime's unscoped file metadata cache.
 async fn infer_parquet_checkpoint_schema(
     state: &dyn Session,
     store: &Arc<dyn ObjectStore>,
     file_metadata_cache: &Arc<FileMetadataCache>,
     objects: &[ObjectMeta],
 ) -> Result<SchemaRef> {
-    let format = ParquetFormat::default();
+    let format = ParquetFormat::default().with_metadata_size_hint(
+        state
+            .config()
+            .options()
+            .execution
+            .parquet
+            .metadata_size_hint,
+    );
     let coerce_int96 = format.coerce_int96().map(Into::into);
     let coerce_int96_tz = format
         .options()
@@ -498,12 +507,23 @@ pub async fn build_delta_log_datasource_scans_with_options(
         .build();
 
     let parquet_checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = {
-        let mut source =
-            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone())
-                .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
-                    Arc::clone(&store),
-                    metadata_cache,
-                )));
+        // Keep the hint in the options so that it survives encoding for workers.
+        let mut parquet_options = TableParquetOptions::default();
+        parquet_options.global.metadata_size_hint = ctx
+            .session()
+            .config()
+            .options()
+            .execution
+            .parquet
+            .metadata_size_hint;
+        let mut source = with_parquet_options(
+            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone()),
+            parquet_options,
+        )
+        .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
+            Arc::clone(&store),
+            metadata_cache,
+        )));
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }

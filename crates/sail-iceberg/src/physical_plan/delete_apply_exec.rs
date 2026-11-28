@@ -174,11 +174,22 @@ struct ObjectStoreParquetReader {
     store: Arc<dyn ObjectStore>,
     path: ObjectPath,
     size: u64,
+    metadata_size_hint: Option<usize>,
 }
 
 impl ObjectStoreParquetReader {
-    fn new(store: Arc<dyn ObjectStore>, path: ObjectPath, size: u64) -> Self {
-        Self { store, path, size }
+    fn new(
+        store: Arc<dyn ObjectStore>,
+        path: ObjectPath,
+        size: u64,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
+        Self {
+            store,
+            path,
+            size,
+            metadata_size_hint,
+        }
     }
 }
 
@@ -209,8 +220,10 @@ impl AsyncFileReader for ObjectStoreParquetReader {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
         let size = self.size;
+        let metadata_size_hint = self.metadata_size_hint;
         Box::pin(async move {
             let metadata = ParquetMetaDataReader::new()
+                .with_prefetch_hint(metadata_size_hint)
                 .with_arrow_reader_options(options)
                 .load_and_finish(self, size)
                 .await?;
@@ -521,9 +534,20 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 .get_store(&parsed_table_url)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let store_ctx = StoreContext::new(base_store, &parsed_table_url)?;
+            let metadata_size_hint = context
+                .session_config()
+                .options()
+                .execution
+                .parquet
+                .metadata_size_hint;
 
-            let mut deleted_positions =
-                load_deleted_positions(&store_ctx, &positional_deletes, &data_file_path).await?;
+            let mut deleted_positions = load_deleted_positions(
+                &store_ctx,
+                &positional_deletes,
+                &data_file_path,
+                metadata_size_hint,
+            )
+            .await?;
 
             // Materialize selections at the execution site, after worker decoding.
             let input = if !deleted_positions.is_empty() {
@@ -542,7 +566,13 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             // Equality field IDs may differ between delete files, so each file is
             // loaded and matched independently.
             let loaded_equality_deletes =
-                load_equality_deletes(&store_ctx, &equality_deletes, &iceberg_schema).await?;
+                load_equality_deletes(
+                    &store_ctx,
+                    &equality_deletes,
+                    &iceberg_schema,
+                    metadata_size_hint,
+                )
+                .await?;
 
             let mut row_offset: u64 = 0;
             let mut stream = input.execute(0, Arc::clone(&context))?;
@@ -588,6 +618,7 @@ pub(crate) async fn load_deleted_positions(
     store_ctx: &StoreContext,
     delete_files: &[PositionDeleteFile],
     data_file_path: &str,
+    metadata_size_hint: Option<usize>,
 ) -> Result<RoaringTreemap> {
     if delete_files.is_empty() {
         return Ok(RoaringTreemap::new());
@@ -624,7 +655,8 @@ pub(crate) async fn load_deleted_positions(
             }
         };
         let (store, path) = store_ctx.resolve(file_path)?;
-        let delete_batches = read_parquet_all(store.clone(), &path, file_size).await?;
+        let delete_batches =
+            read_parquet_all(store.clone(), &path, file_size, metadata_size_hint).await?;
         for batch in delete_batches {
             let file_paths = batch
                 .column_by_name(POS_DELETE_FILE_PATH_COL)
@@ -748,6 +780,7 @@ async fn load_equality_deletes(
     store_ctx: &StoreContext,
     delete_files: &[EqualityDeleteFile],
     iceberg_schema: &IcebergSchema,
+    metadata_size_hint: Option<usize>,
 ) -> Result<Vec<LoadedEqualityDelete>> {
     if delete_files.is_empty() {
         return Ok(Vec::new());
@@ -782,6 +815,7 @@ async fn load_equality_deletes(
             delete_file.size,
             &key_fields,
             &delete_file.path,
+            metadata_size_hint,
         )
         .await?;
         let mut deleted_rows = HashSet::new();
@@ -929,8 +963,9 @@ async fn read_equality_delete_keys(
     size: u64,
     key_fields: &[EqualityKeyField],
     display_path: &str,
+    metadata_size_hint: Option<usize>,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let reader = ObjectStoreParquetReader::new(store, path.clone(), size);
+    let reader = ObjectStoreParquetReader::new(store, path.clone(), size, metadata_size_hint);
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -966,8 +1001,9 @@ async fn read_parquet_all(
     store: Arc<dyn object_store::ObjectStore>,
     path: &ObjectPath,
     size: u64,
+    metadata_size_hint: Option<usize>,
 ) -> Result<Vec<RecordBatch>> {
-    let reader = ObjectStoreParquetReader::new(store, path.clone(), size);
+    let reader = ObjectStoreParquetReader::new(store, path.clone(), size, metadata_size_hint);
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -1028,11 +1064,13 @@ fn compute_delete_mask(
 mod tests {
     #![expect(clippy::unwrap_used)]
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
     use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::physical_plan::FileScanConfigBuilder;
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::physical_plan::collect;
@@ -1046,6 +1084,7 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
 
     use super::*;
+    use crate::io::test_store::TestStore;
 
     #[tokio::test]
     async fn unsupported_delete_formats_are_rejected_before_file_io() -> Result<()> {
@@ -1061,7 +1100,7 @@ mod tests {
                 size: 123,
                 file_format,
             }];
-            let error = load_deleted_positions(&store_ctx, &positions, "data.parquet")
+            let error = load_deleted_positions(&store_ctx, &positions, "data.parquet", None)
                 .await
                 .unwrap_err();
             assert!(
@@ -1073,7 +1112,7 @@ mod tests {
                 file_format,
                 equality_ids: vec![1],
             }];
-            let error = load_equality_deletes(&store_ctx, &equality, &schema)
+            let error = load_equality_deletes(&store_ctx, &equality, &schema, None)
                 .await
                 .err()
                 .unwrap();
@@ -1105,6 +1144,88 @@ mod tests {
         );
         let fragmented = RoaringTreemap::from_iter((0..20_000).step_by(2));
         assert!(live_row_selection(&fragmented, 20_000).is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_files_use_the_session_metadata_size_hint() -> Result<()> {
+        let delete_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(POS_DELETE_FILE_PATH_COL, DataType::Utf8, false),
+            Field::new(POS_DELETE_POS_COL, DataType::Int64, false),
+        ]));
+        let data_file_path = "memory://iceberg/table/data.parquet";
+        let deletes = RecordBatch::try_new(
+            delete_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![data_file_path; 2])),
+                Arc::new(Int64Array::from(vec![1, 3])),
+            ],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), delete_schema, None)?;
+        writer.write(&deletes)?;
+        let bytes = writer.into_inner()?;
+        let size = bytes.len() as u64;
+
+        // A hint covering the whole file reads it with a single request, while a hint smaller
+        // than the footer reads the footer first, unlike any default hint.
+        for hint in [size as usize, 16] {
+            let store = Arc::new(TestStore::new(Arc::new(InMemory::new())));
+            store
+                .put(
+                    &ObjectPath::from("table/deletes.parquet"),
+                    bytes.clone().into(),
+                )
+                .await?;
+            let mut config = SessionConfig::new();
+            config.options_mut().execution.parquet.metadata_size_hint = Some(hint);
+            let ctx = SessionContext::new_with_config(config);
+            let table_url = Url::parse("memory://iceberg/table/").unwrap();
+            ctx.register_object_store(&table_url, store.clone());
+
+            let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                "id",
+                DataType::Int64,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from_iter_values(0..5))],
+            )?;
+            let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
+            let apply = Arc::new(IcebergDeleteApplyExec::new(
+                input,
+                data_file_path.to_string(),
+                vec![PositionDeleteFile::File {
+                    path: "memory://iceberg/table/deletes.parquet".to_string(),
+                    size,
+                    file_format: DataFileFormat::Parquet,
+                }],
+                vec![],
+                table_url.to_string(),
+                IcebergSchema::builder().build().unwrap(),
+            ));
+            let batches = collect(apply, ctx.task_ctx()).await?;
+            let ids = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec![0, 2, 4]);
+            let largest_read = store.largest_read.load(Ordering::Relaxed);
+            if hint == size as usize {
+                assert_eq!(largest_read, hint);
+            } else {
+                assert!(largest_read < size as usize, "largest read {largest_read}");
+            }
+        }
+        Ok(())
     }
 
     async fn scan_vector(

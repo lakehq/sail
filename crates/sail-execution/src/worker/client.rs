@@ -12,7 +12,7 @@ use crate::task::definition::TaskDefinition;
 use crate::worker::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
 use crate::worker::r#gen::{
-    CleanUpJobRequest, CleanUpJobResponse, RunTaskBatchRequest, RunTaskBatchResponse,
+    CleanUpJobRequest, CleanUpJobResponse, JobSession, RunTaskBatchRequest, RunTaskBatchResponse,
     StopTaskRequest, StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 
@@ -52,6 +52,7 @@ impl WorkerClient {
         stage: usize,
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
+        session: &JobSession,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         let definition =
@@ -73,6 +74,7 @@ impl WorkerClient {
                 .collect(),
             definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
+            session: Some(session.clone()),
         };
         let response = self.inner.get().await?.run_task_batch(request).await?;
         let RunTaskBatchResponse {} = response.into_inner();

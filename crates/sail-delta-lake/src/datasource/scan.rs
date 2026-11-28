@@ -28,7 +28,7 @@ use object_store::path::Path;
 use parquet::arrow::RowNumber;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_common_datafusion::scan::{load_parquet_scan_metadata, with_parquet_options};
 use sail_common_datafusion::schema_evolution::{
     FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -38,7 +38,11 @@ use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use crate::conversion::ScalarConverter;
 use crate::datasource::deletion_vector::{DeltaFileDeletionVector, DeltaParquetSource};
 use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
-use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
+use crate::datasource::{
+    DeltaScanConfig, create_object_store_url, partition_value_parsers,
+    partitioned_file_from_action, unparsed_partition_columns, unparsed_partition_value_column,
+    unparsed_partition_value_field,
+};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::utils::decode_path;
@@ -104,6 +108,13 @@ pub(crate) fn file_scan_logical_names(
     }
     if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
         names.push(commit_timestamp_column_name.clone());
+    }
+    if scan_config.unparsed_partition_values {
+        names.extend(
+            unparsed_partition_columns(snapshot)
+                .iter()
+                .map(|column| unparsed_partition_value_column(&column.physical_name)),
+        );
     }
     if let Some(row_index_column_name) = &scan_config.row_index_column_name {
         names.push(row_index_column_name.clone());
@@ -239,6 +250,21 @@ pub async fn build_file_scan_config(
     };
     let config = scan_config.clone();
     let partition_columns_mapped = snapshot.physical_partition_columns();
+    let partition_parsers = partition_value_parsers(
+        &partition_columns_mapped,
+        &complete_schema,
+        snapshot.partition_time_zone(),
+    )?;
+    let unparsed_partition_columns = if config.unparsed_partition_values {
+        let columns = unparsed_partition_columns(snapshot);
+        partition_columns_mapped
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| columns.contains(column))
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
         &file_schema,
@@ -262,7 +288,7 @@ pub async fn build_file_scan_config(
             action,
             location,
             &partition_columns_mapped,
-            &complete_schema,
+            &partition_parsers,
         )?;
         let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {
@@ -307,6 +333,16 @@ pub async fn build_file_scan_config(
                 .push(datafusion::common::scalar::ScalarValue::Int64(
                     action.commit_timestamp,
                 ));
+        }
+        for (index, column) in &unparsed_partition_columns {
+            // A value that does not parse is NULL among the partition values.
+            let raw = action
+                .partition_values
+                .get(&column.physical_name)
+                .and_then(Option::as_deref)
+                .filter(|raw| !raw.is_empty() && part.partition_values[*index].is_null());
+            part.partition_values
+                .push(ScalarValue::Utf8(raw.map(str::to_string)));
         }
 
         file_groups
@@ -375,6 +411,11 @@ pub async fn build_file_scan_config(
             true,
         )));
     }
+    table_partition_cols_schema.extend(
+        unparsed_partition_columns
+            .iter()
+            .map(|(_, column)| unparsed_partition_value_field(column)),
+    );
 
     // Configure Parquet source with pushdown filter
     let parquet_options = TableParquetOptions {
@@ -472,9 +513,9 @@ pub async fn build_file_scan_config(
         Arc::clone(&store),
         Arc::clone(&metadata_cache),
     ));
-    let mut parquet_source = ParquetSource::new(table_schema)
-        .with_table_parquet_options(parquet_options)
-        .with_parquet_file_reader_factory(reader_factory);
+    let mut parquet_source =
+        with_parquet_options(ParquetSource::new(table_schema), parquet_options)
+            .with_parquet_file_reader_factory(reader_factory);
 
     if let Some(predicate) = params.pushdown_filter
         && config.enable_parquet_pushdown

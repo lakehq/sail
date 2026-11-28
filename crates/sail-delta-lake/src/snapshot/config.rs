@@ -5,7 +5,11 @@
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
+use std::sync::Arc;
+
+use datafusion::common::config::ConfigOptions;
 use object_store::path::Path;
+use sail_common_datafusion::session::time_zone::session_time_zone;
 use serde::{Deserialize, Serialize};
 
 /// Configuration options for loading Delta table snapshots.
@@ -63,6 +67,32 @@ pub struct DeltaSnapshotConfig {
     pub log_batch_size: usize,
     /// Catalog-ratified commits for a catalog-managed Delta snapshot.
     pub catalog_managed_commits: Option<CatalogManagedCommitSet>,
+    /// The time zone of TIMESTAMP partition values without an offset (see
+    /// [`partition_time_zone`]). The default, UTC, suits only loads that never parse partition
+    /// values; a load whose snapshot is scanned, pruned or aggregated must use
+    /// [`Self::with_session_time_zone`].
+    pub partition_time_zone: Arc<str>,
+}
+
+impl DeltaSnapshotConfig {
+    /// Sets [`Self::partition_time_zone`] to the session time zone (see [`partition_time_zone`]).
+    pub fn with_session_time_zone(self, options: &ConfigOptions) -> Self {
+        Self {
+            partition_time_zone: partition_time_zone(options),
+            ..self
+        }
+    }
+}
+
+/// The time zone of TIMESTAMP partition values without an offset when no session time zone applies.
+pub(crate) const DEFAULT_PARTITION_TIME_ZONE: &str = "UTC";
+
+/// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
+/// session time zone with full Spark offset precision, as Delta-Spark reads it.
+pub(crate) fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
+    session_time_zone(options)
+        .unwrap_or(DEFAULT_PARTITION_TIME_ZONE)
+        .into()
 }
 
 impl Default for DeltaSnapshotConfig {
@@ -73,6 +103,7 @@ impl Default for DeltaSnapshotConfig {
             log_buffer_size: default_parallelism() * 4,
             log_batch_size: 1024,
             catalog_managed_commits: None,
+            partition_time_zone: DEFAULT_PARTITION_TIME_ZONE.into(),
         }
     }
 }
@@ -81,4 +112,47 @@ fn default_parallelism() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, TimeUnit};
+    use datafusion::common::ScalarValue;
+    use datafusion::common::config::ConfigOptions;
+    use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
+
+    use super::partition_time_zone;
+    use crate::conversion::PartitionValueParser;
+
+    #[test]
+    fn partition_time_zone_is_the_session_time_zone() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            partition_time_zone(&ConfigOptions::default()).as_ref(),
+            "UTC"
+        );
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+05:30".parse()?);
+        assert_eq!(partition_time_zone(&options).as_ref(), "+05:30");
+        // The Arrow label of an offset with seconds is UTC, but Spark casts values in the offset.
+        set_spark_session_time_zone(&mut options, "+05:30:45")?;
+        assert_eq!(partition_time_zone(&options).as_ref(), "+05:30:45");
+        let data_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        // Values are parsed in the Spark spellings of a session time zone as Spark casts them.
+        for (session, seconds) in [
+            ("+05:30:45", 1_704_079_755),
+            ("PST", 1_704_128_400),
+            ("GMT+8", 1_704_070_800),
+            ("Z", 1_704_099_600),
+        ] {
+            let mut options = ConfigOptions::default();
+            set_spark_session_time_zone(&mut options, session)?;
+            let parser = PartitionValueParser::try_new(&data_type, &partition_time_zone(&options))?;
+            assert_eq!(
+                parser.parse(Some("2024-01-01 09:00:00")),
+                ScalarValue::TimestampMicrosecond(Some(seconds * 1_000_000), Some("UTC".into())),
+                "{session}"
+            );
+        }
+        Ok(())
+    }
 }

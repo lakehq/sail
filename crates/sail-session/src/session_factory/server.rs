@@ -21,6 +21,7 @@ use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
+use sail_execution::job_runner::apply_cluster_constraints;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
 
@@ -109,6 +110,10 @@ impl ServerSessionFactory {
         let Some(job_runner) = info.job_runner.take() else {
             return internal_err!("job runner is missing from server session information");
         };
+        let cluster = matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        );
         let mut config = SessionConfig::new()
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
@@ -130,10 +135,7 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(
                 SharedCteConfig::new(self.config.optimizer.share_cte_definitions)
-                    .with_spills_kept_rows(!matches!(
-                        self.config.mode,
-                        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-                    )),
+                    .with_spills_kept_rows(!cluster),
             ))
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
@@ -146,6 +148,9 @@ impl ServerSessionFactory {
             &self.config.parquet,
         )?;
         self.apply_optimizer_config(&mut config)?;
+        if cluster {
+            apply_cluster_constraints(config.options_mut());
+        }
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -198,13 +203,6 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
-        // Coordinated fallback shares state across partitions in one process.
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            execution.enable_nlj_coordinated_fallback = false;
-        }
         Ok(())
     }
 
@@ -214,15 +212,6 @@ impl ServerSessionFactory {
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.enable_window_topn = self.config.optimizer.enable_window_topn;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
-        // process-local state. Cluster execution uses independently decoded task plans, so keep
-        // join filters disabled while allowing task-local TopK and aggregate filters.
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            optimizer.enable_join_dynamic_filter_pushdown = false;
-        }
         Ok(())
     }
 }

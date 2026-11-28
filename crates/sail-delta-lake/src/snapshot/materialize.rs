@@ -11,7 +11,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
 
 use super::DeltaSnapshot;
-use crate::conversion::parse_optional_partition_value;
+use crate::conversion::PartitionValueParser;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
@@ -118,8 +118,13 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaRe
         build_partition_schema(snapshot.schema(), snapshot.metadata().partition_columns())?
     {
         let partition_schema = StructType::try_from(&partition_schema_arrow)?;
-        let partition_array =
-            parse_partition_values_array(&raw, &partition_schema, "partitionValues", mode)?;
+        let partition_array = parse_partition_values_array(
+            &raw,
+            &partition_schema,
+            "partitionValues",
+            mode,
+            snapshot.partition_time_zone(),
+        )?;
         fields.push(Arc::new(Field::new(
             FIELD_NAME_PARTITION_VALUES_PARSED,
             partition_array.data_type().to_owned(),
@@ -139,6 +144,7 @@ pub(crate) fn parse_partition_values_array(
     partition_schema: &StructType,
     path: &str,
     column_mapping_mode: ColumnMappingMode,
+    time_zone: &str,
 ) -> DeltaResult<StructArray> {
     let partitions = map_array_from_path(batch, path)?;
     let num_rows = partitions.len();
@@ -200,14 +206,11 @@ pub(crate) fn parse_partition_values_array(
                 .get(physical_name)
                 .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?;
             let arrow_dt = arrow_field.data_type();
+            let parser = PartitionValueParser::try_new(arrow_dt, time_zone)?;
             let scalar_values: Vec<ScalarValue> = raw_values
                 .iter()
-                .map(|value| {
-                    parse_optional_partition_value(value.as_deref(), arrow_dt).map_err(|e| {
-                        DeltaTableError::generic(format!("partition value parse error: {e}"))
-                    })
-                })
-                .collect::<DeltaResult<Vec<_>>>()?;
+                .map(|value| parser.parse(value.as_deref()))
+                .collect();
             let array = if scalar_values.is_empty() {
                 new_empty_array(arrow_dt)
             } else {
@@ -325,6 +328,7 @@ mod tests {
             &partition_schema,
             "partitionValues",
             ColumnMappingMode::Name,
+            "UTC",
         )?;
         let source = parsed
             .column_by_name("col-source")

@@ -22,7 +22,7 @@ use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::{ScalarConverter, parse_optional_partition_value};
+use crate::conversion::{PartitionValueParser, ScalarConverter};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, ColumnMappingMode};
@@ -156,6 +156,8 @@ pub(crate) fn partition_filter_mask(
             snapshot.schema().field_with_name(name)?,
             snapshot.effective_column_mapping_mode(),
         );
+        let parser =
+            PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())?;
         let values = adds
             .iter()
             .map(|add| {
@@ -163,9 +165,9 @@ pub(crate) fn partition_filter_mask(
                     .partition_values
                     .get(physical_name)
                     .and_then(Option::as_deref);
-                parse_optional_partition_value(raw, field.data_type())
+                parser.parse(raw)
             })
-            .collect::<crate::DeltaResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let column = if values.is_empty() {
             new_empty_array(field.data_type())
         } else {
@@ -198,6 +200,7 @@ pub(crate) fn prune_adds_by_physical_predicate(
     table_schema: SchemaRef,
     predicate: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
     column_mapping_mode: ColumnMappingMode,
+    time_zone: &str,
 ) -> Result<Vec<bool>> {
     if adds.is_empty() {
         return Ok(vec![]);
@@ -209,6 +212,7 @@ pub(crate) fn prune_adds_by_physical_predicate(
         adds,
         referenced_columns,
         column_mapping_mode,
+        time_zone,
     )?;
 
     let pruning_predicate = PruningPredicateBuilder::new()
@@ -228,6 +232,7 @@ struct MaterializedColumnStats {
 struct AddStatsPruningStatistics<'adds> {
     table_schema: SchemaRef,
     adds: &'adds [Add],
+    time_zone: &'adds str,
     stats: Vec<Option<Stats>>,
     referenced_columns: std::collections::HashSet<String>,
     materialized_columns: std::collections::HashMap<String, MaterializedColumnStats>,
@@ -240,6 +245,7 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         adds: &'adds [Add],
         referenced_columns: std::collections::HashSet<String>,
         column_mapping_mode: ColumnMappingMode,
+        time_zone: &'adds str,
     ) -> Result<Self> {
         let mut stats = Vec::with_capacity(adds.len());
         for a in adds {
@@ -251,6 +257,7 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         let mut out = Self {
             table_schema,
             adds,
+            time_zone,
             stats,
             referenced_columns,
             materialized_columns: Default::default(),
@@ -267,14 +274,21 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .filter_map(|name| {
                 let column = Column::from_name(name.clone());
                 self.field_for(&column).map(|_| {
-                    (
-                        name.clone(),
-                        MaterializedColumnStats {
+                    // The partition values of a column are parsed once for its bounds and null
+                    // counts.
+                    let stats = match self.build_partition_array(&column) {
+                        Some(values) => MaterializedColumnStats {
+                            min_values: Some(Arc::clone(&values)),
+                            null_counts: self.partition_null_counts(&values),
+                            max_values: Some(values),
+                        },
+                        None => MaterializedColumnStats {
                             min_values: self.compute_min_values(&column),
                             max_values: self.compute_max_values(&column),
                             null_counts: self.compute_null_counts(&column),
                         },
-                    )
+                    };
+                    (name.clone(), stats)
                 })
             })
             .collect();
@@ -408,7 +422,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .collect();
         let values = values?;
 
-        ScalarConverter::string_values_to_array(&values, field.data_type()).ok()
+        PartitionValueParser::try_new(field.data_type(), self.time_zone)
+            .ok()?
+            .parse_array(&values)
+            .ok()
     }
 
     fn null_scalar(dt: &datafusion::arrow::datatypes::DataType) -> ScalarValue {
@@ -433,14 +450,20 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
     }
 
+    fn partition_value_parser(&self, column: &Column) -> Option<PartitionValueParser> {
+        let field = self.field_for(column)?;
+        PartitionValueParser::try_new(field.data_type(), self.time_zone).ok()
+    }
+
     fn scalar_from_partition_value(
+        parser: Option<&PartitionValueParser>,
         dt: &datafusion::arrow::datatypes::DataType,
         v: &Option<String>,
     ) -> ScalarValue {
-        parse_optional_partition_value(v.as_deref(), dt).unwrap_or_else(|_| {
-            // If we can't parse the partition value into the target type, treat it as unknown.
-            Self::null_scalar(dt)
-        })
+        parser
+            .map(|parser| parser.parse(v.as_deref()))
+            // A column without a parser is unknown.
+            .unwrap_or_else(|| Self::null_scalar(dt))
     }
 
     fn build_array(
@@ -497,9 +520,6 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
     }
 
     fn compute_min_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some(array) = self.build_partition_array(column) {
-            return Some(array);
-        }
         if let Some(array) =
             self.build_json_column_stat_array(column, |stats, name| stats.min_values.get(name))
         {
@@ -507,9 +527,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
 
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_array(column, false, |a, s, dt| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                return Self::scalar_from_partition_value(dt, pv);
+                return Self::scalar_from_partition_value(parser.as_ref(), dt, pv);
             }
             if let Some(s) = s
                 && let Some(v) = s.min_values.get(&storage_name)
@@ -524,9 +545,6 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
     }
 
     fn compute_max_values(&self, column: &Column) -> Option<ArrayRef> {
-        if let Some(array) = self.build_partition_array(column) {
-            return Some(array);
-        }
         if let Some(array) =
             self.build_json_column_stat_array(column, |stats, name| stats.max_values.get(name))
         {
@@ -534,9 +552,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         }
 
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_array(column, false, |a, s, dt| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                return Self::scalar_from_partition_value(dt, pv);
+                return Self::scalar_from_partition_value(parser.as_ref(), dt, pv);
             }
             if let Some(s) = s
                 && let Some(v) = s.max_values.get(&storage_name)
@@ -551,11 +570,38 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         .map(widen_timestamp_max_stat)
     }
 
+    /// The null counts of a partition column with the parsed `values`, where a value that does
+    /// not parse is NULL.
+    fn partition_null_counts(&self, values: &ArrayRef) -> Option<ArrayRef> {
+        let mut has_value = false;
+        let counts: Vec<Option<u64>> = self
+            .stats
+            .iter()
+            .enumerate()
+            .map(|(index, stats)| {
+                let count = if values.is_null(index) {
+                    stats.as_ref().map(|stats| stats.num_records.max(0) as u64)
+                } else {
+                    Some(0)
+                };
+                has_value |= count.is_some();
+                count
+            })
+            .collect();
+        has_value.then(|| Arc::new(UInt64Array::from(counts)) as ArrayRef)
+    }
+
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let storage_name = self.storage_name_for(column)?;
+        let parser = self.partition_value_parser(column);
         self.build_count_array(column, |a, s| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                if pv.as_deref().is_none_or(str::is_empty) {
+                // A value that does not parse is NULL too.
+                if pv.as_deref().is_none_or(str::is_empty)
+                    || parser
+                        .as_ref()
+                        .is_some_and(|parser| parser.parse(pv.as_deref()).is_null())
+                {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
@@ -747,6 +793,7 @@ mod tests {
             &adds,
             referenced_columns,
             ColumnMappingMode::None,
+            "UTC",
         )?;
         let array = stats.row_counts().ok_or_else(|| {
             DataFusionError::Internal("row count stats should be available".to_string())
@@ -779,6 +826,7 @@ mod tests {
             &adds,
             referenced_columns,
             ColumnMappingMode::None,
+            "UTC",
         )?;
         let array = stats
             .null_counts(&Column::from_name("date_col"))
@@ -829,6 +877,7 @@ mod tests {
                     Arc::clone(&schema),
                     Arc::clone(&is_null),
                     mode,
+                    "UTC",
                 )?,
                 vec![false, true]
             );
@@ -838,6 +887,7 @@ mod tests {
                     Arc::clone(&schema),
                     Arc::clone(&is_not_null),
                     mode,
+                    "UTC",
                 )?,
                 vec![true, false]
             );
@@ -863,6 +913,7 @@ mod tests {
             &adds,
             referenced_columns,
             ColumnMappingMode::None,
+            "UTC",
         )?;
         let array = stats
             .min_values(&Column::from_name("part_col"))
@@ -898,6 +949,7 @@ mod tests {
             &adds,
             HashSet::from(["p".to_string()]),
             ColumnMappingMode::None,
+            "UTC",
         )?;
         let column = Column::from_name("p");
         let bounds = stats
@@ -960,6 +1012,7 @@ mod tests {
                 table_schema,
                 predicate,
                 ColumnMappingMode::Name,
+                "UTC",
             )?,
             vec![true]
         );
@@ -994,6 +1047,7 @@ mod tests {
             &adds,
             HashSet::from(["payload".to_string()]),
             ColumnMappingMode::None,
+            "UTC",
         )?;
 
         let min_values = stats
@@ -1059,6 +1113,7 @@ mod tests {
                 std::slice::from_ref(&add),
                 HashSet::from(["event_time".to_string()]),
                 ColumnMappingMode::None,
+                "UTC",
             )?;
             let timestamp_bound = |values: Option<ArrayRef>, bound: &str| -> Result<i64> {
                 let values = values.ok_or_else(|| {
@@ -1099,6 +1154,7 @@ mod tests {
                     table_schema,
                     predicate,
                     ColumnMappingMode::None,
+                    "UTC",
                 )?,
                 vec![true]
             );
@@ -1122,6 +1178,7 @@ mod tests {
             &adds,
             HashSet::from(["partition_time".to_string()]),
             ColumnMappingMode::None,
+            "UTC",
         )?;
         let max_values = stats
             .max_values(&Column::from_name("partition_time"))
