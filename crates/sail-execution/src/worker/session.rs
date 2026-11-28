@@ -14,6 +14,9 @@ use datafusion::common::{Result, internal_datafusion_err, internal_err};
 use datafusion::execution::TaskContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use prost::Message;
+use sail_common_datafusion::session::time_zone::{
+    set_spark_session_time_zone, spark_session_time_zone,
+};
 
 use crate::job_runner::apply_cluster_constraints;
 use crate::worker::r#gen::JobSession;
@@ -38,8 +41,11 @@ impl JobSession {
     ///
     /// Only options that differ from the DataFusion defaults are captured by key, since the
     /// worker applies them on top of the defaults. The Parquet options are captured as a whole,
-    /// since some of them cannot be unset by key. Configuration extensions are not shipped, so
-    /// operators on workers read the session time zone from `datafusion.execution.time_zone`.
+    /// since some of them cannot be unset by key. The Spark session time zone is kept in a
+    /// configuration extension that has no entries, so it is captured separately, with the full
+    /// offset precision that the Arrow label in `datafusion.execution.time_zone` may lose. Other
+    /// configuration extensions are not shipped; one that operators read on workers needs its own
+    /// field, like the Spark session time zone.
     pub(crate) fn capture(options: &ConfigOptions) -> Result<Self> {
         let mut values = HashMap::new();
         for (key, value) in entry_values(options) {
@@ -59,12 +65,18 @@ impl JobSession {
         Ok(Self {
             options: values,
             parquet,
+            spark_time_zone: spark_session_time_zone(options).map(ToString::to_string),
         })
     }
 
     /// Returns the options of the driver session.
     pub(crate) fn config_options(&self) -> Result<ConfigOptions> {
         let mut options = ConfigOptions::default();
+        // Setting the Spark session time zone also sets `datafusion.execution.time_zone`, which
+        // the options below then set to the value of the driver session.
+        if let Some(time_zone) = &self.spark_time_zone {
+            set_spark_session_time_zone(&mut options, time_zone)?;
+        }
         for (key, value) in &self.options {
             let Some(field) = key.strip_prefix(DATAFUSION_PREFIX) else {
                 return internal_err!("invalid session option from the driver: {key}");
@@ -141,9 +153,8 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
-    use sail_common_datafusion::session::time_zone::{
-        session_time_zone, set_spark_session_time_zone,
-    };
+    use sail_common_datafusion::session::time_zone::session_time_zone;
+    use sail_delta_lake::DeltaSnapshotConfig;
 
     use super::*;
 
@@ -186,7 +197,7 @@ mod tests {
         driver.execution.parquet.coerce_int96 = Some(DFTimeUnit::Nanosecond);
         driver.execution.parquet.binary_as_string = true;
         driver.execution.parquet.compression = None;
-        set_spark_session_time_zone(&mut driver, "+05:30")?;
+        set_spark_session_time_zone(&mut driver, "+05:30:15")?;
 
         let session = JobSession::decode(JobSession::capture(&driver)?.encode_to_vec().as_slice())
             .map_err(|e| internal_datafusion_err!("{e}"))?;
@@ -200,7 +211,7 @@ mod tests {
 
         assert_eq!(entries(&options), entries(&driver));
         assert_eq!(options.execution.parquet, driver.execution.parquet);
-        assert_eq!(session_time_zone(&options), Some("+05:30"));
+        assert_eq!(session_time_zone(&options), Some("+05:30:15"));
         assert!(!options.optimizer.enable_join_dynamic_filter_pushdown);
         assert!(options.optimizer.enable_topk_dynamic_filter_pushdown);
         Ok(())
@@ -268,6 +279,7 @@ mod tests {
     fn job_session_without_changes_has_no_options() -> Result<()> {
         let session = JobSession::capture(&ConfigOptions::default())?;
         assert!(session.options.is_empty());
+        assert_eq!(session.spark_time_zone, None);
         assert_eq!(
             entries(&session.config_options()?),
             entries(&ConfigOptions::default())
@@ -275,10 +287,14 @@ mod tests {
         Ok(())
     }
 
-    /// Workers read the session time zone from `datafusion.execution.time_zone`, which holds the
-    /// Arrow label of the Spark session time zone, so they read the same time zone as the driver.
+    /// The worker gets both the Spark session time zone and the DataFusion time zone of the
+    /// driver session, including a session that has only the latter (such as a Flight SQL
+    /// session), so it reads partition values in the same time zone as the driver.
     #[test]
-    fn job_session_ships_the_session_time_zone_as_an_option() -> Result<()> {
+    fn job_session_ships_the_session_time_zone() -> Result<()> {
+        let mut flight = ConfigOptions::default();
+        flight.execution.time_zone = Some("America/Los_Angeles".parse()?);
+        let mut drivers = vec![flight];
         for time_zone in [
             "America/Los_Angeles",
             "PST",
@@ -289,11 +305,21 @@ mod tests {
         ] {
             let mut driver = ConfigOptions::default();
             set_spark_session_time_zone(&mut driver, time_zone)?;
+            drivers.push(driver);
+        }
+        for driver in drivers {
             let options = JobSession::capture(&driver)?.config_options()?;
             assert_eq!(
-                options.execution.time_zone, driver.execution.time_zone,
-                "{time_zone}"
+                spark_session_time_zone(&options),
+                spark_session_time_zone(&driver)
             );
+            assert_eq!(options.execution.time_zone, driver.execution.time_zone);
+            let partition_time_zone = |options: &ConfigOptions| {
+                DeltaSnapshotConfig::default()
+                    .with_partition_time_zone(options)
+                    .partition_time_zone
+            };
+            assert_eq!(partition_time_zone(&options), partition_time_zone(&driver));
         }
         Ok(())
     }
