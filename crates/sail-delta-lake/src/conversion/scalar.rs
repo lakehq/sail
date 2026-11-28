@@ -485,18 +485,17 @@ fn serialize_decimal(bits: i128, scale: i8) -> String {
     match scale.cmp(&0) {
         Ordering::Equal => bits.to_string(),
         Ordering::Greater => {
-            let value = bits;
-            let scale_u32 = scale as u32;
-            let scalar_multiple = 10_i128.pow(scale_u32);
-            let mut string = String::new();
-            string.push_str((value / scalar_multiple).to_string().as_str());
-            string.push('.');
-            string.push_str(&format!(
-                "{:0>scale$}",
+            // The sign is written once, before the integer part, so that -1.25 is not written
+            // as -1.-25 and -0.001 is not written as 0.0-1.
+            let sign = if bits < 0 { "-" } else { "" };
+            let value = bits.unsigned_abs();
+            let scalar_multiple = 10_u128.pow(scale as u32);
+            format!(
+                "{sign}{}.{:0>scale$}",
+                value / scalar_multiple,
                 value % scalar_multiple,
                 scale = scale as usize
-            ));
-            string
+            )
         }
         Ordering::Less => {
             let mut string = bits.to_string();
@@ -569,11 +568,12 @@ pub fn scalar_value_to_array(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, i256};
     use datafusion::common::ScalarValue;
 
     use super::{
-        NULL_PARTITION_VALUE_DATA_PATH, parse_optional_partition_value, parse_partition_value,
+        NULL_PARTITION_VALUE_DATA_PATH, ScalarExt, parse_optional_partition_value,
+        parse_partition_value,
     };
 
     #[test]
@@ -612,5 +612,84 @@ mod tests {
             .expect("partition value should parse");
 
         assert_eq!(value, ScalarValue::Utf8(None));
+    }
+
+    /// Decimal values of every width are written as Delta-Spark writes them (plain, with one sign)
+    /// and parse back.
+    #[test]
+    fn decimal_partition_values_round_trip() {
+        fn check(value: ScalarValue, expected: &str) {
+            let data_type = value.data_type();
+            assert_eq!(value.serialize(), expected, "{data_type}");
+            assert_eq!(
+                parse_partition_value(expected, &data_type).ok(),
+                Some(value),
+                "{expected} as {data_type}"
+            );
+        }
+
+        const MAX_DECIMAL38: i128 = 10_i128.pow(38) - 1;
+        for (precision, scale, bits, expected) in [
+            (5, 2, -125, "-1.25"),
+            (5, 2, 250, "2.50"),
+            (5, 2, 0, "0.00"),
+            (5, 2, -1, "-0.01"),
+            (9, 3, -12_500, "-12.500"),
+            (9, 3, -7_000, "-7.000"),
+            (9, 0, -999_999_999, "-999999999"),
+        ] {
+            check(
+                ScalarValue::Decimal32(Some(bits), precision, scale),
+                expected,
+            );
+        }
+        for (precision, scale, bits, expected) in [
+            (5, 2, -125, "-1.25"),
+            (5, 2, -1, "-0.01"),
+            (18, 6, -1, "-0.000001"),
+            (18, 4, -123_456_789_012_345_678, "-12345678901234.5678"),
+        ] {
+            check(
+                ScalarValue::Decimal64(Some(bits), precision, scale),
+                expected,
+            );
+        }
+        for (precision, scale, bits, expected) in [
+            (5, 2, -125, "-1.25"),
+            (5, 2, 250, "2.50"),
+            (5, 2, 0, "0.00"),
+            (10, 3, -1, "-0.001"),
+            (10, 3, -12_500, "-12.500"),
+            (10, 3, -7_000, "-7.000"),
+            (18, 4, -123_456_789_012_345_678, "-12345678901234.5678"),
+            (
+                38,
+                0,
+                MAX_DECIMAL38,
+                "99999999999999999999999999999999999999",
+            ),
+            (
+                38,
+                0,
+                -MAX_DECIMAL38,
+                "-99999999999999999999999999999999999999",
+            ),
+            (
+                38,
+                2,
+                -MAX_DECIMAL38,
+                "-999999999999999999999999999999999999.99",
+            ),
+            (38, 38, -1, "-0.00000000000000000000000000000000000001"),
+        ] {
+            check(
+                ScalarValue::Decimal128(Some(bits), precision, scale),
+                expected,
+            );
+            check(
+                ScalarValue::Decimal256(Some(i256::from_i128(bits)), precision, scale),
+                expected,
+            );
+        }
     }
 }
