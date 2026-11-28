@@ -913,6 +913,15 @@
     This setting can only be configured at startup and cannot be changed at runtime.
   experimental: true
 
+- key: parquet.range_cache_capacity
+  type: number
+  default: "0"
+  description: |
+    (Reading) Maximum resident Parquet data bytes cached per session on each executor.
+    Queries reuse aligned ranges of versioned objects, including objects with strong ETags.
+    Setting the value to `0` disables the data cache. This memory is separate from the query memory pool.
+  experimental: true
+
 - key: parquet.file_metadata_cache.type
   type: string
   default: "global"

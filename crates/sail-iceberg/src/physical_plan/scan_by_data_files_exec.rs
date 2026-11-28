@@ -12,7 +12,6 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
@@ -33,6 +32,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_cache::parquet_range_cache::parquet_reader_factory;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
@@ -264,7 +264,8 @@ impl ScanByDataFilesState {
             table_reference: None,
         };
         let object_store_url = self.object_store_url()?;
-        let reader = Arc::new(CachedParquetFileReaderFactory::new(
+        let reader = parquet_reader_factory(
+            self.context.session_config(),
             store,
             scoped_file_metadata_cache(
                 self.context
@@ -274,7 +275,7 @@ impl ScanByDataFilesState {
                 &object_store_url,
                 &self.context.session_id(),
             ),
-        ));
+        );
         let source = ParquetSource::new(table_schema)
             .with_table_parquet_options(crate::datasource::parquet::parquet_options(
                 &schema,
@@ -562,10 +563,8 @@ impl ScanByDataFilesState {
                 .into(),
         )
         .await?;
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
-            object_store,
-            metadata_cache,
-        ));
+        let reader_factory =
+            parquet_reader_factory(context.session_config(), object_store, metadata_cache);
         let mut parquet_source = ParquetSource::new(Arc::clone(file_schema))
             .with_table_parquet_options(parquet_options)
             .with_parquet_file_reader_factory(reader_factory);

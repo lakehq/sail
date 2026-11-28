@@ -6,6 +6,7 @@ pub mod error;
 pub mod file_listing_cache;
 pub mod file_metadata_cache;
 pub mod file_statistics_cache;
+pub mod parquet_range_cache;
 pub mod remote_checkpoint;
 pub mod scope;
 

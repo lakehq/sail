@@ -588,6 +588,7 @@ pub struct KubernetesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParquetConfig {
+    pub range_cache_capacity: usize,
     pub enable_page_index: bool,
     pub pruning: bool,
     pub skip_metadata: bool,

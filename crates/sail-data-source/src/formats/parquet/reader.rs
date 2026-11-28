@@ -4,9 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use datafusion::datasource::physical_plan::parquet::{
-    CachedParquetFileReaderFactory, ParquetFileReaderFactory,
-};
+use datafusion::datasource::physical_plan::parquet::ParquetFileReaderFactory;
 use datafusion::parquet::arrow::arrow_reader::ArrowReaderOptions;
 use datafusion::parquet::arrow::async_reader::AsyncFileReader;
 use datafusion::parquet::basic::{ConvertedType, Type as PhysicalType};
@@ -22,7 +20,7 @@ use sail_common_datafusion::parquet_schema::SAIL_PARQUET_STORAGE_METADATA_KEY;
 /// Reads the original byte sequences for decimal columns projected as binary or string.
 /// The Arrow decimal decoder discards redundant leading sign-extension bytes.
 #[derive(Debug)]
-pub struct ListingParquetReaderFactory(pub CachedParquetFileReaderFactory);
+pub struct ListingParquetReaderFactory(pub Arc<dyn ParquetFileReaderFactory>);
 
 impl ParquetFileReaderFactory for ListingParquetReaderFactory {
     fn create_reader(

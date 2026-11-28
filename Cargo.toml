@@ -133,6 +133,7 @@ percent-encoding = "2.3.2"
 rustls = "0.23.40"
 dashmap = "6.2.1"
 itertools = "0.15.0"
+quick_cache = "0.6.24"
 moka = { version = "0.12.15", features = ["sync", "future"] }
 bytes = "1.11.1"
 indexmap = "2.14.0"
