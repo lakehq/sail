@@ -172,3 +172,14 @@ def test_binary_read_large_files(spark, tmp_path):
         content = files[row.path.split("/")[-1]]
         assert row.length == len(content)
         assert row.content == content
+
+
+@pytest.mark.parametrize("name", ["plain.bin", "with space.bin", "hash#name.bin"])
+def test_binary_path_column_is_a_hadoop_path(spark, tmp_path, name):
+    # Spark prints the local file `/tmp/a b.bin` as `file:/tmp/a b.bin`.
+    (tmp_path / name).write_bytes(b"data")
+    expected = f"file:{tmp_path / name}"
+    [row] = spark.read.format("binaryFile").load(str(tmp_path)).collect()
+    assert row.path == expected
+    [again] = spark.read.format("binaryFile").load(row.path).collect()
+    assert (again.path, again.content) == (expected, b"data")
