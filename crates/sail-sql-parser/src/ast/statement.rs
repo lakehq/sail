@@ -87,15 +87,21 @@ pub enum Statement {
         catalog: Catalog,
         name: Either<Ident, StringLiteral>,
     },
+    // `USE CATALOG` and `USE DATABASE` come before `USE`, which reads a name that is one of
+    // these keywords as the name of a database.
+    UseCatalog {
+        r#use: Use,
+        catalog: Catalog,
+        name: Ident,
+    },
     UseDatabase {
         r#use: Use,
         database: DatabaseKeyword,
         name: ObjectName,
     },
-    UseCatalog {
+    Use {
         r#use: Use,
-        catalog: Catalog,
-        name: Ident,
+        name: ObjectName,
     },
     CreateDatabase {
         create: Create,
