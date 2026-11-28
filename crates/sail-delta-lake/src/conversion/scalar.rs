@@ -12,9 +12,8 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
-    UInt16Array, UInt32Array, UInt64Array,
+    Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, UInt8Array, UInt16Array,
+    UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
@@ -576,44 +575,16 @@ impl PartitionValueParser {
 
     /// Parses values that are not empty, where a value that does not parse is null.
     pub fn parse_array(&self, values: &[Option<&str>]) -> DataFusionResult<ArrayRef> {
-        if let (Some(zone), ArrowDataType::Timestamp(unit, label)) =
-            (&self.session_zone, &self.field_dt)
-        {
-            let values = values
-                .iter()
-                .map(|value| value.and_then(|raw| parse_timestamp(raw, zone, *unit).ok()));
-            let label = label.clone();
-            return Ok(match unit {
-                TimeUnit::Second => {
-                    Arc::new(TimestampSecondArray::from_iter(values).with_timezone_opt(label))
-                }
-                TimeUnit::Millisecond => {
-                    Arc::new(TimestampMillisecondArray::from_iter(values).with_timezone_opt(label))
-                }
-                TimeUnit::Microsecond => {
-                    Arc::new(TimestampMicrosecondArray::from_iter(values).with_timezone_opt(label))
-                }
-                TimeUnit::Nanosecond => {
-                    Arc::new(TimestampNanosecondArray::from_iter(values).with_timezone_opt(label))
-                }
-            });
-        }
-        let utf8_array: ArrayRef = Arc::new(StringArray::from(
-            values
-                .iter()
-                .map(|value| value.map(ToOwned::to_owned))
-                .collect::<Vec<_>>(),
-        ));
-        match &self.field_dt {
-            ArrowDataType::Utf8 => Ok(utf8_array),
-            ArrowDataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(
-                values
-                    .iter()
-                    .map(|value| value.map(ToOwned::to_owned))
-                    .collect::<Vec<_>>(),
-            ))),
-            field_dt => Ok(cast(&utf8_array, field_dt)?),
-        }
+        let array: ArrayRef = match (&self.session_zone, &self.field_dt) {
+            (Some(zone), ArrowDataType::Timestamp(unit, _)) => {
+                Arc::new(Int64Array::from_iter(values.iter().map(|value| {
+                    value.and_then(|raw| parse_timestamp(raw, zone, *unit).ok())
+                })))
+            }
+            _ => Arc::new(StringArray::from_iter(values.iter().copied())),
+        };
+        // Casting the timestamps relabels their buffer without copying it.
+        Ok(cast(&array, &self.field_dt)?)
     }
 }
 
