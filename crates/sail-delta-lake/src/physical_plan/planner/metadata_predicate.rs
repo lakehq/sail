@@ -67,7 +67,12 @@ pub(crate) fn build_metadata_filter(
         let stats_schema = build_metadata_stats_schema(snapshot, &predicate)?;
         (
             Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)) as Arc<dyn ExecutionPlan>,
-            rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths),
+            rewrite_predicate_for_metadata(
+                predicate,
+                &partition_columns,
+                &stats_paths,
+                logical_schema,
+            ),
         )
     } else {
         (input, predicate)
@@ -170,11 +175,13 @@ fn rewrite_predicate_for_metadata(
     expr: Expr,
     partition_columns: &[String],
     stats_paths: &HashMap<Vec<String>, Vec<String>>,
+    logical_schema: &ArrowSchema,
 ) -> Expr {
     let partition_columns = partition_columns.iter().cloned().collect::<HashSet<_>>();
     MetadataPredicateRewriter {
         partition_columns,
         stats_paths,
+        logical_schema,
     }
     .rewrite(expr)
 }
@@ -182,12 +189,16 @@ fn rewrite_predicate_for_metadata(
 struct MetadataPredicateRewriter<'a> {
     partition_columns: HashSet<String>,
     stats_paths: &'a HashMap<Vec<String>, Vec<String>>,
+    logical_schema: &'a ArrowSchema,
 }
 
 #[derive(Clone)]
 struct ExprTemplate {
     logical_path: Vec<String>,
     cast_type: Option<ArrowDataType>,
+    /// Whether the cast only changes the time zone label of a TIMESTAMP column, which keeps the
+    /// order of the values.
+    relabels_timestamp: bool,
 }
 
 impl MetadataPredicateRewriter<'_> {
@@ -259,14 +270,14 @@ impl MetadataPredicateRewriter<'_> {
             return Some(binary(left, op, right));
         }
 
-        if let Some(template) = Self::extract_template(&left) {
+        if let Some(template) = self.extract_template(&left) {
             if !right.column_refs().is_empty() {
                 return None;
             }
             return Some(self.rewrite_template_comparison(template, op, right));
         }
 
-        if let Some(template) = Self::extract_template(&right) {
+        if let Some(template) = self.extract_template(&right) {
             if !left.column_refs().is_empty() {
                 return None;
             }
@@ -280,7 +291,7 @@ impl MetadataPredicateRewriter<'_> {
         if !low.column_refs().is_empty() || !high.column_refs().is_empty() {
             return None;
         }
-        let template = Self::extract_template(&expr)?;
+        let template = self.extract_template(&expr)?;
         if self.is_partition_column(&template) {
             return Some(Expr::Between(Between::new(
                 Box::new(expr),
@@ -289,7 +300,7 @@ impl MetadataPredicateRewriter<'_> {
                 Box::new(high),
             )));
         }
-        if template.cast_type.is_some() {
+        if template.may_reorder() {
             return None;
         }
 
@@ -313,14 +324,14 @@ impl MetadataPredicateRewriter<'_> {
     }
 
     fn rewrite_in_list(&self, expr: Expr, list: Vec<Expr>, negated: bool) -> Option<Expr> {
-        let template = Self::extract_template(&expr)?;
+        let template = self.extract_template(&expr)?;
         if list.iter().any(|expr| !expr.column_refs().is_empty()) {
             return None;
         }
         if self.is_partition_column(&template) {
             return Some(Expr::InList(InList::new(Box::new(expr), list, negated)));
         }
-        if template.cast_type.is_some() {
+        if template.may_reorder() {
             return None;
         }
         let mut rewritten = Vec::with_capacity(list.len());
@@ -340,7 +351,7 @@ impl MetadataPredicateRewriter<'_> {
     }
 
     fn rewrite_null_check(&self, expr: Expr, is_not_null: bool) -> Option<Expr> {
-        let template = Self::extract_template(&expr)?;
+        let template = self.extract_template(&expr)?;
         if self.is_partition_column(&template) {
             return Some(if is_not_null {
                 Expr::IsNotNull(Box::new(expr))
@@ -348,7 +359,7 @@ impl MetadataPredicateRewriter<'_> {
                 Expr::IsNull(Box::new(expr))
             });
         }
-        if template.cast_type.is_some() {
+        if template.may_reorder() {
             return None;
         }
 
@@ -385,7 +396,7 @@ impl MetadataPredicateRewriter<'_> {
         }
         // File bounds can only be pushed through a proven order-preserving cast. Keep the file
         // when cast monotonicity is unknown rather than risking false pruning.
-        if template.cast_type.is_some() {
+        if template.may_reorder() {
             return literal_true();
         }
 
@@ -466,21 +477,44 @@ impl MetadataPredicateRewriter<'_> {
         expr
     }
 
-    fn extract_template(expr: &Expr) -> Option<ExprTemplate> {
+    fn extract_template(&self, expr: &Expr) -> Option<ExprTemplate> {
         match expr {
-            Expr::Cast(Cast { expr, field }) => Some(ExprTemplate {
-                logical_path: extract_column_path(expr)?,
-                cast_type: Some(field.data_type().clone()),
-            }),
+            Expr::Cast(Cast { expr, field }) => {
+                let logical_path = extract_column_path(expr)?;
+                let relabels_timestamp = match (
+                    field.data_type(),
+                    self.logical_schema
+                        .field_with_name(&logical_path[0])
+                        .map(|field| field.data_type()),
+                ) {
+                    (
+                        ArrowDataType::Timestamp(unit, Some(_)),
+                        Ok(ArrowDataType::Timestamp(column_unit, Some(_))),
+                    ) => logical_path.len() == 1 && unit == column_unit,
+                    _ => false,
+                };
+                Some(ExprTemplate {
+                    logical_path,
+                    cast_type: Some(field.data_type().clone()),
+                    relabels_timestamp,
+                })
+            }
             _ => Some(ExprTemplate {
                 logical_path: extract_column_path(expr)?,
                 cast_type: None,
+                relabels_timestamp: false,
             }),
         }
     }
 }
 
 impl ExprTemplate {
+    /// Whether file bounds cannot be pushed through the cast, because it may change the order of
+    /// the values.
+    fn may_reorder(&self) -> bool {
+        self.cast_type.is_some() && !self.relabels_timestamp
+    }
+
     fn root_name(&self) -> &str {
         self.logical_path[0].as_str()
     }
@@ -654,8 +688,12 @@ mod tests {
             Operator::Eq,
             Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
         );
-        let rewritten =
-            rewrite_predicate_for_metadata(expr.clone(), &["p".to_string()], &HashMap::new());
+        let rewritten = rewrite_predicate_for_metadata(
+            expr.clone(),
+            &["p".to_string()],
+            &HashMap::new(),
+            &ArrowSchema::empty(),
+        );
         assert_eq!(rewritten, expr);
     }
 
@@ -817,8 +855,34 @@ mod tests {
                 binary(exact.clone(), op, unsupported.clone()),
                 &["p".to_string(), "q".to_string()],
                 &HashMap::new(),
+                &ArrowSchema::empty(),
             );
             assert_eq!(actual, binary(exact.clone(), op, literal_true()));
+        }
+    }
+
+    /// A cast that only relabels a TIMESTAMP column keeps the order of the values, so file bounds
+    /// are compared through it. Any other cast keeps every file.
+    #[test]
+    fn stats_comparisons_go_through_timestamp_relabels_only() {
+        let timestamp =
+            |zone: &str| ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(zone.into()));
+        let schema = ArrowSchema::new(vec![
+            Field::new("ts", timestamp("UTC"), true),
+            Field::new("s", ArrowDataType::Utf8, true),
+        ]);
+        let literal = Expr::Literal(
+            ScalarValue::TimestampMicrosecond(Some(0), Some("America/Los_Angeles".into())),
+            None,
+        );
+        for (column, pruned) in [("ts", true), ("s", false)] {
+            let expr = Expr::Cast(Cast::new(
+                Box::new(Expr::Column(LogicalColumn::new_unqualified(column))),
+                timestamp("America/Los_Angeles"),
+            ))
+            .gt(literal.clone());
+            let rewritten = rewrite_predicate_for_metadata(expr, &[], &HashMap::new(), &schema);
+            assert_eq!(rewritten != literal_true(), pruned, "{column}");
         }
     }
 
@@ -830,7 +894,12 @@ mod tests {
             Operator::Gt,
             literal_i64(3),
         );
-        let rewritten = rewrite_predicate_for_metadata(expr, &["p".to_string()], &HashMap::new());
+        let rewritten = rewrite_predicate_for_metadata(
+            expr,
+            &["p".to_string()],
+            &HashMap::new(),
+            &ArrowSchema::empty(),
+        );
         let ctx = SessionContext::new();
         let physical = simplify_expr(&ctx.state(), &schema.to_dfschema()?, rewritten)?;
         let values = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
