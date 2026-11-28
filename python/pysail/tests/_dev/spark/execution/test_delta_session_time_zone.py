@@ -236,7 +236,6 @@ def test_delta_checkpoint_parses_timestamp_partition_values_in_session_time_zone
     spark.sql("SELECT 1 AS id, TIMESTAMP '2024-01-01 01:00:00' AS ts").write.format("delta").partitionBy("ts").option(
         "delta.checkpointInterval", "2"
     ).save(str(path))
-    # Older writers wrote the value without an offset.
     remove_offset(path, "2024-01-01T09:00:00.000000Z", "2024-01-01 09:00:00.000000")
     for id_ in [2, 3]:
         spark.sql(f"SELECT {id_} AS id, TIMESTAMP '2024-01-01 0{id_}:00:00' AS ts").write.format("delta").mode(
