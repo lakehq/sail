@@ -8,6 +8,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, DeleteInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_logical_optimizer::convert_session_timestamp_casts_in_predicate;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -39,6 +40,12 @@ impl PlanResolver<'_> {
                     .resolve_expression(condition.expr, &input_schema, state)
                     .await?;
                 self.validate_row_level_condition("DELETE", &expression)?;
+                // The condition is not part of a plan that the analyzer converts.
+                let expression = convert_session_timestamp_casts_in_predicate(
+                    expression,
+                    target_plan.clone(),
+                    self.ctx.state().config_options(),
+                )?;
                 Some(ExprWithSource::new(expression, condition.source))
             }
             None => None,

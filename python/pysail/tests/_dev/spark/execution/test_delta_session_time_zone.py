@@ -290,6 +290,76 @@ def test_delta_delete_in_another_session_time_zone_removes_the_rows_that_select_
             spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles", "UTC"], indirect=True)
+@pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
+@pytest.mark.parametrize("condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'"])
+def test_delta_delete_by_date_in_session_time_zone_removes_the_rows_that_select_returns(
+    spark, tmp_path, session_timezone, partition, condition
+):
+    """A DELETE in a session time zone other than UTC takes the dates of TIMESTAMP values in the session
+    time zone, as a query does, for a table created in any session time zone and referenced by name or by path."""
+    _ = session_timezone
+    names = ["date_by_name", "date_by_path"]
+    try:
+        for name in names:
+            spark.sql(
+                f"CREATE TABLE {name} (id INT, ts TIMESTAMP) USING delta {partition} "
+                f"LOCATION '{escape_sql_string_literal(str(tmp_path / name))}'"
+            )
+            # Both on January 1 in UTC, on December 31 and January 1 in the DELETE session time zone.
+            spark.sql(
+                f"INSERT INTO {name} VALUES "  # noqa: S608
+                "(1, TIMESTAMP '2024-01-01 04:00:00+00:00'), (2, TIMESTAMP '2024-01-01 12:00:00+00:00')"
+            ).collect()
+        spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+        for table in ["date_by_name", f"delta.`{tmp_path / 'date_by_path'}`"]:
+            selected = {row.id for row in spark.sql(f"SELECT id FROM {table} WHERE {condition}").collect()}  # noqa: S608
+            assert selected == {2}
+            spark.sql(f"DELETE FROM {table} WHERE {condition}").collect()  # noqa: S608
+            left = {row.id for row in spark.sql(f"SELECT id FROM {table}").collect()}  # noqa: S608
+            assert {1, 2} - left == selected, table
+    finally:
+        for name in names:
+            spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles", "UTC"], indirect=True)
+@pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
+@pytest.mark.parametrize(
+    "condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'", "hour(ts) = 4"]
+)
+@pytest.mark.parametrize("statement", ["option", "sql"])
+def test_delta_replace_where_in_session_time_zone_replaces_the_rows_that_select_returns(
+    spark, tmp_path, session_timezone, partition, condition, statement
+):
+    """A conditional overwrite of a table in a session time zone other than UTC replaces the rows its
+    condition selects in a query, for a table created in any session time zone."""
+    _ = session_timezone
+    spark.sql(
+        f"CREATE TABLE replace_where (id INT, ts TIMESTAMP) USING delta {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(tmp_path / 'replace_where'))}'"
+    )
+    try:
+        # 20:00 on December 31, 04:00 on January 1 and 04:00 on January 2 in the overwrite session time zone.
+        spark.sql(
+            "INSERT INTO replace_where VALUES (1, TIMESTAMP '2024-01-01 04:00:00+00:00'), "
+            "(2, TIMESTAMP '2024-01-01 12:00:00+00:00'), (3, TIMESTAMP '2024-01-02 12:00:00+00:00')"
+        ).collect()
+        spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+        selected = {row.id for row in spark.sql(f"SELECT id FROM replace_where WHERE {condition}").collect()}  # noqa: S608
+        rows = "SELECT 10 AS id, TIMESTAMP '2024-01-01 04:30:00' AS ts"
+        if statement == "option":
+            spark.sql(rows).write.format("delta").mode("overwrite").option("replaceWhere", condition).saveAsTable(
+                "replace_where"
+            )
+        else:
+            spark.sql(f"INSERT INTO replace_where REPLACE WHERE {condition} {rows}").collect()
+        left = {row.id for row in spark.sql("SELECT id FROM replace_where").collect()}
+        assert left == {1, 2, 3} - selected | {10}
+    finally:
+        spark.sql("DROP TABLE IF EXISTS replace_where").collect()
+
+
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
 def test_delta_delete_by_name_skips_files_by_timestamp_statistics(spark, tmp_path, session_timezone, deletion_vectors):

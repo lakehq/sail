@@ -3,13 +3,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{FieldMetadata, Sort};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection, ScalarUDF, col, lit, when,
+    BinaryExpr, EmptyRelation, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
+    Operator, Projection, ScalarUDF, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -38,6 +38,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::parse_absolute_directory_url;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_logical_optimizer::convert_session_timestamp_casts_in_predicate;
 use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
@@ -804,12 +805,36 @@ impl PlanResolver<'_> {
                         "conditional overwrite is not allowed without a table schema",
                     ));
                 };
+                // The condition selects stored rows, whose TIMESTAMP values the lake formats label
+                // UTC, whatever time zone the table or input schema is labeled with.
+                let schema = Schema::new_with_metadata(
+                    schema
+                        .fields()
+                        .iter()
+                        .map(|field| {
+                            field
+                                .as_ref()
+                                .clone()
+                                .with_data_type(utc_timestamp_type(field.data_type()))
+                        })
+                        .collect::<Vec<_>>(),
+                    schema.metadata().clone(),
+                );
                 let names = state.register_fields(schema.fields());
-                let schema = rename_schema(schema, &names)?;
+                let schema = rename_schema(&schema, &names)?;
                 let schema = Arc::new(DFSchema::try_from(schema)?);
                 let expr = self
                     .resolve_expression(condition.expr, &schema, state)
                     .await?;
+                // The condition is not part of a plan that the analyzer converts.
+                let expr = convert_session_timestamp_casts_in_predicate(
+                    expr,
+                    LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    }),
+                    self.ctx.state().config_options(),
+                )?;
                 let expr = self.rewrite_expression_for_external_schema(expr, state)?;
                 Ok(SinkMode::OverwriteIf {
                     condition: Box::new(ExprWithSource::new(expr, condition.source)),
@@ -2224,5 +2249,28 @@ impl TableInfo {
             }
         };
         bucket_by_match && sort_by_match
+    }
+}
+
+/// Labels TIMESTAMP types with UTC, including nested ones.
+fn utc_timestamp_type(data_type: &DataType) -> DataType {
+    let field = |field: &FieldRef| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(utc_timestamp_type(field.data_type())),
+        )
+    };
+    match data_type {
+        DataType::Timestamp(unit, Some(_)) => DataType::Timestamp(*unit, Some("UTC".into())),
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(field).collect()),
+        DataType::List(element) => DataType::List(field(element)),
+        DataType::ListView(element) => DataType::ListView(field(element)),
+        DataType::LargeList(element) => DataType::LargeList(field(element)),
+        DataType::LargeListView(element) => DataType::LargeListView(field(element)),
+        DataType::FixedSizeList(element, size) => DataType::FixedSizeList(field(element), *size),
+        DataType::Map(entries, sorted) => DataType::Map(field(entries), *sorted),
+        _ => data_type.clone(),
     }
 }

@@ -38,6 +38,7 @@ use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
 use scalar_subquery_keys::NormalizeScalarSubqueryKeys;
+pub use session_timestamp::convert_session_timestamp_casts_in_predicate;
 
 use crate::type_coercion::TypeCoercion;
 
