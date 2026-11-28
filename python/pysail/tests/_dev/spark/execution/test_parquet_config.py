@@ -130,9 +130,22 @@ def http_ranges(tmp_path):
 
 @pytest.mark.parametrize("table_format", ["delta", "iceberg"])
 @pytest.mark.parametrize("metadata_as_data", [False, True])
-# The session resolution must also reach Delta and Iceberg scans that workers build.
-@pytest.mark.parametrize(("coerce_int96", "fraction"), [(None, "678901"), ("ms", "678")])
-def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadata_as_data, coerce_int96, fraction):
+# The session resolution must also reach Delta and Iceberg scans that workers build. Like Spark's RESET, a
+# RESET restores the resolution the session started with, which is Sail's rather than DataFusion's default.
+@pytest.mark.parametrize(
+    ("statements", "fraction"),
+    [
+        ([], "678901"),
+        (["SET datafusion.execution.parquet.coerce_int96 = 'ms'"], "678"),
+        (
+            ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET datafusion.execution.parquet.coerce_int96"],
+            "678901",
+        ),
+        (["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET"], "678901"),
+    ],
+    ids=["startup", "set", "set-and-reset", "set-and-reset-all"],
+)
+def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadata_as_data, statements, fraction):
     path = tmp_path / "timestamps.parquet"
     schema = pa.schema(
         [
@@ -203,8 +216,8 @@ def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadat
     try:
         with spark_session_factory(remote) as sessions:
             spark = sessions.create()
-            if coerce_int96 is not None:
-                spark.sql(f"SET datafusion.execution.parquet.coerce_int96 = '{coerce_int96}'").collect()
+            for statement in statements:
+                spark.sql(statement).collect()
             query = (
                 spark.read.format(table_format)
                 .option("metadataAsDataRead", str(metadata_as_data).lower())
