@@ -258,6 +258,39 @@ def test_delta_delete_removes_the_rows_that_select_returns(
 
 
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("partition", ["PARTITIONED BY (ts)", ""], ids=["partitioned", "unpartitioned"])
+@pytest.mark.parametrize("condition", ["to_date(ts) = DATE '2024-01-01'", "CAST(ts AS DATE) = DATE '2024-01-01'"])
+def test_delta_delete_in_another_session_time_zone_removes_the_rows_that_select_returns(
+    spark, tmp_path, session_timezone, partition, condition
+):
+    """A DELETE in a UTC session of a table created in another session time zone removes the rows its
+    condition selects in a query, for the table referenced by name and by path."""
+    _ = session_timezone
+    names = ["zone_by_name", "zone_by_path"]
+    try:
+        for name in names:
+            spark.sql(
+                f"CREATE TABLE {name} (id INT, ts TIMESTAMP) USING delta {partition} "
+                f"LOCATION '{escape_sql_string_literal(str(tmp_path / name))}'"
+            )
+            # 04:00 on January 2 and 12:00 on January 1 in UTC, both on January 1 in the creation time zone.
+            spark.sql(
+                f"INSERT INTO {name} VALUES "  # noqa: S608
+                "(1, TIMESTAMP '2024-01-02 04:00:00+00:00'), (2, TIMESTAMP '2024-01-01 12:00:00+00:00')"
+            ).collect()
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+        for table in ["zone_by_name", f"delta.`{tmp_path / 'zone_by_path'}`"]:
+            selected = {row.id for row in spark.sql(f"SELECT id FROM {table} WHERE {condition}").collect()}  # noqa: S608
+            assert selected == {2}
+            spark.sql(f"DELETE FROM {table} WHERE {condition}").collect()  # noqa: S608
+            left = {row.id for row in spark.sql(f"SELECT id FROM {table}").collect()}  # noqa: S608
+            assert {1, 2} - left == selected, table
+    finally:
+        for name in names:
+            spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
 def test_delta_delete_by_name_skips_files_by_timestamp_statistics(spark, tmp_path, session_timezone, deletion_vectors):
     """A DELETE of a table referenced by name skips the files that the statistics of a TIMESTAMP data

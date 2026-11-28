@@ -935,7 +935,13 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
                 *sorted,
             )
         }
-        (DataType::Timestamp(..), DataType::Timestamp(..)) => catalog_field.data_type().clone(),
+        // A catalog TIMESTAMP carries the session time zone of the CREATE TABLE statement, so two
+        // TIMESTAMP types take the Delta log's label and a table by name scans as a table by path.
+        (DataType::Timestamp(_, catalog_zone), DataType::Timestamp(_, snapshot_zone))
+            if catalog_zone.is_none() || snapshot_zone.is_none() =>
+        {
+            catalog_field.data_type().clone()
+        }
         _ => snapshot_field.data_type().clone(),
     };
     catalog_field
@@ -1126,6 +1132,30 @@ mod tests {
         assert_eq!(refreshed.fields().len(), 2);
         assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
         assert_eq!(refreshed.field(1).name(), "extra");
+    }
+
+    #[test]
+    fn catalog_schema_refresh_takes_the_snapshot_time_zone_of_timestamp_fields() {
+        let catalog_timestamp =
+            DataType::Timestamp(TimeUnit::Microsecond, Some("America/Los_Angeles".into()));
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let schema = |timestamp: &DataType| {
+            Schema::new(vec![
+                Field::new("event_time", timestamp.clone(), true),
+                Field::new(
+                    "payload",
+                    DataType::Struct(
+                        vec![Field::new("event_time", timestamp.clone(), true)].into(),
+                    ),
+                    true,
+                ),
+            ])
+        };
+
+        let refreshed =
+            refresh_catalog_delta_schema(schema(&catalog_timestamp), &schema(&snapshot_timestamp));
+
+        assert_eq!(refreshed, schema(&snapshot_timestamp));
     }
 
     #[test]
