@@ -323,10 +323,6 @@ pub enum CommandNode {
     SetCurrentDatabase {
         database: ObjectName,
     },
-    /// Sets the current catalog and database for a name whose first part may be a catalog.
-    SetCurrentNamespace {
-        name: ObjectName,
-    },
     ListDatabases {
         qualifier: Option<ObjectName>,
         pattern: Option<String>,

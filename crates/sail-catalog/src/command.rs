@@ -60,9 +60,6 @@ pub enum CatalogCommand {
     SetCurrentDatabase {
         database: Vec<String>,
     },
-    SetCurrentNamespace {
-        name: Vec<String>,
-    },
     CreateDatabase {
         database: Vec<String>,
         options: CreateDatabaseOptions,
@@ -214,7 +211,6 @@ impl CatalogCommand {
             CatalogCommand::ListCatalogs { .. } => "ListCatalogs",
             CatalogCommand::CurrentDatabase => "CurrentDatabase",
             CatalogCommand::SetCurrentDatabase { .. } => "SetCurrentDatabase",
-            CatalogCommand::SetCurrentNamespace { .. } => "SetCurrentNamespace",
             CatalogCommand::CreateDatabase { .. } => "CreateDatabase",
             CatalogCommand::DatabaseExists { .. } => "DatabaseExists",
             CatalogCommand::GetDatabase { .. } => "GetDatabase",
@@ -279,7 +275,6 @@ impl CatalogCommand {
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
-            | CatalogCommand::SetCurrentNamespace { .. }
             | CatalogCommand::RegisterFunction { .. }
             | CatalogCommand::RegisterTableFunction { .. } => display.empty().schema()?,
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -343,10 +338,6 @@ impl CatalogCommand {
             }
             CatalogCommand::SetCurrentDatabase { database } => {
                 manager.set_default_database(database).await?;
-                display.empty().to_record_batch(vec![])?
-            }
-            CatalogCommand::SetCurrentNamespace { name } => {
-                manager.set_current_namespace(name).await?;
                 display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::CreateDatabase { database, options } => {

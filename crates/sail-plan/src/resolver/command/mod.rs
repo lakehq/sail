@@ -79,8 +79,6 @@ impl PlanResolver<'_> {
                     database: database.into(),
                 })
             }
-            CommandNode::SetCurrentNamespace { name } => self
-                .resolve_catalog_command(CatalogCommand::SetCurrentNamespace { name: name.into() }),
             CommandNode::ListDatabases { qualifier, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListDatabases {
                     qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),

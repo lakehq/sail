@@ -47,36 +47,6 @@ impl CatalogManager {
         Ok(())
     }
 
-    /// Sets the current catalog and database for a name, as `USE` without a keyword does in
-    /// Spark. If the first part of the name is a catalog, it becomes the current catalog, and
-    /// the other parts are the current database. A catalog name alone keeps the current
-    /// database if the catalog is current already, and sets the default database of the
-    /// catalog otherwise. A name that does not start with a catalog is a database of the
-    /// current catalog.
-    pub async fn set_current_namespace(&self, name: Vec<String>) -> CatalogResult<()> {
-        let catalog = name.first().and_then(|first| {
-            let state = self.state().ok()?;
-            let (catalog, provider) = state.catalogs.get_key_value(first.as_str())?;
-            Some((Arc::clone(catalog), Arc::clone(provider)))
-        });
-        let Some((catalog, provider)) = catalog else {
-            return self.set_default_database(name).await;
-        };
-        let database = match &name[1..] {
-            [] if catalog == self.default_catalog()? => return Ok(()),
-            [] => provider.default_namespace(),
-            database => {
-                let database: Namespace = database.to_vec().try_into()?;
-                let _ = provider.get_database(&database).await?;
-                database
-            }
-        };
-        let mut state = self.state()?;
-        state.default_catalog = catalog;
-        state.default_database = database;
-        Ok(())
-    }
-
     pub async fn get_database<T: AsRef<str>>(
         &self,
         database: &[T],
