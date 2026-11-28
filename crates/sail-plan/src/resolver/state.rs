@@ -36,10 +36,10 @@ pub(super) struct TableSourceKey {
     /// The ANSI mode and the session time zone of the read, which cast the values of the
     /// partitions that the catalog lists, for a source other than Delta Lake and Iceberg.
     pub partition_value_cast: Option<(bool, Arc<str>)>,
-    /// The address of the data sources that the source is created by, for a source other
-    /// than Delta Lake and Iceberg, which a temporary view resolves by the data sources that
-    /// were registered when it was created.
-    pub data_sources: Option<usize>,
+    /// The address of the session that builds the source, for a source that a temporary view
+    /// builds with the session that created it as it was then (see
+    /// [`PlanResolver::source_build_session`]).
+    pub session: Option<usize>,
     /// The catalog instance of the table, for a table that a global temporary view reads
     /// in a catalog of the session that created the view.
     pub session_catalog: Option<usize>,
@@ -57,6 +57,8 @@ pub(super) struct LakePathSourceKey {
     /// The options of the read, sorted by key.
     pub options: Vec<(String, String)>,
     pub schema: Option<Schema>,
+    /// The address of the session that builds the source (see [`TableSourceKey::session`]).
+    pub session: Option<usize>,
 }
 
 impl std::fmt::Debug for SharedTableSource {
@@ -186,6 +188,9 @@ pub(super) struct PlanResolverState {
     /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
     /// reads of a path in the query read one version of the table.
     lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
+    /// Whether the session of each address, which created a temporary view that the query
+    /// reads, builds sources as this session does.
+    same_source_sessions: HashMap<usize, bool>,
     /// The versions of the lake tables read so far, so that the reads of a table in the
     /// query read one version of it, by name or by path and with any read options.
     lake_snapshot_pins: Arc<LakeSnapshotPins>,
@@ -296,6 +301,7 @@ impl PlanResolverState {
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
             lake_path_sources: HashMap::new(),
+            same_source_sessions: HashMap::new(),
             lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
             shared_catalog_tables: HashMap::new(),
@@ -632,6 +638,14 @@ impl PlanResolverState {
             .insert(key, SharedTableSource(source));
     }
 
+    pub fn get_same_source_session(&self, session: usize) -> Option<bool> {
+        self.same_source_sessions.get(&session).copied()
+    }
+
+    pub fn insert_same_source_session(&mut self, session: usize, same: bool) {
+        self.same_source_sessions.insert(session, same);
+    }
+
     pub fn lake_snapshot_pins(&self) -> Arc<LakeSnapshotPins> {
         Arc::clone(&self.lake_snapshot_pins)
     }
@@ -703,6 +717,7 @@ impl PlanResolverState {
             shared_cte_definitions,
             table_sources,
             lake_path_sources,
+            same_source_sessions,
             lake_snapshot_pins,
             catalog_table_lookups,
             shared_catalog_tables,

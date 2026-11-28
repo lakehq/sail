@@ -23,6 +23,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::source_as_provider;
+use datafusion::execution::SessionState;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -42,7 +43,6 @@ use sail_common::spec::{
     SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
 use sail_common_datafusion::catalog::{TableKind, TableStatus, TemporaryViewDefinition};
-use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
@@ -117,6 +117,8 @@ pub(in crate::resolver) struct LakePathOrigin {
     pub read_case_sensitive: bool,
     /// Whether the read options select a version of the table.
     pub travels_in_time: bool,
+    /// The session that builds the source of the read (see [`CatalogTableOrigin::session`]).
+    pub session: Option<Arc<SessionState>>,
 }
 
 /// A read of a catalog table, as the query wrote it.
@@ -144,9 +146,9 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
     pub partition_value_cast: (bool, Arc<str>),
-    /// The data sources that the read resolves the format of the table by: those that the
-    /// query was resolved with.
-    pub data_sources: Arc<DataSourceRegistry>,
+    /// The session that created the temporary view that the read belongs to, as it was then,
+    /// which builds the sources of the read (see [`PlanResolver::source_build_session`]).
+    pub session: Option<Arc<SessionState>>,
 }
 
 /// The source of a table scan in the stored plan of a temporary view. It is not a table
@@ -1211,8 +1213,8 @@ impl PlanResolver<'_> {
         }
         let lake_relation = match &origin.lake_relation {
             Some(name) => {
-                let relation = origin
-                    .data_sources
+                let relation = self
+                    .session_data_sources(origin.session.as_deref())?
                     .get_lake_source_if_supported(format)?
                     .and_then(|x| x.relation_provider())
                     .and_then(|provider| match provider.resolve_relation(name) {
@@ -1725,7 +1727,6 @@ mod tests {
         UserDefinedLogicalNode, col, lit,
     };
     use datafusion_functions::core::get_field;
-    use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_logical_plan::barrier::BarrierNode;
     use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -1750,7 +1751,7 @@ mod tests {
             travels_in_time: false,
             read_case_sensitive: false,
             partition_value_cast: (false, Arc::from("UTC")),
-            data_sources: Arc::new(DataSourceRegistry::new()),
+            session: None,
         }))
     }
 

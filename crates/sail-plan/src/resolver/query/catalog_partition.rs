@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::execution::SessionState;
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
 use sail_catalog::lakehouse::RegisteredFileTable;
@@ -25,6 +26,7 @@ impl PlanResolver<'_> {
     pub(super) async fn create_catalog_table_sources(
         &self,
         manager: &CatalogManager,
+        ctx: &SessionState,
         registry: &DataSourceRegistry,
         origin: &CatalogTableOrigin,
         format: &str,
@@ -50,12 +52,11 @@ impl PlanResolver<'_> {
                 .map(|partitions| (partitions, table.read_options)),
             None => None,
         };
-        let ctx = self.ctx.state();
         let Some((partitions, file_read_options)) = listing else {
             return Ok(vec![
                 registry
                     .get_data_source(format)?
-                    .create_source(&ctx, info)
+                    .create_source(ctx, info)
                     .await?,
             ]);
         };

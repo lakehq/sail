@@ -18,6 +18,7 @@ use sail_common_datafusion::catalog::{TemporaryViewDefinition, TemporaryViewSour
 use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -128,13 +129,19 @@ impl PlanResolver<'_> {
         // The query resolves its names, and resolves them again later, in the catalog and the
         // database that are current now, even if the session changes them meanwhile.
         let namespace = manager.current_namespace()?;
-        // The query resolves its formats by the data sources that are registered now, also
-        // when they are registered again later.
-        let data_sources = Arc::new(self.ctx.extension::<DataSourceRegistry>()?.snapshot()?)
-            as Arc<dyn Any + Send + Sync>;
+        // The query builds the sources of its tables, and builds them again later, with the
+        // configuration and the data sources of the session as they are now.
+        let mut session = self.ctx.state();
+        let config = session.config_mut();
+        if let Some(service) = config.get_extension::<SessionConfigService>() {
+            config.set_extension(Arc::new(service.snapshot()?));
+        }
+        let data_sources = self.ctx.extension::<DataSourceRegistry>()?.snapshot()?;
+        config.set_extension(Arc::new(data_sources));
+        let session = Arc::new(session) as Arc<dyn Any + Send + Sync>;
         let scope = Arc::new(ViewDefinitionScope::create(
             namespace.clone(),
-            Arc::clone(&data_sources),
+            Arc::clone(&session),
         ));
         state.begin_view_definition();
         let input = Arc::clone(&scope)
@@ -183,7 +190,7 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
-                data_sources,
+                session,
                 resolves_at_each_read,
             }))
         } else {

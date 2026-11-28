@@ -7,6 +7,8 @@ use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
+use datafusion::execution::SessionState;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{
     Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
@@ -34,6 +36,7 @@ use sail_common_datafusion::rename::logical_plan::{
     rename_logical_plan, rename_logical_plan_reusing_projection,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::reuse::is_reusable_source;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -263,16 +266,57 @@ impl PlanResolver<'_> {
         Ok(state.share_catalog_table(session_catalog, table, status, resolved))
     }
 
-    /// Returns the data sources that formats are resolved by: those that were registered
-    /// when a temporary view was created, while the view is created or resolves its query
-    /// again, or else those of this session.
-    pub(super) fn data_source_registry(&self) -> PlanResult<Arc<DataSourceRegistry>> {
-        match ViewDefinitionScope::pinned_data_sources()
-            .and_then(|x| x.downcast::<DataSourceRegistry>().ok())
-        {
-            Some(registry) => Ok(registry),
+    /// Returns the session that created a temporary view, as it was when the creation
+    /// began, while the view is created or resolves its query again.
+    pub(super) fn view_session() -> Option<Arc<SessionState>> {
+        ViewDefinitionScope::pinned_session().and_then(|x| x.downcast::<SessionState>().ok())
+    }
+
+    /// Returns the data sources of the session, or of this session.
+    pub(super) fn session_data_sources(
+        &self,
+        session: Option<&SessionState>,
+    ) -> PlanResult<Arc<DataSourceRegistry>> {
+        match session {
+            Some(session) => session
+                .config()
+                .get_extension::<DataSourceRegistry>()
+                .ok_or_else(|| PlanError::internal("session without data sources")),
             None => Ok(self.ctx.extension::<DataSourceRegistry>()?),
         }
+    }
+
+    /// Returns the data sources that formats are resolved by: those of the session that
+    /// created a temporary view, as it was then, while the view is created or resolves its
+    /// query again, or else those of this session.
+    pub(super) fn data_source_registry(&self) -> PlanResult<Arc<DataSourceRegistry>> {
+        self.session_data_sources(Self::view_session().as_deref())
+    }
+
+    /// Returns the session that builds the sources of a read that a temporary view stored with
+    /// `session`, the session that created the view as it was then. A view builds the sources
+    /// of its tables with the configuration and the data sources that its session had, as
+    /// it reads its columns as its session matched them. Returns `None` for this session, which
+    /// builds the sources of a read of a view whose session has the same configuration and
+    /// data sources, so that the view and the direct reads of a table share its sources.
+    pub(super) fn source_build_session(
+        &self,
+        session: Option<&Arc<SessionState>>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<Arc<SessionState>>> {
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        let address = Arc::as_ptr(session) as usize;
+        let same = match state.get_same_source_session(address) {
+            Some(same) => same,
+            None => {
+                let same = same_source_session(session.config(), &self.ctx.session_config())?;
+                state.insert_same_source_session(address, same);
+                same
+            }
+        };
+        Ok((!same).then(|| Arc::clone(session)))
     }
 
     /// Looks up what a read refers to. A read with a required format reads tables only.
@@ -416,7 +460,7 @@ impl PlanResolver<'_> {
                         self.config.ansi_mode,
                         Arc::clone(&self.config.session_timezone),
                     ),
-                    data_sources: Arc::clone(&data_source_registry),
+                    session: Self::view_session(),
                 };
                 // The source has a large future, which the future of every read would
                 // otherwise hold, also in the recursion of the query resolver.
@@ -511,7 +555,8 @@ impl PlanResolver<'_> {
         // Repeated references to the same table within a query share its source,
         // so that they can share scalar subqueries. Delta Lake and Iceberg sources
         // also pin one table snapshot, while file tables still list files for each scan.
-        let data_source_registry = &origin.data_sources;
+        let session = self.source_build_session(origin.session.as_ref(), state)?;
+        let data_source_registry = self.session_data_sources(session.as_deref())?;
         // Delta Lake and Iceberg sources read their columns by the metadata of the table,
         // whatever the letter case of column names is matched by, and do not cast the
         // partition values that the catalog lists.
@@ -535,7 +580,7 @@ impl PlanResolver<'_> {
             temporal_options: origin.temporal_options.clone(),
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
             partition_value_cast: (!is_lake_source).then(|| origin.partition_value_cast.clone()),
-            data_sources: (!is_lake_source).then_some(Arc::as_ptr(data_source_registry) as usize),
+            session: session.as_ref().map(|x| Arc::as_ptr(x) as usize),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(sources) = source_key
@@ -579,17 +624,22 @@ impl PlanResolver<'_> {
             read_case_sensitive: origin.read_case_sensitive,
             snapshot_pins: lake_relation.is_none().then(|| state.lake_snapshot_pins()),
         };
+        let session = match session {
+            Some(session) => session,
+            None => Arc::new(self.ctx.state()),
+        };
         let sources = match lake_relation {
             Some((relation_provider, relation)) => vec![
                 relation_provider
-                    .create_relation(&self.ctx.state(), info, relation)
+                    .create_relation(session.as_ref(), info, relation)
                     .await?,
             ],
             None => {
                 let manager = self.ctx.extension::<CatalogManager>()?;
                 self.create_catalog_table_sources(
                     &manager,
-                    data_source_registry,
+                    &session,
+                    &data_source_registry,
                     origin,
                     &format,
                     resolved.registered_file_table,
@@ -980,6 +1030,7 @@ impl PlanResolver<'_> {
             options,
             paths,
             read_case_sensitive: self.config.case_sensitive,
+            session: Self::view_session(),
         };
         let table_source = self.create_path_source(&origin, is_lake, state).await?;
         self.resolve_table_source_with_rename(
@@ -1002,6 +1053,7 @@ impl PlanResolver<'_> {
         is_lake: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<Arc<dyn TableSource>> {
+        let session = self.source_build_session(read.session.as_ref(), state)?;
         let key = is_lake.then(|| {
             let mut options = read.options.clone();
             options.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1010,6 +1062,7 @@ impl PlanResolver<'_> {
                 paths: read.paths.clone(),
                 options,
                 schema: read.schema.clone(),
+                session: session.as_ref().map(|x| Arc::as_ptr(x) as usize),
             }
         });
         if let Some(source) = key.as_ref().and_then(|x| state.get_lake_path_source(x)) {
@@ -1030,10 +1083,14 @@ impl PlanResolver<'_> {
             read_case_sensitive: read.read_case_sensitive,
             snapshot_pins: Some(state.lake_snapshot_pins()),
         };
-        let source = self
-            .data_source_registry()?
+        let registry = self.session_data_sources(session.as_deref())?;
+        let session = match session {
+            Some(session) => session,
+            None => Arc::new(self.ctx.state()),
+        };
+        let source = registry
             .get_data_source(&read.format)?
-            .create_source(&self.ctx.state(), info)
+            .create_source(session.as_ref(), info)
             .await?;
         if let Some(key) = key
             && is_reusable_source(&source)
@@ -1153,4 +1210,34 @@ fn lake_relation_access_purpose(access: LakeRelationAccess) -> TableAccessPurpos
         LakeRelationAccess::MetadataRead => TableAccessPurpose::MetadataRead,
         LakeRelationAccess::DataRead => TableAccessPurpose::DataRead,
     }
+}
+
+/// Whether the session that created a temporary view, as it was then, builds sources as the
+/// session `live` does, by their configurations: the two have the same Spark configuration,
+/// the same DataFusion configuration, and the same data sources.
+fn same_source_session(session: &SessionConfig, live: &SessionConfig) -> PlanResult<bool> {
+    let spark = |config: &SessionConfig| {
+        config
+            .get_extension::<SessionConfigService>()
+            .map(|x| x.get_options_with_prefix(""))
+            .transpose()
+    };
+    let options = |config: &SessionConfig| {
+        config
+            .options()
+            .entries()
+            .into_iter()
+            .map(|x| (x.key, x.value))
+            .collect::<Vec<_>>()
+    };
+    let data_sources = |config: &SessionConfig| {
+        config
+            .get_extension::<DataSourceRegistry>()
+            .ok_or_else(|| PlanError::internal("session without data sources"))
+    };
+    if spark(session)? != spark(live)? || options(session) != options(live) {
+        return Ok(false);
+    }
+    let (data_sources, live_data_sources) = (data_sources(session)?, data_sources(live)?);
+    Ok(data_sources.has_same_sources(&live_data_sources)?)
 }

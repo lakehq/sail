@@ -163,6 +163,12 @@ mod tests {
         ) -> Result<std::collections::BTreeMap<String, String>> {
             Ok(Default::default())
         }
+
+        fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+            Err(DataFusionError::NotImplemented(
+                "snapshot of a test provider".to_string(),
+            ))
+        }
     }
 
     fn state(provider: Arc<Provider>) -> SessionState {

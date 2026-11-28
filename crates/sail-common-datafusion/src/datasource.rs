@@ -606,6 +606,19 @@ impl DataSourceRegistry {
         })
     }
 
+    /// Whether the two registries have the same data sources under the same names.
+    pub fn has_same_sources(&self, other: &Self) -> Result<bool> {
+        let error = || plan_datafusion_err!("data source registry poisoned");
+        let sources = self.sources.read().map_err(|_| error())?;
+        let others = other.sources.read().map_err(|_| error())?;
+        Ok(sources.len() == others.len()
+            && sources.iter().all(|(name, source)| {
+                others
+                    .get(name)
+                    .is_some_and(|other| Arc::ptr_eq(source, other))
+            }))
+    }
+
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
         let mut sources = self
             .sources

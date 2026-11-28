@@ -6,10 +6,13 @@
 
 from __future__ import annotations
 
+import datetime
 import shutil
 import time
 import uuid
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.functions import array, col, count, explode, pandas_udf, rand, udf, xxhash64
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
@@ -2093,6 +2096,99 @@ def test_view_reads_the_table_of_the_database_that_it_was_created_in(spark, tmp_
         spark.sql(f"DROP DATABASE {second} CASCADE")
 
 
+# A table partitioned by `p`, the partition directories with the `id` of their file, the
+# configuration that the view is created with, the configuration that it is read with, and
+# the rows of the view.
+DISCOVERY_CASES = {
+    "ansi": (
+        "id INT, p DATE",
+        [("p=2024-01-01", 1), ("p=notadate", 2)],
+        {"spark.sql.ansi.enabled": "false"},
+        {"spark.sql.ansi.enabled": "true"},
+        [(1, datetime.date(2024, 1, 1)), (2, None)],
+    ),
+    "validation": (
+        "id INT, p INT",
+        [("p=1", 1), ("p=bad", 2)],
+        {"spark.sql.sources.validatePartitionColumns": "false"},
+        {"spark.sql.sources.validatePartitionColumns": "true"},
+        [(1, 1), (2, None)],
+    ),
+    "invalid_paths": (
+        "id INT, p INT",
+        [("p=1", 1), ("junk", 2)],
+        {"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+        {"spark.sql.files.ignoreInvalidPartitionPaths": "false"},
+        [(1, 1)],
+    ),
+}
+
+
+def set_conf(spark, conf):
+    for key, value in conf.items():
+        spark.conf.set(key, value)
+
+
+@pytest.fixture
+def merge_schema_off(spark):
+    """Partition values are cast when the files are discovered only without schema merging."""
+    key = "spark.sql.parquet.mergeSchema"
+    previous = spark.conf.get(key)
+    spark.conf.set(key, "false")
+    yield
+    spark.conf.set(key, previous)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the partition discovery settings of Spark 4")
+@pytest.mark.usefixtures("merge_schema_off")
+@pytest.mark.parametrize("case", list(DISCOVERY_CASES))
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_discovers_partitions_with_the_configuration_of_its_creation(spark, tmp_path, case, kind):
+    columns, directories, created, read, expected = DISCOVERY_CASES[case]
+    keys = {*created, *read}
+    previous = {key: spark.conf.get(key) for key in keys}
+    name = f"t_{uuid.uuid4().hex}"
+    location = tmp_path / name
+    for directory, id_ in directories:
+        (location / directory).mkdir(parents=True)
+        pq.write_table(pa.table({"id": pa.array([id_], pa.int32())}), location / directory / "data.parquet")
+    try:
+        set_conf(spark, created)
+        spark.sql(f"CREATE TABLE {name} ({columns}) USING parquet PARTITIONED BY (p) LOCATION '{location}'")
+        view = create_view(spark, kind, f"SELECT id, p FROM {name}")
+        set_conf(spark, read)
+        assert rows(spark, f"SELECT * FROM {view}") == expected
+    finally:
+        set_conf(spark, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.usefixtures("merge_schema_off")
+@pytest.mark.parametrize("kind", ["sv", "dv", "gv", "dgv"])
+def test_view_reads_timestamp_partitions_in_the_time_zone_of_its_creation(spark, observer, tmp_path, kind):
+    key = "spark.sql.session.timeZone"
+    previous = spark.conf.get(key)
+    name = f"t_{uuid.uuid4().hex}"
+    location = tmp_path / name
+    (location / "ts=2024-01-01").mkdir(parents=True)
+    pq.write_table(pa.table({"id": pa.array([1], pa.int32())}), location / "ts=2024-01-01" / "data.parquet")
+    try:
+        spark.conf.set(key, "UTC")
+        spark.sql(f"CREATE TABLE {name} (id INT, ts TIMESTAMP) USING parquet PARTITIONED BY (ts) LOCATION '{location}'")
+        view = create_view(spark, kind, f"SELECT CAST(ts AS BIGINT) AS e FROM {name}")
+        spark.conf.set(key, "America/Los_Angeles")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1704067200,)]
+        # A direct read in the same query discovers the partitions in the time zone of the session.
+        direct = f"SELECT * FROM {view} UNION ALL SELECT CAST(ts AS BIGINT) FROM {name}"
+        assert rows(spark, direct) == [(1704067200,), (1704096000,)]
+        if view.startswith("global_temp."):
+            observer.conf.set(key, "Asia/Tokyo")
+            assert rows(observer, f"SELECT * FROM {view}") == [(1704067200,)]
+    finally:
+        spark.conf.set(key, previous)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 def test_view_resolved_again_in_a_table_argument_resolves_as_when_it_was_created(spark, tables, kind):
     from pyspark.sql.functions import udtf
@@ -2358,6 +2454,46 @@ def test_view_over_a_python_data_source_table_reads_by_the_sources_registered_at
         for view in views:
             drop_view(spark, view)
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_reads_its_table_after_a_data_source_of_the_database_name_is_registered(spark, tmp_path, kind):
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
+    database = f"db_{uuid.uuid4().hex}"
+
+    class Reader(DataSourceReader):
+        def read(self, partition):  # noqa: ARG002
+            yield (99,)
+
+    class Source(DataSource):
+        @classmethod
+        def name(cls):
+            return database
+
+        def schema(self):
+            return StructType([StructField("id", IntegerType())])
+
+        def reader(self, schema):  # noqa: ARG002
+            return Reader()
+
+    spark.sql(f"CREATE DATABASE {database}")
+    views = []
+    try:
+        spark.sql(f"CREATE TABLE {database}.t (id INT) USING parquet LOCATION '{tmp_path / database}'")
+        spark.sql(f"INSERT INTO {database}.t VALUES (1)")
+        view = create_view(spark, kind, f"SELECT * FROM {database}.t")
+        views.append(view)
+        spark.dataSource.register(Source)
+        # The view resolves its query again, in which the name still names the table.
+        spark.sql(f"ALTER TABLE {database}.t ADD COLUMNS (x INT)")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    finally:
+        for view in views:
+            drop_view(spark, view)
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 PATH_KINDS = [*KINDS, "using"]

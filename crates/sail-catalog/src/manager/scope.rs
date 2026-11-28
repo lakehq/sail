@@ -22,11 +22,11 @@ tokio::task_local! {
 #[derive(Debug)]
 pub enum ViewDefinitionScope {
     /// The view is created in the catalog and the database that were current when the
-    /// creation began, with the data sources that were registered then, and the temporary
-    /// views and the functions of the session that the query resolves are recorded.
+    /// creation began, with the session as it was then, and the temporary views and the
+    /// functions of the session that the query resolves are recorded.
     Create {
         namespace: (Arc<str>, Namespace),
-        data_sources: Arc<dyn Any + Send + Sync>,
+        session: Arc<dyn Any + Send + Sync>,
         objects: Mutex<TemporaryViewObjects>,
     },
     /// The view resolves its query again. A name that referred to a temporary view or a
@@ -36,13 +36,10 @@ pub enum ViewDefinitionScope {
 }
 
 impl ViewDefinitionScope {
-    pub fn create(
-        namespace: (Arc<str>, Namespace),
-        data_sources: Arc<dyn Any + Send + Sync>,
-    ) -> Self {
+    pub fn create(namespace: (Arc<str>, Namespace), session: Arc<dyn Any + Send + Sync>) -> Self {
         Self::Create {
             namespace,
-            data_sources,
+            session,
             objects: Mutex::default(),
         }
     }
@@ -108,12 +105,12 @@ impl ViewDefinitionScope {
         catalogs.get(name).cloned()
     }
 
-    /// Returns the data sources that were registered in the session that created the view
-    /// when the creation began, while the view is created or resolves its query again.
-    pub fn pinned_data_sources() -> Option<Arc<dyn Any + Send + Sync>> {
+    /// Returns the session that created the view, as it was when the creation began, while
+    /// the view is created or resolves its query again.
+    pub fn pinned_session() -> Option<Arc<dyn Any + Send + Sync>> {
         match Self::current()?.as_ref() {
-            Self::Create { data_sources, .. } => Some(Arc::clone(data_sources)),
-            Self::Resolve(definition) => Some(Arc::clone(&definition.data_sources)),
+            Self::Create { session, .. } => Some(Arc::clone(session)),
+            Self::Resolve(definition) => Some(Arc::clone(&definition.session)),
         }
     }
 

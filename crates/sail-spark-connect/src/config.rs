@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use datafusion::common::{Result, internal_datafusion_err};
+use sail_common_datafusion::session::config::SessionConfigProvider;
 use sail_plan::config::{
     DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
 };
@@ -39,10 +41,27 @@ impl From<ConfigKeyValue> for connect::KeyValue {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SparkRuntimeConfig {
     entries:
         &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,
     config: HashMap<String, String>,
+}
+
+/// A snapshot of the configuration of a session.
+impl SessionConfigProvider for SparkRuntimeConfig {
+    fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
+        Ok(self.options(keys))
+    }
+
+    fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
+        self.options_with_prefix(prefix)
+            .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+
+    fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+        Ok(Arc::new(self.clone()))
+    }
 }
 
 impl SparkRuntimeConfig {
@@ -208,6 +227,20 @@ impl SparkRuntimeConfig {
                 key: k.to_string(),
                 value: Some(v.to_string()),
             })
+            .collect())
+    }
+
+    fn options(&self, keys: &[&str]) -> Vec<Option<String>> {
+        keys.iter()
+            .map(|key| self.get_option(key).map(str::to_owned))
+            .collect()
+    }
+
+    fn options_with_prefix(&self, prefix: &str) -> SparkResult<BTreeMap<String, String>> {
+        Ok(self
+            .get_all(Some(prefix))?
+            .into_iter()
+            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
             .collect())
     }
 

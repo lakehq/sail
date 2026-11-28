@@ -190,6 +190,13 @@ mod tests {
             }
             Ok(self.options.clone())
         }
+
+        fn snapshot(&self) -> datafusion_common::Result<Arc<dyn SessionConfigProvider>> {
+            Ok(Arc::new(Self {
+                options: self.options.clone(),
+                fail: self.fail,
+            }))
+        }
     }
 
     fn state(properties: &[(&str, &str)], fail: bool) -> SessionState {

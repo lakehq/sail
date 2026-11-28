@@ -190,9 +190,10 @@ pub struct TemporaryViewDefinition {
     /// The catalogs of the session that each session has its own instance of, in which the
     /// query resolves again in any session.
     pub catalogs: Arc<dyn Any + Send + Sync>,
-    /// The data sources that were registered in the session that created the view when it
-    /// was created, by which the query resolves its formats again in any session.
-    pub data_sources: Arc<dyn Any + Send + Sync>,
+    /// The session that created the view, as it was when the view was created: its
+    /// configuration and its data sources, by which the query builds the sources of its
+    /// tables again in any session.
+    pub session: Arc<dyn Any + Send + Sync>,
     /// Whether the query resolves again at each read of the view, as Spark analyzes it: the
     /// query read tables that the plan of the view does not scan, or persistent views, which
     /// can be defined again.
@@ -207,7 +208,7 @@ impl PartialEq for TemporaryViewDefinition {
             && self.database == other.database
             && Arc::ptr_eq(&self.config, &other.config)
             && Arc::ptr_eq(&self.catalogs, &other.catalogs)
-            && Arc::ptr_eq(&self.data_sources, &other.data_sources)
+            && Arc::ptr_eq(&self.session, &other.session)
             && self.resolves_at_each_read == other.resolves_at_each_read
     }
 }

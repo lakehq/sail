@@ -64,10 +64,7 @@ impl SessionConfigProvider for SparkSession {
             .state
             .lock()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(keys
-            .iter()
-            .map(|key| state.config.get_option(key).map(str::to_owned))
-            .collect())
+        state.config.get_options(keys)
     }
 
     fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
@@ -75,13 +72,15 @@ impl SessionConfigProvider for SparkSession {
             .state
             .lock()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(state
-            .config
-            .get_all(Some(prefix))
-            .map_err(|e| internal_datafusion_err!("{e}"))?
-            .into_iter()
-            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
-            .collect())
+        state.config.get_options_with_prefix(prefix)
+    }
+
+    fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        state.config.snapshot()
     }
 }
 
