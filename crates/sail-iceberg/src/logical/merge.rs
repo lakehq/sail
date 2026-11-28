@@ -127,6 +127,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         MERGE_FILE_COLUMN,
         row_index_column,
         &row_metadata_columns,
+        &[],
         MergePlanRequirements {
             preserve_unmodified_target_rows: mode == RowLevelWriteMode::CopyOnWrite
                 || target_presence_only,

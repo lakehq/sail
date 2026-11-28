@@ -14,21 +14,30 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use super::context::PlannerContext;
 use super::utils::prepare_delta_writer_input;
 use crate::change_data_feed::CHANGE_TYPE_COLUMN;
+use crate::datasource::UNPARSED_PARTITION_VALUE_PREFIX;
 use crate::physical_plan::{DeltaWriteContext, DeltaWriterExec, DeltaWriterExecOptions};
 
+/// Projects the columns of `schema` and the change type. The partition values that do not parse
+/// pass through, so that the change data keeps them.
 pub(super) fn tag_change_rows(
     input: Arc<dyn ExecutionPlan>,
     schema: &SchemaRef,
     change_type: &str,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let unparsed = input_schema
+        .fields()
+        .iter()
+        .filter(|field| field.name().starts_with(UNPARSED_PARTITION_VALUE_PREFIX));
     let mut expressions = schema
         .fields()
         .iter()
+        .chain(unparsed)
         .map(|field| {
             Ok((
                 Arc::new(Column::new(
                     field.name(),
-                    input.schema().index_of(field.name())?,
+                    input_schema.index_of(field.name())?,
                 )) as Arc<dyn PhysicalExpr>,
                 field.name().clone(),
             ))

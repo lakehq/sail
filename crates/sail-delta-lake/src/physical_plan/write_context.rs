@@ -323,7 +323,9 @@ pub fn prepare_delta_write_context(
 }
 
 fn is_writer_metric_column(name: &str) -> bool {
-    name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
+    name == OPERATION_COLUMN
+        || name == MERGE_SOURCE_METRIC_COLUMN
+        || name.starts_with(crate::datasource::UNPARSED_PARTITION_VALUE_PREFIX)
 }
 
 fn schema_without_writer_metric_columns(schema: &SchemaRef, preimage: Option<&str>) -> SchemaRef {

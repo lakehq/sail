@@ -867,6 +867,7 @@ pub(crate) async fn load_delta_read_state(
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
         metadata_aggregate: None,
+        unparsed_partition_values: false,
     };
 
     Ok((snapshot, log_store, scan_config))

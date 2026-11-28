@@ -786,6 +786,10 @@ pub fn rewrite_row_level_target_condition(
         .transpose()
 }
 
+/// `value_columns` pairs metadata columns of the target that carry a value of a target column
+/// with that column. Such a column is kept for the rows the UPDATE writes, except that it is NULL
+/// in the updated rows when the UPDATE writes the target column: by assigning it, or by
+/// generating it.
 pub fn expand_update(
     info: UpdateInfo,
     mode: RowLevelWriteMode,
@@ -793,7 +797,14 @@ pub fn expand_update(
     path_column: &str,
     row_index_column: Option<&str>,
     metadata_columns: &[&str],
+    value_columns: &[(&str, &str)],
 ) -> Result<RowLevelWriteNode> {
+    let metadata_columns = metadata_columns
+        .iter()
+        .copied()
+        .chain(value_columns.iter().map(|(name, _)| *name))
+        .collect::<Vec<_>>();
+    let metadata_columns = metadata_columns.as_slice();
     let UpdateInfo {
         target_plan,
         target,
@@ -888,7 +899,22 @@ pub fn expand_update(
         write_projection.push(value.alias(name));
     }
     for name in std::iter::once(path_column).chain(metadata_columns.iter().copied()) {
-        write_projection.push(col(name).alias(name));
+        let written = value_columns.iter().any(|(value_column, column)| {
+            let column = row_level_name_key(column, case_sensitive);
+            *value_column == name
+                && (assigned_columns.contains(&column)
+                    || generated_column_exprs.iter().any(|(generated, _)| {
+                        row_level_name_key(generated, case_sensitive) == column
+                    }))
+        });
+        let value = if !written {
+            col(name)
+        } else if split_subqueries {
+            lit(ScalarValue::Utf8(None))
+        } else {
+            when(predicate.clone(), lit(ScalarValue::Utf8(None))).otherwise(col(name))?
+        };
+        write_projection.push(value.alias(name));
         copy_projection.push(col(name).alias(name));
     }
     let write_rows = if split_subqueries {
@@ -950,20 +976,25 @@ pub fn expand_update(
     )?;
 
     let change_data = if requirements.change_data {
-        let mut before = normalized
+        // The change data keeps the values of the value columns, before and after the update.
+        let change_columns = normalized
             .field_names
             .iter()
-            .map(|name| Expr::Column(Column::from_name(name)))
+            .map(String::as_str)
+            .chain(value_columns.iter().map(|(name, _)| *name))
+            .collect::<Vec<_>>();
+        let mut before = change_columns
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(*name)))
             .collect::<Vec<_>>();
         before.push(lit("update_preimage").alias("_change_type"));
         let before = LogicalPlanBuilder::from(normalized.plan.clone())
             .filter(predicate.clone())?
             .project(before)?
             .build()?;
-        let mut after = normalized
-            .field_names
+        let mut after = change_columns
             .iter()
-            .map(|name| Expr::Column(Column::from_name(name)))
+            .map(|name| Expr::Column(Column::from_name(*name)))
             .collect::<Vec<_>>();
         after.push(lit("update_postimage").alias("_change_type"));
         let after = LogicalPlanBuilder::from(write_rows.clone())

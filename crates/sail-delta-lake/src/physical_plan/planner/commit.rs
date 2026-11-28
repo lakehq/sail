@@ -36,7 +36,6 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
-use super::metadata_predicate::build_rewrite_guard;
 use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
@@ -138,14 +137,14 @@ pub async fn build_adds_from_touched_files(
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
     let touched_meta = join_touched_file_metadata(touched_plan, meta_scan)?;
-    let discovery = DeltaDiscoveryExec::new(
+
+    Ok(Arc::new(DeltaDiscoveryExec::new(
         touched_meta,
         table_url.clone(),
         version,
         partition_columns.to_vec(),
         true, // partition_scan
-    )?;
-    build_rewrite_guard(ctx.session(), discovery, snapshot)
+    )?))
 }
 
 fn join_touched_file_metadata(

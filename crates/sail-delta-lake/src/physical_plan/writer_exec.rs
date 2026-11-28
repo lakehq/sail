@@ -49,6 +49,7 @@ use sail_function::scalar::datetime::timestamp_cast::{
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::datasource::UNPARSED_PARTITION_VALUE_PREFIX;
 use crate::delta_log::get_object_store_from_context;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
@@ -893,13 +894,15 @@ impl DeltaWriterExec {
                             &identity_steps,
                             &mut identity_candidates,
                         )?;
-                        let change = Self::validate_and_adapt_batch(
-                            change,
-                            &change_data_schema(&writer_schema),
-                            logical_cdc_schema.as_ref(),
-                            kernel_mode,
-                            timezone.as_deref(),
-                        )?;
+                        let change = keeping_unparsed_partition_values(change, |change| {
+                            Self::validate_and_adapt_batch(
+                                change,
+                                &change_data_schema(&writer_schema),
+                                logical_cdc_schema.as_ref(),
+                                kernel_mode,
+                                timezone.as_deref(),
+                            )
+                        })?;
                         change_writer
                             .write(&change)
                             .await
@@ -937,13 +940,15 @@ impl DeltaWriterExec {
                     target_names
                 );
 
-                let validated_batch = Self::validate_and_adapt_batch(
-                    batch,
-                    &writer_schema,
-                    logical_schema_for_mapping.as_ref(),
-                    kernel_mode,
-                    timezone.as_deref(),
-                )?;
+                let validated_batch = keeping_unparsed_partition_values(batch, |batch| {
+                    Self::validate_and_adapt_batch(
+                        batch,
+                        &writer_schema,
+                        logical_schema_for_mapping.as_ref(),
+                        kernel_mode,
+                        timezone.as_deref(),
+                    )
+                })?;
 
                 writer
                     .write(&validated_batch)
@@ -1520,6 +1525,47 @@ pub(super) fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
         true,
     )));
     Arc::new(Schema::new(fields))
+}
+
+/// Adapts `batch` without the columns that carry the partition values that do not parse, and
+/// appends them to the result, since the writer uses them as the partition values of the files it
+/// writes.
+fn keeping_unparsed_partition_values(
+    batch: RecordBatch,
+    adapt: impl FnOnce(RecordBatch) -> Result<RecordBatch>,
+) -> Result<RecordBatch> {
+    let schema = batch.schema();
+    let (unparsed, data): (Vec<usize>, Vec<usize>) =
+        (0..schema.fields().len()).partition(|&index| {
+            schema
+                .field(index)
+                .name()
+                .starts_with(UNPARSED_PARTITION_VALUE_PREFIX)
+        });
+    if unparsed.is_empty() {
+        return adapt(batch);
+    }
+    let adapted = adapt(batch.project(&data)?)?;
+    let adapted_schema = adapted.schema();
+    let fields = adapted_schema
+        .fields()
+        .iter()
+        .chain(unparsed.iter().map(|&index| &schema.fields()[index]))
+        .cloned()
+        .collect::<Vec<_>>();
+    let columns = adapted
+        .columns()
+        .iter()
+        .chain(unparsed.iter().map(|&index| batch.column(index)))
+        .cloned()
+        .collect();
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            adapted_schema.metadata().clone(),
+        )),
+        columns,
+    )?)
 }
 
 #[cfg(test)]

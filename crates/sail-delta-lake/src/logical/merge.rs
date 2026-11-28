@@ -32,10 +32,24 @@ pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
     let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
         && matches!(mode, RowLevelWriteMode::MergeOnRead))
     .then_some(MERGE_ROW_INDEX_COLUMN);
+    // A MERGE that can rewrite target rows keeps the partition values that do not parse, unless
+    // a clause assigns them.
+    let unparsed = if info.options.matched_clauses.is_empty()
+        && info.options.not_matched_by_source_clauses.is_empty()
+    {
+        vec![]
+    } else {
+        unparsed_partition_value_columns(&info.target)?
+    };
+    let unparsed_names = unparsed
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
     let mut target_plan = ensure_row_level_metadata_columns(
         info.target.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
+        &unparsed_names,
     )?;
     let target_fields: Vec<String> = target_plan
         .schema()
@@ -47,20 +61,22 @@ pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
         "rewrite target_plan schema after ensure_row_level_metadata_columns: {:?}",
         target_fields
     );
-    if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
-        || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))
+    let required_columns = std::iter::once(MERGE_FILE_COLUMN)
+        .chain(row_index_column)
+        .chain(unparsed_names.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    if required_columns
+        .iter()
+        .any(|column| !target_fields.iter().any(|n| n == column))
     {
         let mut exprs: Vec<Expr> = target_fields
             .iter()
             .map(|name| Expr::Column(Column::from_name(name.clone())))
             .collect();
-        if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
-            exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
-        }
-        if let Some(row_index_column) = row_index_column
-            && !target_fields.iter().any(|n| n == row_index_column)
-        {
-            exprs.push(Expr::Column(Column::from_name(row_index_column)).alias(row_index_column));
+        for column in required_columns {
+            if !target_fields.iter().any(|n| n == column) {
+                exprs.push(Expr::Column(Column::from_name(column)).alias(column));
+            }
         }
         target_plan = LogicalPlanBuilder::from(target_plan)
             .project(exprs)?
@@ -87,11 +103,16 @@ pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
+    let unparsed = unparsed
+        .iter()
+        .map(|(name, column)| (name.as_str(), column.as_str()))
+        .collect::<Vec<_>>();
     let expansion = expand_merge(
         info,
         MERGE_FILE_COLUMN,
         row_index_column,
         &[],
+        &unparsed,
         MergePlanRequirements {
             preserve_unmodified_target_rows: matches!(mode, RowLevelWriteMode::CopyOnWrite),
             source_metrics: true,
@@ -269,6 +290,7 @@ fn try_enable_row_level_metadata_columns(
     source: &Arc<dyn TableSource>,
     file_col: &str,
     row_index_col: Option<&str>,
+    unparsed_partition_values: bool,
 ) -> Result<
     Option<(
         Arc<dyn TableSource>,
@@ -292,6 +314,13 @@ fn try_enable_row_level_metadata_columns(
         new_source = delta_source.with_row_index_column(row_index_col)?;
         changed = true;
     }
+    if let Some(delta_source) = new_source.downcast_ref::<DeltaTableSource>()
+        && unparsed_partition_values
+        && !delta_source.config().unparsed_partition_values
+    {
+        new_source = delta_source.with_unparsed_partition_values()?;
+        changed = true;
+    }
     if changed {
         let schema = new_source.schema();
         return Ok(Some((new_source, schema)));
@@ -305,17 +334,24 @@ pub(super) fn ensure_row_level_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
     row_index_col: Option<&str>,
+    unparsed_cols: &[String],
 ) -> Result<LogicalPlan> {
     let mut metadata_cols = vec![file_col];
     if let Some(row_index_col) = row_index_col {
         metadata_cols.push(row_index_col);
     }
+    metadata_cols.extend(unparsed_cols.iter().map(String::as_str));
     let transformed = plan
         .transform_up(|plan| {
             // First, configure table scans to expose the file path column.
             if let LogicalPlan::TableScan(scan) = &plan
                 && let Some((new_source, schema)) =
-                    try_enable_row_level_metadata_columns(&scan.source, file_col, row_index_col)?
+                    try_enable_row_level_metadata_columns(
+                        &scan.source,
+                        file_col,
+                        row_index_col,
+                        !unparsed_cols.is_empty(),
+                    )?
                 {
                     trace!(
                         "ensure_row_level_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
@@ -434,6 +470,33 @@ pub(super) fn ensure_row_level_metadata_columns(
     );
 
     Ok(transformed)
+}
+
+/// The [`crate::datasource::unparsed_partition_value_column`] of each partition column of the
+/// Delta table that `plan` scans whose values may not parse, with the logical name of the
+/// partition column.
+pub(super) fn unparsed_partition_value_columns(
+    plan: &LogicalPlan,
+) -> Result<Vec<(String, String)>> {
+    let mut columns = vec![];
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            columns = crate::datasource::unparsed_partition_columns(source.snapshot())
+                .into_iter()
+                .map(|column| {
+                    (
+                        crate::datasource::unparsed_partition_value_column(&column.physical_name),
+                        column.logical_name,
+                    )
+                })
+                .collect();
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(columns)
 }
 
 pub(super) fn change_data_enabled(plan: &LogicalPlan) -> Result<bool> {

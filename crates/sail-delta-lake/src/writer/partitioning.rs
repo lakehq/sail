@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 
 use crate::conversion::ScalarExt;
+use crate::datasource::unparsed_partition_value_column;
 use crate::spec::DeltaError as DeltaTableError;
 
 /// A contiguous range of rows that share the same partition values.
@@ -56,9 +57,22 @@ pub(crate) fn partition_ranges(
         })
         .collect::<Result<_, _>>()?;
 
+    // A rewrite carries the partition values that do not parse, which its files keep. A batch
+    // without such values is grouped by the partition columns alone.
+    let unparsed_indices: Vec<Option<usize>> = physical_partition_columns
+        .iter()
+        .map(|name| {
+            schema
+                .index_of(&unparsed_partition_value_column(name))
+                .ok()
+                .filter(|&index| values.column(index).null_count() < values.num_rows())
+        })
+        .collect();
+
     // Build comparable rows for partition columns (no sorting, just detect contiguous groups).
     let partition_arrays: Vec<ArrayRef> = partition_indices
         .iter()
+        .chain(unparsed_indices.iter().flatten())
         .map(|&idx| values.column(idx).clone())
         .collect();
     let sort_fields = partition_arrays
@@ -81,6 +95,7 @@ pub(crate) fn partition_ranges(
                 values,
                 physical_partition_columns,
                 &partition_indices,
+                &unparsed_indices,
                 start,
                 i,
             )?;
@@ -93,6 +108,7 @@ pub(crate) fn partition_ranges(
         values,
         physical_partition_columns,
         &partition_indices,
+        &unparsed_indices,
         start,
         rows.num_rows(),
     )?;
@@ -108,6 +124,7 @@ fn push_partition_range(
     values: &RecordBatch,
     physical_partition_columns: &[String],
     partition_indices: &[usize],
+    unparsed_indices: &[Option<usize>],
     start: usize,
     end: usize,
 ) -> Result<(), DeltaTableError> {
@@ -119,7 +136,16 @@ fn push_partition_range(
     // Extract partition key values from the first row in the range.
     let partition_key_iter = partition_indices
         .iter()
-        .map(|&idx| {
+        .zip(unparsed_indices)
+        .map(|(&idx, unparsed)| {
+            // The partition value reads as NULL where it does not parse.
+            if let Some(unparsed) = unparsed
+                && values.column(idx).is_null(start)
+                && let Some(raw) = values.column(*unparsed).as_string_opt::<i32>()
+                && raw.is_valid(start)
+            {
+                return Ok(ScalarValue::Utf8(Some(raw.value(start).to_string())));
+            }
             let col = values.column(idx);
             ScalarValue::from_array(col.as_ref(), start)
                 .ok_or_else(|| DeltaTableError::generic("failed to parse partition value"))

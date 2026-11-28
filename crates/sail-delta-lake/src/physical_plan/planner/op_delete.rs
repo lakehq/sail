@@ -18,9 +18,7 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
-use super::metadata_predicate::{
-    build_metadata_filter, build_rewrite_guard, predicate_requires_stats,
-};
+use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
     LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
@@ -82,20 +80,13 @@ pub async fn build_delete_plan(
         snapshot_state.schema(),
         condition_expr.clone(),
     )?;
-    let find_files_writer = DeltaDiscoveryExec::new(
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_w,
         ctx.table_url().clone(),
         version,
         partition_columns.clone(),
         partition_only,
-    )?;
-    // A partition-only DELETE removes whole files, which follows the partition filter rules.
-    // Otherwise the files are rewritten, and the remove branch below removes the same files.
-    let find_files_writer: Arc<dyn ExecutionPlan> = if partition_only {
-        Arc::new(find_files_writer)
-    } else {
-        build_rewrite_guard(ctx.session(), find_files_writer, snapshot_state)?
-    };
+    )?);
 
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
@@ -126,13 +117,17 @@ pub async fn build_delete_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    // A rewritten file keeps the partition values that do not parse.
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         find_files_writer,
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema.clone(),
-        crate::datasource::DeltaScanConfig::default(),
+        crate::datasource::with_unparsed_partition_value_fields(&table_schema, snapshot_state),
+        crate::datasource::DeltaScanConfig {
+            unparsed_partition_values: true,
+            ..Default::default()
+        },
         None,
         None,
         None,

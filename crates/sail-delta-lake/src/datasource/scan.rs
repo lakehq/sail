@@ -39,7 +39,9 @@ use crate::conversion::ScalarConverter;
 use crate::datasource::deletion_vector::{DeltaFileDeletionVector, DeltaParquetSource};
 use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{
-    DeltaScanConfig, create_object_store_url, partition_value_parsers, partitioned_file_from_action,
+    DeltaScanConfig, create_object_store_url, partition_value_parsers,
+    partitioned_file_from_action, unparsed_partition_columns, unparsed_partition_value_column,
+    unparsed_partition_value_field,
 };
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
@@ -106,6 +108,13 @@ pub(crate) fn file_scan_logical_names(
     }
     if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
         names.push(commit_timestamp_column_name.clone());
+    }
+    if scan_config.unparsed_partition_values {
+        names.extend(
+            unparsed_partition_columns(snapshot)
+                .iter()
+                .map(|column| unparsed_partition_value_column(&column.physical_name)),
+        );
     }
     if let Some(row_index_column_name) = &scan_config.row_index_column_name {
         names.push(row_index_column_name.clone());
@@ -246,6 +255,16 @@ pub async fn build_file_scan_config(
         &complete_schema,
         snapshot.partition_time_zone(),
     )?;
+    let unparsed_partition_columns = if config.unparsed_partition_values {
+        let columns = unparsed_partition_columns(snapshot);
+        partition_columns_mapped
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| columns.contains(column))
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
         &file_schema,
@@ -315,6 +334,16 @@ pub async fn build_file_scan_config(
                     action.commit_timestamp,
                 ));
         }
+        for (index, column) in &unparsed_partition_columns {
+            // A value that does not parse is NULL among the partition values.
+            let raw = action
+                .partition_values
+                .get(&column.physical_name)
+                .and_then(Option::as_deref)
+                .filter(|raw| !raw.is_empty() && part.partition_values[*index].is_null());
+            part.partition_values
+                .push(ScalarValue::Utf8(raw.map(str::to_string)));
+        }
 
         file_groups
             .entry(part.partition_values.clone())
@@ -382,6 +411,11 @@ pub async fn build_file_scan_config(
             true,
         )));
     }
+    table_partition_cols_schema.extend(
+        unparsed_partition_columns
+            .iter()
+            .map(|(_, column)| unparsed_partition_value_field(column)),
+    );
 
     // Configure Parquet source with pushdown filter
     let parquet_options = TableParquetOptions {

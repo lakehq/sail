@@ -103,6 +103,11 @@ impl DeltaTableSource {
             &config.commit_timestamp_column_name,
             config.schema.clone(),
         )?;
+        let schema = if config.unparsed_partition_values {
+            crate::datasource::with_unparsed_partition_value_fields(&schema, &snapshot)
+        } else {
+            schema
+        };
         Ok(Self {
             snapshot,
             log_store,
@@ -151,6 +156,20 @@ impl DeltaTableSource {
         let mut source = self.clone();
         source.file_selection = DeltaFileSelection::Selected(indices.into());
         Ok(source)
+    }
+
+    /// A source that also exposes the partition values that do not parse, for a rewrite.
+    pub fn with_unparsed_partition_values(&self) -> Result<Arc<dyn TableSource>> {
+        let mut new_config = self.config.clone();
+        new_config.unparsed_partition_values = true;
+        let mut new_source = DeltaTableSource::try_new(
+            Arc::clone(&self.snapshot),
+            self.log_store.clone(),
+            new_config,
+        )
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        new_source.file_selection = self.file_selection.clone();
+        Ok(Arc::new(new_source))
     }
 }
 

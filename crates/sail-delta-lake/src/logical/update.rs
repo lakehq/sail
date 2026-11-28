@@ -11,7 +11,10 @@ use sail_common_datafusion::datasource::{
 };
 use sail_logical_plan::row_level::{RowLevelEffectRequirements, expand_update};
 
-use super::merge::{ensure_row_level_metadata_columns, select_delta_row_level_write_mode};
+use super::merge::{
+    ensure_row_level_metadata_columns, select_delta_row_level_write_mode,
+    unparsed_partition_value_columns,
+};
 
 pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
     let mode = select_delta_row_level_write_mode(&info.target_plan)?;
@@ -22,11 +25,22 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         row_index_deletes: row_index_column.is_some(),
         change_data: super::merge::change_data_enabled(&info.target_plan)?,
     };
+    // A rewritten file keeps the partition values that do not parse, unless they are assigned.
+    let unparsed = unparsed_partition_value_columns(&info.target_plan)?;
+    let unparsed_names = unparsed
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
     info.target_plan = Arc::new(ensure_row_level_metadata_columns(
         info.target_plan.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
+        &unparsed_names,
     )?);
+    let unparsed = unparsed
+        .iter()
+        .map(|(name, column)| (name.as_str(), column.as_str()))
+        .collect::<Vec<_>>();
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(
             expand_update(
@@ -36,6 +50,7 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
                 MERGE_FILE_COLUMN,
                 row_index_column,
                 &[],
+                &unparsed,
             )?
             .with_output(CommandOutput::AffectedRows),
         ),

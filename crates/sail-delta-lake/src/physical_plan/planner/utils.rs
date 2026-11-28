@@ -8,7 +8,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::logical_expr::{Expr, ScalarUDF};
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -28,7 +28,8 @@ use super::context::PlannerContext;
 use super::log_scan::{LogScanOptions, build_delta_log_datasource_scans_with_options};
 use super::log_segment::{LogSegmentResolveOptions, resolve_log_segment_files};
 use crate::datasource::{
-    COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN, simplify_expr,
+    COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN, UNPARSED_PARTITION_VALUE_PREFIX,
+    simplify_expr,
 };
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
@@ -294,8 +295,19 @@ pub fn prepare_delta_writer_input(
     if partition_columns.is_empty() && sort_order.is_none() {
         return Ok(input);
     }
-    let plan = create_projection(input, partition_columns.to_vec())?;
-    Ok(create_sort(plan, partition_columns.to_vec(), sort_order)?)
+    // Rows whose partition values do not parse are grouped by their spelling too.
+    let mut keys = partition_columns.to_vec();
+    keys.extend(
+        input
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name())
+            .filter(|name| name.starts_with(UNPARSED_PARTITION_VALUE_PREFIX))
+            .cloned(),
+    );
+    let plan = create_projection(input, keys.clone())?;
+    Ok(create_sort(plan, keys, sort_order)?)
 }
 
 pub fn build_standard_write_layers(
@@ -343,14 +355,25 @@ pub fn build_standard_write_layers(
     ))
 }
 
+/// Aligns the new data with the old data that an overwrite keeps. The partition values that do not
+/// parse of the old data pass through, and are NULL for the new data.
 pub fn align_schemas_for_union(
     new_data_plan: Arc<dyn ExecutionPlan>,
     old_data_plan: Arc<dyn ExecutionPlan>,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let new_schema = new_data_plan.schema();
     let old_schema = old_data_plan.schema();
+    let unparsed = old_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| {
+            field.name().starts_with(UNPARSED_PARTITION_VALUE_PREFIX)
+                && new_schema.column_with_name(field.name()).is_none()
+        })
+        .collect::<Vec<_>>();
 
-    if new_schema.fields().len() != old_schema.fields().len() {
+    if new_schema.fields().len() + unparsed.len() != old_schema.fields().len() {
         return Err(DataFusionError::Plan(
             "Schema mismatch between new and old data - schema evolution not yet implemented"
                 .to_string(),
@@ -382,6 +405,17 @@ pub fn align_schemas_for_union(
                 field.name()
             )));
         }
+    }
+
+    for (old_idx, field) in unparsed {
+        new_projections.push((
+            Arc::new(Literal::new(ScalarValue::Utf8(None))) as Arc<dyn PhysicalExpr>,
+            field.name().clone(),
+        ));
+        old_projections.push((
+            Arc::new(Column::new(field.name(), old_idx)) as Arc<dyn PhysicalExpr>,
+            field.name().clone(),
+        ));
     }
 
     let aligned_new = Arc::new(ProjectionExec::try_new(new_projections, new_data_plan)?);

@@ -6,8 +6,9 @@
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::common::stats::{ColumnStatistics, Statistics};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
@@ -15,11 +16,69 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::options::DeltaLogReplayStrategy;
+use crate::schema::PhysicalPartitionColumn;
 use crate::snapshot::SnapshotPruningStats;
 use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
+
+/// Prefix of the internal column that carries, for each row, the partition value of its file as
+/// the log spells it when that value does not parse as the column type, and NULL otherwise. Such a
+/// value reads as NULL, so a rewrite carries the spelling to the writer, which keeps it for the
+/// rows whose partition value the statement does not assign.
+pub const UNPARSED_PARTITION_VALUE_PREFIX: &str = "__sail_delta_unparsed_partition_value:";
+
+/// The internal column carrying the unparsed value of the partition column `physical_name`.
+pub fn unparsed_partition_value_column(physical_name: &str) -> String {
+    format!("{UNPARSED_PARTITION_VALUE_PREFIX}{physical_name}")
+}
+
+/// The partition columns of `snapshot` whose values may not parse, which are those of every type
+/// but strings. A scan with [`DeltaScanConfig::unparsed_partition_values`] emits an
+/// [`unparsed_partition_value_column`] for each of them, in this order.
+pub fn unparsed_partition_columns(snapshot: &DeltaSnapshot) -> Vec<PhysicalPartitionColumn> {
+    snapshot
+        .physical_partition_columns()
+        .into_iter()
+        .filter(|column| {
+            snapshot
+                .schema()
+                .field_with_name(&column.logical_name)
+                .is_ok_and(|field| {
+                    !matches!(
+                        field.data_type(),
+                        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View
+                    )
+                })
+        })
+        .collect()
+}
+
+/// The field of the [`unparsed_partition_value_column`] of `column`.
+pub(crate) fn unparsed_partition_value_field(column: &PhysicalPartitionColumn) -> FieldRef {
+    Arc::new(Field::new(
+        unparsed_partition_value_column(&column.physical_name),
+        ArrowDataType::Utf8,
+        true,
+    ))
+}
+
+/// `schema` followed by the [`unparsed_partition_value_column`]s of `snapshot`.
+pub fn with_unparsed_partition_value_fields(
+    schema: &SchemaRef,
+    snapshot: &DeltaSnapshot,
+) -> SchemaRef {
+    let fields = schema.fields().iter().cloned().chain(
+        unparsed_partition_columns(snapshot)
+            .into_iter()
+            .map(|column| unparsed_partition_value_field(&column)),
+    );
+    Arc::new(Schema::new_with_metadata(
+        fields.collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ))
+}
 
 pub mod actions;
 pub(crate) mod deletion_vector;
@@ -235,6 +294,7 @@ impl DeltaScanConfigBuilder {
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
             metadata_aggregate: None,
+            unparsed_partition_values: false,
         })
     }
 }
@@ -263,6 +323,9 @@ pub struct DeltaScanConfig {
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
     /// Emit file-level group values and row-count weights for metadata aggregation.
     pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+    /// Emit [`unparsed_partition_value_column`] for every partition column.
+    #[serde(default)]
+    pub unparsed_partition_values: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

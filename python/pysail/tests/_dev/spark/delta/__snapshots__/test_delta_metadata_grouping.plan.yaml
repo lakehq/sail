@@ -945,7 +945,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:col-q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) = __HIVE_DEFAULT_PARTITION__
@@ -972,7 +972,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:col-q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) = __HIVE_DEFAULT_PARTITION__
@@ -999,7 +999,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) = __HIVE_DEFAULT_PARTITION__
@@ -1026,7 +1026,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:col-q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) IS NULL
@@ -1053,7 +1053,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:col-q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) IS NULL
@@ -1080,7 +1080,7 @@ data:
       CoalescePartitionsExec
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delete_partition_encodings/)
-            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST], preserve_partitioning=[true]
+            SortExec: expr=[p@1 ASC NULLS LAST, q@2 ASC NULLS LAST, __sail_delta_unparsed_partition_value:q@3 ASC], preserve_partitioning=[true]
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_partition_encodings/, version=0, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_partition_encodings/)
                   FilterExec: nullif(p@5, ) IS NULL

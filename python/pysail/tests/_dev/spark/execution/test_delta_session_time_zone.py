@@ -5,6 +5,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from urllib.parse import unquote
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -682,24 +683,43 @@ def check_timestamp_partition_values_that_do_not_parse(spark, path, june):
     # not parse.
     overwrite("SELECT 8 AS id, CAST(NULL AS TIMESTAMP) AS ts")
     assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (7, None), (8, None), (9, june)]
-    # OPTIMIZE leaves out the files whose value does not parse, so their value keeps its spelling.
+    # OPTIMIZE compacts the files whose value does not parse into a file that keeps the spelling.
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
     assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (7, None), (8, None), (9, june)]
-    assert active_partition_values(path, "ts").count(UNPARSED_TIMESTAMP) == 3
+    assert active_partition_values(path, "ts").count(UNPARSED_TIMESTAMP) == 1
     overwrite("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts")
     assert rows() == [(1, None), (2, None), (6, june), (7, None), (8, None)]
 
 
-def active_partition_values(path, column):
-    """The raw values of `column` of the files of the latest version of the table at `path`."""
+def active_adds(path):
+    """The Add actions of the files of the latest version of the table at `path`."""
     active = {}
     for log in sorted((path / "_delta_log").glob("*.json")):
         for action in map(json.loads, log.read_text().splitlines()):
             if "add" in action:
-                active[action["add"]["path"]] = action["add"]["partitionValues"][column]
+                active[action["add"]["path"]] = action["add"]
             elif "remove" in action:
                 active.pop(action["remove"]["path"], None)
     return list(active.values())
+
+
+def active_partition_values(path, column):
+    """The raw values of `column` of the files of the latest version of the table at `path`."""
+    return [add["partitionValues"][column] for add in active_adds(path)]
+
+
+def stored_rows(path, column="p", id_column="id"):
+    """The sorted `(raw value of column, id, whether a deletion vector applies)` of every row stored in
+    the files of the latest version of the table at `path`, including the rows a deletion vector
+    deletes. `id_column` is the name of the id column in the files."""
+    return sorted(
+        (
+            (add["partitionValues"][column] or None, id_, add.get("deletionVector") is not None)
+            for add in active_adds(path)
+            for id_ in pq.ParquetFile(path / unquote(add["path"])).read(columns=[id_column]).column(0).to_pylist()
+        ),
+        key=str,
+    )
 
 
 def write_partitioned_log(path, data_type, values, *, deletion_vectors=False, rows_per_file=1):
@@ -845,41 +865,22 @@ def test_delta_timestamp_partition_values_in_spellings_of_earlier_sail_versions(
         }
 
 
-@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
-@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
-@pytest.mark.parametrize(
-    ("data_type", "bad", "good"),
-    [
-        ("decimal(5,2)", "-1.-25", "2.50"),
-        ("integer", "abc", "2"),
-        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z"),
-    ],
-    ids=["decimal", "integer", "timestamp"],
-)
-def test_delta_rewrites_refuse_files_whose_partition_value_does_not_parse(
-    spark, tmp_path, session_timezone, ansi, data_type, bad, good
-):
-    """Rewriting a file whose partition value does not parse would write NULL in its place, as Delta Lake
-    on Spark does. Sail refuses the rewrite instead, and OPTIMIZE leaves such files out."""
-    _ = session_timezone
-    for name, statement in [
-        ("update", "UPDATE delta.`{path}` SET v = v + 100 WHERE id <= 2"),
-        (
-            "merge",
-            "MERGE INTO delta.`{path}` t USING (SELECT 1 AS k) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET v = 0",
-        ),
-        ("delete", "DELETE FROM delta.`{path}` WHERE id = 1"),
-    ]:
-        path = tmp_path / name
-        write_partitioned_log(path, data_type, [bad, bad, good, None])
-        with ansi_mode(spark, enabled=ansi), pytest.raises(Exception, match=re.escape(bad)):
-            spark.sql(statement.format(path=path)).collect()
-        assert len(list((path / "_delta_log").glob("*.json"))) == 1, name
-    path = tmp_path / "optimize"
-    write_partitioned_log(path, data_type, [bad, bad, good, good, None])
-    with ansi_mode(spark, enabled=ansi):
-        spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert sorted(active_partition_values(path, "p"), key=str) == sorted([bad, bad, good, None], key=str)
+def check_rewritten_table(spark, path, original, expected):
+    """Checks the rows of the table at `path` after a statement on a table written by
+    `write_partitioned_log`. `original` and `expected` map the id of each row to its raw partition value
+    and its `v`, before and after the statement. A row that a file with a deletion vector stores is alive
+    unless a rewritten file stores it too, and such a file keeps its value."""
+    live = {row.id: row.v for row in spark.read.format("delta").load(str(path)).collect()}
+    assert live == {id_: v for id_, (_, v) in expected.items()}
+    stored = stored_rows(path)
+    written = [(id_, value) for value, id_, deletion_vector in stored if not deletion_vector]
+    rewritten = dict(written)
+    assert len(rewritten) == len(written)
+    assert set(rewritten) <= set(live)
+    kept = {id_: original[id_][0] for id_ in live if id_ not in rewritten}
+    assert all((value, id_, True) in stored for id_, value in kept.items())
+    assert rewritten | kept == {id_: value for id_, (value, _) in expected.items()}
+    assert all(value == original[id_][0] for value, id_, deletion_vector in stored if deletion_vector)
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
@@ -894,33 +895,364 @@ def test_delta_rewrites_refuse_files_whose_partition_value_does_not_parse(
     ],
     ids=["decimal", "integer", "timestamp"],
 )
-def test_delta_deletes_that_rewrite_no_file_whose_partition_value_does_not_parse(
-    spark, tmp_path, session_timezone, ansi, deletion_vectors, data_type, bad, good, literal
+@pytest.mark.parametrize(
+    ("statement", "changes"),
+    [
+        ("DELETE FROM {t} WHERE id IN (1, 2)", {1: None, 2: None}),
+        ("UPDATE {t} SET v = v + 1 WHERE id IN (1, 2, 4)", {1: ("bad", 11), 2: ("bad2", 21), 4: (None, 41)}),
+        ("UPDATE {t} SET p = {literal} WHERE id = 1", {1: ("good", 10)}),
+        ("UPDATE {t} SET p = NULL WHERE id = 1", {1: (None, 10)}),
+        (
+            "UPDATE {t} SET p = coalesce(p, {literal}), v = 0 WHERE id IN (1, 101, 3)",
+            {1: ("good", 0), 101: ("good", 0), 3: ("good", 0)},
+        ),
+        (
+            "MERGE INTO {t} USING (SELECT explode(array(1, 2)) AS k) s ON t.id = s.k "
+            "WHEN MATCHED THEN UPDATE SET v = 0",
+            {1: ("bad", 0), 2: ("bad2", 0)},
+        ),
+        (
+            "MERGE INTO {t} USING (SELECT 1 AS id, 0 AS v, CAST({literal} AS {data_type}) AS p) s ON t.id = s.id "
+            "WHEN MATCHED THEN UPDATE SET *",
+            {1: ("good", 0)},
+        ),
+        (
+            "MERGE INTO {t} USING (SELECT * FROM VALUES (1, 0, CAST(NULL AS {data_type})), "
+            "(5, 50, CAST(NULL AS {data_type})) AS s(id, v, p)) s ON t.id = s.id "
+            "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *",
+            {1: ("bad", 0), 5: (None, 50)},
+        ),
+        (
+            "MERGE INTO {t} USING (SELECT explode(array(1, 2)) AS k) s ON t.id = s.k "
+            "WHEN MATCHED AND s.k = 1 THEN UPDATE SET p = {literal} WHEN MATCHED THEN UPDATE SET v = 0",
+            {1: ("good", 10), 2: ("bad2", 0)},
+        ),
+        ("MERGE INTO {t} USING (SELECT 1 AS k) s ON t.id = s.k WHEN MATCHED THEN DELETE", {1: None}),
+        (
+            "MERGE INTO {t} USING (SELECT 3 AS k) s ON t.id = s.k "
+            "WHEN NOT MATCHED BY SOURCE AND t.id = 1 THEN UPDATE SET p = {literal} "
+            "WHEN NOT MATCHED BY SOURCE AND t.id IN (2, 4) THEN UPDATE SET v = 0",
+            {1: ("good", 10), 2: ("bad2", 0), 4: (None, 0)},
+        ),
+    ],
+    ids=[
+        "delete",
+        "update",
+        "update-assign",
+        "update-assign-null",
+        "update-reads-null",
+        "merge-update",
+        "merge-update-star",
+        "merge-insert-null",
+        "merge-clauses",
+        "merge-delete",
+        "merge-not-matched-by-source",
+    ],
+)
+def test_delta_rewrites_keep_partition_values_that_do_not_parse(
+    spark, tmp_path, session_timezone, ansi, deletion_vectors, data_type, bad, good, literal, statement, changes
 ):
-    """A DELETE that does not rewrite a file whose partition value does not parse succeeds, whatever other
-    files of the table have such a value. A DELETE with deletion vectors rewrites no file, so it keeps the
-    value of the file it deletes rows of. An UPDATE with deletion vectors writes the updated rows to new
-    files, so it is refused."""
+    """A partition value that does not parse reads as NULL. A rewrite keeps it for every row whose
+    partition value the statement does not assign, where Delta Lake on Spark writes NULL instead. An
+    assigned value is written as computed, from NULL where the expression reads the column. ANSI mode
+    plays no part."""
     _ = session_timezone
-    for name, condition, left in [
-        ("other-file", "id = 3", [1, 2, 4]),
-        ("other-files", "id >= 3", [1, 2]),
-        ("no-row", "id = 9", [1, 2, 3, 4]),
-        ("partition", f"p = {literal} AND v > 0", [1, 2, 4]),
-    ]:
-        path = tmp_path / name
-        write_partitioned_log(path, data_type, [bad, bad, good, None], deletion_vectors=deletion_vectors)
-        delete = f"DELETE FROM delta.`{path}` WHERE {condition}"  # noqa: S608
-        with ansi_mode(spark, enabled=ansi):
-            spark.sql(delete).collect()
-        assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == left, name
-        assert active_partition_values(path, "p").count(bad) == 2, name
-    if deletion_vectors:
-        path = tmp_path / "rows"
-        write_partitioned_log(path, data_type, [bad, good], deletion_vectors=True, rows_per_file=2)
-        with ansi_mode(spark, enabled=ansi):
-            spark.sql(f"DELETE FROM delta.`{path}` WHERE id = 1").collect()  # noqa: S608
-            with pytest.raises(Exception, match=re.escape(bad)):
-                spark.sql(f"UPDATE delta.`{path}` SET v = 0 WHERE id = 101").collect()  # noqa: S608
-        assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [2, 101, 102]
-        assert sorted(active_partition_values(path, "p")) == sorted([bad, good])
+    path = tmp_path / "table"
+    spellings = {"bad": bad, "bad2": f"{bad}x", "good": good, None: None}
+    write_partitioned_log(
+        path, data_type, [bad, f"{bad}x", good, None], deletion_vectors=deletion_vectors, rows_per_file=2
+    )
+    original = {
+        id_ + offset: (value, id_ * 10) for id_, value in enumerate(spellings.values(), 1) for offset in [0, 100]
+    }
+    expected = dict(original)
+    for id_, change in changes.items():
+        if change is None:
+            del expected[id_]
+        else:
+            expected[id_] = (spellings[change[0]], change[1])
+    with ansi_mode(spark, enabled=ansi):
+        spark.sql(statement.format(t=f"delta.`{path}` t", literal=literal, data_type=data_type)).collect()
+    check_rewritten_table(spark, path, original, expected)
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+@pytest.mark.parametrize(
+    ("data_type", "bad", "good"),
+    [
+        ("decimal(5,2)", "-1.-25", "2.50"),
+        ("integer", "abc", "2"),
+        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z"),
+    ],
+    ids=["decimal", "integer", "timestamp"],
+)
+def test_delta_optimize_keeps_partition_values_that_do_not_parse(
+    spark, tmp_path, session_timezone, ansi, data_type, bad, good
+):
+    """OPTIMIZE compacts the files of a partition value that does not parse into a file that keeps the
+    value, apart from NULL and from other spellings, and changes no data."""
+    _ = session_timezone
+    path = tmp_path / "table"
+    values = [bad, bad, f"{bad}x", f"{bad}x", good, good, None, None]
+    write_partitioned_log(path, data_type, values)
+    with ansi_mode(spark, enabled=ansi):
+        spark.sql(f"OPTIMIZE delta.`{path}`").collect()
+    (log,) = sorted((path / "_delta_log").glob("*.json"))[1:]
+    actions = list(map(json.loads, log.read_text().splitlines()))
+    assert all(not action["add"]["dataChange"] for action in actions if "add" in action)
+    assert sorted(active_partition_values(path, "p"), key=str) == sorted([bad, f"{bad}x", good, None], key=str)
+    assert stored_rows(path) == sorted(((value, id_, False) for id_, value in enumerate(values, 1)), key=str)
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+@pytest.mark.parametrize(
+    ("data_type", "bad", "good", "literal"),
+    [
+        ("decimal(5,2)", "-1.-25", "2.50", "2.50"),
+        ("integer", "abc", "2", "2"),
+        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z", "TIMESTAMP '2024-01-01 09:00:00'"),
+    ],
+    ids=["decimal", "integer", "timestamp"],
+)
+def test_delta_replace_where_keeps_partition_values_that_do_not_parse(
+    spark, tmp_path, session_timezone, ansi, data_type, bad, good, literal
+):
+    """An overwrite with `replaceWhere` on data columns keeps the partition value that does not parse for
+    the rows it keeps of the files it rewrites."""
+    _ = session_timezone
+    path = tmp_path / "table"
+    write_partitioned_log(path, data_type, [bad, good, None], rows_per_file=2)
+    original = {1: (bad, 10), 101: (bad, 10), 2: (good, 20), 102: (good, 20), 3: (None, 30), 103: (None, 30)}
+    with ansi_mode(spark, enabled=ansi):
+        spark.sql(f"SELECT 1 AS id, 0 AS v, CAST({literal} AS {data_type}) AS p").write.format("delta").mode(
+            "overwrite"
+        ).option("replaceWhere", "id = 1").save(str(path))
+    check_rewritten_table(spark, path, original, original | {1: (good, 0)})
+
+
+@contextmanager
+def table_with_unparsed_partition_value(spark, path, schema, columns, values, properties="", partition_by="p"):
+    """A Delta table at `path` with the rows `values` of `columns`, whose files with the partition value 7
+    have the value `abc` in the log instead, as a writer with a bug would have written it."""
+    spark.sql(
+        f"CREATE TABLE unparsed ({schema}) USING delta PARTITIONED BY ({partition_by}) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' {properties}"
+    )
+    try:
+        spark.sql(f"INSERT INTO unparsed ({columns}) VALUES {values}").collect()  # noqa: S608
+        for log in (path / "_delta_log").glob("*.json"):
+            actions = list(map(json.loads, log.read_text().splitlines()))
+            for action in actions:
+                for kind in ["add", "remove", "cdc"]:
+                    if kind in action:
+                        values_ = action[kind]["partitionValues"]
+                        action[kind]["partitionValues"] = {k: "abc" if v == "7" else v for k, v in values_.items()}
+            log.write_text("".join(json.dumps(action) + "\n" for action in actions))
+        yield
+    finally:
+        spark.sql("DROP TABLE IF EXISTS unparsed").collect()
+
+
+def change_data_partition_values(path, version, column="p"):
+    """The sorted `(raw value of column, change type)` of the rows of the change data files of the commit
+    `version`."""
+    return sorted(
+        {
+            (action["cdc"]["partitionValues"][column], change_type)
+            for action in map(json.loads, (path / "_delta_log" / f"{version:020}.json").read_text().splitlines())
+            if "cdc" in action
+            for change_type in pq.ParquetFile(path / unquote(action["cdc"]["path"]))
+            .read(columns=["_change_type"])
+            .column("_change_type")
+            .to_pylist()
+        },
+        key=str,
+    )
+
+
+def latest_version(path):
+    return max(int(log.stem) for log in (path / "_delta_log").glob("*.json"))
+
+
+@pytest.mark.parametrize("statement", ["update", "merge"])
+def test_delta_rewrites_write_generated_partition_values_that_do_not_parse(spark, tmp_path, statement):
+    """A rewrite computes a generated partition column for the rows it updates, so they get the computed
+    value, NULL included, while the rows it copies keep the value that does not parse."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark, path, "id INT, v INT, p INT GENERATED ALWAYS AS (v DIV 10)", "id, v", "(1, 70), (101, 70), (3, 30)"
+    ):
+        for id_, assignment in [(1, "id = 1001"), (101, "v = NULL")]:
+            if statement == "update":
+                spark.sql(f"UPDATE unparsed SET {assignment} WHERE id = {id_}").collect()  # noqa: S608
+            else:
+                spark.sql(
+                    f"MERGE INTO unparsed t USING (SELECT {id_} AS k) s ON t.id = s.k "
+                    f"WHEN MATCHED THEN UPDATE SET {assignment}"
+                ).collect()
+            if id_ == 1:
+                assert stored_rows(path) == [("3", 3, False), ("7", 1001, False), ("abc", 101, False)]
+        assert stored_rows(path) == [("3", 3, False), ("7", 1001, False), (None, 101, False)]
+
+
+def test_delta_change_data_keeps_partition_values_that_do_not_parse(spark, tmp_path):
+    """The change data of a rewrite keeps the partition value that does not parse for its before images, and
+    for its after images unless the statement assigns the partition column. It reads as NULL."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark,
+        path,
+        "id INT, v INT, p INT",
+        "id, v, p",
+        "(1, 10, 7), (101, 10, 7), (2, 20, 7), (102, 20, 7), (3, 30, 3)",
+        "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')",
+    ):
+        update = [("abc", "update_postimage"), ("abc", "update_preimage")]
+        for statement, partition_values in [
+            ("UPDATE unparsed SET v = 0 WHERE id = 1", update),
+            ("DELETE FROM unparsed WHERE id = 101", [("abc", "delete")]),
+            ("MERGE INTO unparsed t USING (SELECT 2 AS k) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET v = 1", update),
+            (
+                "MERGE INTO unparsed t USING (SELECT 102 AS k) s ON t.id = s.k "
+                "WHEN MATCHED THEN UPDATE SET p = 5 WHEN NOT MATCHED THEN INSERT (id, v, p) VALUES (s.k, 0, 5)",
+                [("5", "update_postimage"), ("abc", "update_preimage")],
+            ),
+            ("SELECT 3 AS id, 0 AS v, 3 AS p", [("3", "delete"), ("3", "insert"), ("abc", "delete")]),
+        ]:
+            if statement.startswith("SELECT"):
+                # The overwrite deletes the row 2 and keeps the row 1 of their file.
+                spark.sql(statement).write.format("delta").mode("overwrite").option(
+                    "replaceWhere", "id IN (2, 3)"
+                ).save(str(path))
+            else:
+                spark.sql(statement).collect()
+            version = latest_version(path)
+            assert change_data_partition_values(path, version) == partition_values, statement
+            for row in (
+                spark.read.format("delta")
+                .option("readChangeFeed", "true")
+                .option("startingVersion", version)
+                .load(str(path))
+                .collect()
+            ):
+                expected = {(102, "update_postimage"): 5, (3, "delete"): 3, (3, "insert"): 3}
+                assert row.p == expected.get((row.id, row["_change_type"])), statement
+        assert stored_rows(path) == [("3", 3, False), ("5", 102, False), ("abc", 1, False)]
+
+
+def test_delta_merge_change_data_with_identity_keeps_partition_values_that_do_not_parse(spark, tmp_path):
+    """A MERGE that allocates identity values writes the change data with the table data, and keeps the
+    partition value that does not parse in both."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark,
+        path,
+        "k BIGINT GENERATED ALWAYS AS IDENTITY, id INT, v INT, p INT",
+        "id, v, p",
+        "(1, 10, 7), (101, 10, 7)",
+        "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')",
+    ):
+        spark.sql(
+            "MERGE INTO unparsed t USING (SELECT explode(array(1, 5)) AS s) s ON t.id = s.s "
+            "WHEN MATCHED THEN UPDATE SET v = 0 WHEN NOT MATCHED THEN INSERT (id, v, p) VALUES (s.s, 0, NULL)"
+        ).collect()
+        assert change_data_partition_values(path, latest_version(path)) == [
+            ("abc", "update_postimage"),
+            ("abc", "update_preimage"),
+            (None, "insert"),
+        ]
+        assert stored_rows(path) == [("abc", 1, False), ("abc", 101, False), (None, 5, False)]
+
+
+def test_delta_rewrites_keep_partition_values_that_do_not_parse_with_column_mapping(spark, tmp_path):
+    """A rewrite of a table with column mapping keeps the partition value that does not parse under the
+    physical name of the column."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark,
+        path,
+        "id INT, v INT, p INT",
+        "id, v, p",
+        "(1, 10, 7), (101, 10, 7)",
+        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')",
+    ):
+        metadata = next(
+            action["metaData"]
+            for action in map(json.loads, (path / "_delta_log" / f"{0:020}.json").read_text().splitlines())
+            if "metaData" in action
+        )
+        (field,) = (field for field in json.loads(metadata["schemaString"])["fields"] if field["name"] == "p")
+        physical = field["metadata"]["delta.columnMapping.physicalName"]
+        assert physical != "p"
+        (id_field,) = (field for field in json.loads(metadata["schemaString"])["fields"] if field["name"] == "id")
+        spark.sql("UPDATE unparsed SET v = 0 WHERE id = 1").collect()
+        assert stored_rows(path, physical, id_field["metadata"]["delta.columnMapping.physicalName"]) == [
+            ("abc", 1, False),
+            ("abc", 101, False),
+        ]
+        assert sorted(tuple(row) for row in spark.table("unparsed").collect()) == [(1, 0, None), (101, 10, None)]
+
+
+def test_delta_checkpoint_keeps_partition_values_that_do_not_parse(spark, tmp_path):
+    """A checkpoint written after a rewrite keeps the partition value that does not parse, so later rewrites
+    from the checkpoint keep it too."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark,
+        path,
+        "id INT, v INT, p INT",
+        "id, v, p",
+        "(1, 10, 7), (101, 10, 7), (2, 20, 7)",
+        "TBLPROPERTIES ('delta.checkpointInterval' = '2')",
+    ):
+        spark.sql("UPDATE unparsed SET v = 0 WHERE id = 1").collect()
+        assert (path / "_delta_log" / f"{2:020}.checkpoint.parquet").exists()
+        spark.sql("DELETE FROM unparsed WHERE id = 2").collect()
+        spark.sql("UPDATE unparsed SET v = 1 WHERE id = 101").collect()
+        assert (path / "_delta_log" / f"{4:020}.checkpoint.parquet").exists()
+        checkpoint = pq.read_table(path / "_delta_log" / f"{4:020}.checkpoint.parquet").to_pylist()
+        assert sorted(dict(row["add"]["partitionValues"])["p"] for row in checkpoint if row["add"]) == ["abc"]
+        spark.sql(f"OPTIMIZE delta.`{path}`").collect()
+        assert stored_rows(path) == [("abc", 1, False), ("abc", 101, False)]
+        with ansi_mode(spark, enabled=False):
+            assert sorted(row.id for row in spark.table("unparsed").where("p IS NULL").collect()) == [1, 101]
+
+
+def test_delta_merge_schema_evolution_keeps_partition_values_that_do_not_parse(spark, tmp_path):
+    """MERGE with schema evolution keeps the partition value that does not parse when the source has no
+    partition column, and adds only the source columns to the table."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark, path, "id INT, v INT, p INT", "id, v, p", "(1, 10, 7), (101, 10, 7)"
+    ):
+        spark.sql(
+            "MERGE WITH SCHEMA EVOLUTION INTO unparsed t USING (SELECT 1 AS id, 0 AS v, 'x' AS w) s "
+            "ON t.id = s.id WHEN MATCHED THEN UPDATE SET *"
+        ).collect()
+        assert spark.table("unparsed").columns == ["id", "v", "p", "w"]
+        assert sorted(tuple(row) for row in spark.table("unparsed").collect()) == [
+            (1, 0, None, "x"),
+            (101, 10, None, None),
+        ]
+        assert stored_rows(path) == [("abc", 1, False), ("abc", 101, False)]
+
+
+def test_delta_rewrites_keep_partition_values_that_do_not_parse_of_one_of_two_columns(spark, tmp_path):
+    """A rewrite keeps the partition value that does not parse of one partition column and writes the value
+    of the other column as before."""
+    path = tmp_path / "table"
+    with table_with_unparsed_partition_value(
+        spark,
+        path,
+        "id INT, v INT, p INT, q STRING, d DATE",
+        "id, v, p, q, d",
+        "(1, 10, 7, 'x', DATE '2024-01-01'), (101, 10, 7, 'x', DATE '2024-01-01')",
+        partition_by="p, q, d",
+    ):
+        spark.sql("UPDATE unparsed SET v = 0 WHERE id = 1").collect()
+        assert sorted((add["partitionValues"]["q"], add["partitionValues"]["d"]) for add in active_adds(path)) == [
+            ("x", "2024-01-01")
+        ]
+        assert stored_rows(path) == [("abc", 1, False), ("abc", 101, False)]
