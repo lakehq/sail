@@ -500,6 +500,16 @@ mod tests {
         )
     }
 
+    /// Cleans up the log of `snapshot` in a UTC session without an operation ID.
+    async fn cleanup(
+        snapshot: &DeltaSnapshot,
+        log_store: &LogStoreRef,
+        cutoff_timestamp: i64,
+    ) -> DeltaResult<usize> {
+        cleanup_expired_delta_log_files(snapshot, log_store.as_ref(), cutoff_timestamp, None, "UTC")
+            .await
+    }
+
     async fn list_log_file_paths(store: &Arc<dyn ObjectStore>) -> Vec<String> {
         let mut paths = store
             .list(Some(&delta_log_root_path()))
@@ -537,15 +547,7 @@ mod tests {
         put_log_file(&store, checkpoint_path(1)).await;
         put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
-        let deleted = cleanup_expired_delta_log_files(
-            snapshot.as_ref(),
-            log_store.as_ref(),
-            i64::MAX,
-            None,
-            "UTC",
-        )
-        .await
-        .unwrap();
+        let deleted = cleanup(&snapshot, &log_store, i64::MAX).await.unwrap();
 
         assert_eq!(deleted, 4);
         assert_eq!(
@@ -581,15 +583,7 @@ mod tests {
         put_log_file(&store, checkpoint_path(2)).await;
         put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
 
-        let deleted = cleanup_expired_delta_log_files(
-            snapshot.as_ref(),
-            log_store.as_ref(),
-            i64::MAX,
-            None,
-            "UTC",
-        )
-        .await
-        .unwrap();
+        let deleted = cleanup(&snapshot, &log_store, i64::MAX).await.unwrap();
 
         assert_eq!(deleted, 0);
         assert_eq!(
@@ -633,15 +627,7 @@ mod tests {
             .await;
         }
 
-        let deleted = cleanup_expired_delta_log_files(
-            snapshot.as_ref(),
-            log_store.as_ref(),
-            i64::MAX,
-            None,
-            "UTC",
-        )
-        .await
-        .unwrap();
+        let deleted = cleanup(&snapshot, &log_store, i64::MAX).await.unwrap();
 
         assert_eq!(deleted, 0);
         assert_eq!(
@@ -682,15 +668,7 @@ mod tests {
             sidecar_file_path("00000000000000000002.checkpoint.0000000001.0000000001.uuid.parquet");
         put_log_file(&store, sidecar_path.clone()).await;
 
-        let deleted = cleanup_expired_delta_log_files(
-            snapshot.as_ref(),
-            log_store.as_ref(),
-            i64::MAX,
-            None,
-            "UTC",
-        )
-        .await
-        .unwrap();
+        let deleted = cleanup(&snapshot, &log_store, i64::MAX).await.unwrap();
 
         assert_eq!(deleted, 0);
         for version in 0..=2 {
@@ -752,15 +730,7 @@ mod tests {
         put_log_file(&store, checkpoint_path(1)).await;
         put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
-        let deleted = cleanup_expired_delta_log_files(
-            snapshot.as_ref(),
-            log_store.as_ref(),
-            350,
-            None,
-            "UTC",
-        )
-        .await
-        .unwrap();
+        let deleted = cleanup(&snapshot, &log_store, 350).await.unwrap();
 
         assert_eq!(deleted, 4);
         assert_eq!(
@@ -816,17 +786,7 @@ mod tests {
         let snapshot = load_snapshot(&log_store, 3).await;
         put_log_file(&store, checkpoint_path(2)).await;
 
-        assert!(
-            cleanup_expired_delta_log_files(
-                snapshot.as_ref(),
-                log_store.as_ref(),
-                i64::MAX,
-                None,
-                "UTC"
-            )
-            .await
-            .is_err()
-        );
+        assert!(cleanup(&snapshot, &log_store, i64::MAX).await.is_err());
         for version in 0..=3 {
             store.head(&commit_path(version)).await.unwrap();
         }
