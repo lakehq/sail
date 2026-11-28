@@ -1542,24 +1542,26 @@ impl std::future::IntoFuture for PreparedCommit {
                     .await
                 {
                     Ok(()) => {
-                        let (create_checkpoint, cleanup_expired_logs, partition_time_zone) =
-                            match this.post_commit {
-                                Some(hook) => (
-                                    hook.create_checkpoint,
-                                    hook.cleanup_expired_logs,
-                                    hook.partition_time_zone,
-                                ),
-                                None => (false, None, DEFAULT_PARTITION_TIME_ZONE.into()),
-                            };
                         return Ok(PostCommit {
                             version,
                             data: CommitData {
                                 actions: finalized_actions,
                                 operation: this.data.operation.clone(),
                             },
-                            create_checkpoint,
-                            cleanup_expired_logs,
-                            partition_time_zone,
+                            create_checkpoint: this
+                                .post_commit
+                                .as_ref()
+                                .map(|v| v.create_checkpoint)
+                                .unwrap_or_default(),
+                            cleanup_expired_logs: this
+                                .post_commit
+                                .as_ref()
+                                .map(|v| v.cleanup_expired_logs)
+                                .unwrap_or_default(),
+                            partition_time_zone: this.post_commit.as_ref().map_or_else(
+                                || DEFAULT_PARTITION_TIME_ZONE.into(),
+                                |v| v.partition_time_zone.clone(),
+                            ),
                             log_store: this.log_store,
                             table_data: read_snapshot,
                             custom_execute_handler: this.post_commit_hook_handler,
