@@ -1994,20 +1994,19 @@ def test_parquet_reads_legacy_map_child_names(spark, tmp_path, merge_schema):
 
 @pytest.mark.parametrize("timestamp_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
 def test_parquet_table_reads_not_null_struct_of_timestamps(spark, tmp_path, timestamp_type):
-    # The struct column is written to the file as a column that allows nulls, and its
-    # timestamp field needs a cast when the file is read.
+    # The file stores the struct column as a column that allows nulls, and the timestamp
+    # field of the struct needs a cast when the file is read.
+    path = tmp_path / "table"
+    spark.sql(
+        f"SELECT k, IF(k >= 0, named_struct('y', {timestamp_type} '2020-01-01 00:00:00' + make_interval(0, 0, 0, k), "
+        "'z', k), NULL) AS c FROM VALUES (0), (1) AS v(k)"
+    ).write.parquet(str(path))
     table_name = "parquet_not_null_struct_of_timestamps"
-    location = escape_sql_string_literal(str(tmp_path / "table"))
     try:
         spark.sql(
             f"CREATE TABLE {table_name} (k INT, c STRUCT<y: {timestamp_type}, z: INT> NOT NULL) "
-            f"USING parquet LOCATION '{location}'"
+            f"USING parquet LOCATION '{escape_sql_string_literal(str(path))}'"
         )
-        for k in range(2):
-            spark.sql(
-                f"INSERT INTO {table_name} "  # noqa: S608
-                f"VALUES ({k}, named_struct('y', {timestamp_type} '2020-01-0{k + 1} 00:00:00', 'z', {k}))"
-            )
         expected = spark.sql(
             f"SELECT {timestamp_type} '2020-01-01 00:00:00' AS y0, {timestamp_type} '2020-01-02 00:00:00' AS y1"
         ).first()
