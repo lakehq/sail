@@ -1918,6 +1918,20 @@ def test_view_of_a_table_whose_name_is_now_the_name_of_a_view(spark, table, kind
         spark.sql(f"DROP VIEW {table.name}")
 
 
+@pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
+@pytest.mark.parametrize("kind", ["sv", "svc", "gv", "dv", "dgv"])
+def test_view_of_a_table_whose_name_is_now_a_view_without_its_columns_fails_as_its_query(spark, table, kind):
+    table.insert("(1)")
+    query = f"SELECT id FROM {table.name}"
+    view = table.create_view(kind, query)
+    spark.sql(f"DROP TABLE {table.name}")
+    spark.sql(f"CREATE VIEW {table.name} AS SELECT 5L AS other")
+    try:
+        assert error(spark, f"SELECT * FROM {view}").splitlines()[0] == error(spark, query).splitlines()[0]
+    finally:
+        spark.sql(f"DROP VIEW {table.name}")
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_with_time_travel_reads_its_version(spark, tables, kind):
     table = tables("delta")

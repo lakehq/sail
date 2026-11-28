@@ -819,9 +819,9 @@ impl PlanResolver<'_> {
                 // format, does not make the view resolve its query again, which would read
                 // the table in another way.
                 Err(error) => error,
-                // The partitions of the table are now read in several scans, which the
-                // stored plan cannot read, so the read resolves the query of the view again,
-                // as a read of a view created over several scans does.
+                // The stored plan cannot read the table, whose partitions are now read in
+                // several scans or whose name is now the name of a view, so the read resolves
+                // the query of the view again.
                 Ok(Ok(None)) => {
                     state.replace_view_definition(recorded.take());
                     let definition = definition.as_ref().ok_or_else(|| {
@@ -1018,7 +1018,7 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
-    /// whether the table gained columns, or `None` if the table is now read in several scans,
+    /// whether the table gained columns, or `None` if the stored plan cannot read the table,
     /// or the error that the table no longer fits the stored plan.
     async fn bind_view_table_scan(
         &self,
@@ -1153,9 +1153,9 @@ impl PlanResolver<'_> {
 
     /// Returns the source of a read of a catalog table that a temporary view was created
     /// over, with the catalog table lookups and the table sources of the query, or `None` if
-    /// the partitions of the table are now read in several scans, or the error that the table
-    /// is not found or that its name is now the name of a view, after which the read resolves
-    /// the query of the view again.
+    /// the stored plan cannot read the table: its partitions are now read in several scans,
+    /// or its name is now the name of a view. Or returns the error that the table or its
+    /// relation is not found. After either, the read resolves the query of the view again.
     async fn resolve_view_catalog_table_source(
         &self,
         origin: &CatalogTableOrigin,
@@ -1191,13 +1191,8 @@ impl PlanResolver<'_> {
             Err(error) => return Err(error.into()),
         };
         let TableKind::Table { format, .. } = &status.kind else {
-            // A view with a definition reads the view of the name instead.
-            return Ok(Err(PlanError::AnalysisError(format!(
-                "[TABLE_OR_VIEW_NOT_FOUND] {} is now a view, and the temporary view {} reads it \
-                as a table. Create the temporary view again.",
-                quote_names(&origin.name),
-                view_name(view),
-            ))));
+            // The stored plan cannot read a view, which the query of the view reads instead.
+            return Ok(Ok(None));
         };
         if origin.format_required && !format.eq_ignore_ascii_case(&origin.format) {
             return Err(PlanError::invalid(format!(
