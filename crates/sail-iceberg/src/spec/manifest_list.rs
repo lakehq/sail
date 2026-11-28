@@ -51,6 +51,10 @@ impl ManifestList {
     /// Parse using the file's writer schema, independently of the current table version.
     /// Historical lists and legacy Sail lists may have a different format from the table.
     pub fn parse_with_version(bs: &[u8], _version: FormatVersion) -> Result<ManifestList, String> {
+        Self::parse_with_limit(bs, usize::MAX)
+    }
+
+    pub(crate) fn parse_with_limit(bs: &[u8], max_entries: usize) -> Result<ManifestList, String> {
         let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
         let AvroSchema::Record(record) = reader.writer_schema() else {
             return Err("Manifest list writer schema must be a record".into());
@@ -68,7 +72,11 @@ impl ManifestList {
             _ => return Err("Incomplete V2 manifest list tracking fields".into()),
         };
         let entries = reader
-            .map(|value| {
+            .enumerate()
+            .map(|(index, value)| {
+                if index >= max_entries {
+                    return Err(format!("Manifest entry limit exceeded ({max_entries})"));
+                }
                 let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
                 match version {
                     FormatVersion::V1 => {

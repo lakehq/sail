@@ -237,3 +237,19 @@ CALL system.rewrite_data_files(
 ```
 
 `rewrite_data_files` performs main-branch binpack compaction. See the [feature matrix](./features#catalogs-and-maintenance) for other maintenance procedures.
+
+To publish a snapshot staged by an Iceberg writer, supply its snapshot ID or its unique WAP ID.
+Choose one call for the source snapshot. Both return `source_snapshot_id` and `current_snapshot_id`.
+Sail reserves the `source-snapshot-id` and `published-wap-id` summary keys for publication.
+Setting either key through a snapshot-property write option or session setting causes the write to fail.
+
+```sql
+CALL system.cherrypick_snapshot(table => 'users', snapshot_id => 123);
+-- Alternatively, for a snapshot staged with wap.id = 'audit-42'
+CALL system.publish_changes(table => 'users', wap_id => 'audit-42');
+```
+
+When publication requires replay, each attempt can read up to 256 MiB of manifests and manifest lists,
+decode up to 1,000,000 records across those reads, and produce up to 256 MiB of manifests including
+the final manifest list. Exceeding a limit fails the attempt before commit. A fast-forward updates only
+the snapshot reference and does not read or rewrite manifests.

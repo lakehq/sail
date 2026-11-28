@@ -197,6 +197,21 @@ impl IcebergProcedureType {
                 snapshot_change_output(false),
                 LakeProcedureAccess::MetadataCommit,
             ),
+            Self::CherrypickSnapshot | Self::PublishChanges => {
+                let selector = if self == Self::CherrypickSnapshot {
+                    LakeProcedureParameter::required("snapshot_id", long)
+                } else {
+                    LakeProcedureParameter::required("wap_id", string)
+                };
+                (
+                    vec![LakeProcedureParameter::required("table", string), selector],
+                    vec![
+                        LakeProcedureField::new("source_snapshot_id", long, false),
+                        LakeProcedureField::new("current_snapshot_id", long, false),
+                    ],
+                    LakeProcedureAccess::MetadataCommit,
+                )
+            }
             Self::RollbackToTimestamp => (
                 vec![
                     LakeProcedureParameter::required("table", string),

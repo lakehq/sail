@@ -203,6 +203,7 @@ pub(crate) async fn prepare_bootstrap_snapshot(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .mark_dynamic_partition_overwrite(commit_info.dynamic_partition_overwrite)
     .with_snapshot_properties(commit_info.snapshot_properties.clone())
     .with_action_summary_properties(
         commit_info
@@ -295,6 +296,7 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .mark_dynamic_partition_overwrite(commit_info.dynamic_partition_overwrite)
     .with_snapshot_properties(commit_info.snapshot_properties.clone())
     .with_action_summary_properties(
         commit_info
@@ -913,6 +915,7 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                dynamic_partition_overwrite: false,
                 action_summary: None,
                 table_properties: vec![("format-version".to_string(), "2".to_string())],
                 snapshot_properties: Default::default(),
@@ -1005,6 +1008,7 @@ mod tests {
                     manifest_list_path: String::new(),
                     updates: vec![],
                     requirements: vec![],
+                    dynamic_partition_overwrite: false,
                     action_summary: None,
                     table_properties: vec![],
                     snapshot_properties: Default::default(),
@@ -1125,6 +1129,7 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                dynamic_partition_overwrite: false,
                 action_summary: None,
                 table_properties: vec![
                     ("format-version".to_string(), "2".to_string()),

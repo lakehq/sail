@@ -83,3 +83,18 @@ def test_unity_native_iceberg_create_rejected_before_storage(spark, unity_storag
         assert not location.exists()
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def test_snapshot_procedures_reject_delta_table(spark, unity_rest_url):
+    database = "unity_snapshot_procedures"
+    table = f"{database}.items"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING delta")
+        before = _unity_table_info(unity_rest_url, table)
+        for name, argument in [("cherrypick_snapshot", "1"), ("publish_changes", "'audit'")]:
+            with pytest.raises(Exception, match=r"cannot target table.*format 'delta'"):
+                spark.sql(f"CALL system.{name}('{table}', {argument})").collect()
+        assert _unity_table_info(unity_rest_url, table) == before
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")

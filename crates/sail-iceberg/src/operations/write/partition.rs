@@ -21,7 +21,7 @@ fn encode_partition_path_component(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
-pub(super) fn build_partition_dir(
+pub(crate) fn build_partition_dir(
     spec: &UnboundPartitionSpec,
     iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],

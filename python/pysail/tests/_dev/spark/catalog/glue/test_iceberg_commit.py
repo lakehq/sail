@@ -509,3 +509,21 @@ def test_add_files_uses_registered_glue_partitions(spark, moto_endpoint, tmp_pat
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {target}")
         spark.sql(f"DROP TABLE IF EXISTS {database}.{source}")
+
+
+def test_snapshot_publication(spark, moto_endpoint, tmp_path):
+    from pysail.testing._dev.spark.iceberg import exercise_snapshot_publication
+
+    database = "glue_publication"
+    table = f"{database}.items"
+    spark.sql(f"CREATE DATABASE {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+
+        def load_table():
+            pointer = _metadata_location(moto_endpoint, database, "items")
+            return pointer, _load_metadata_json(pointer)
+
+        exercise_snapshot_publication(spark, table, load_table)
+    finally:
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")

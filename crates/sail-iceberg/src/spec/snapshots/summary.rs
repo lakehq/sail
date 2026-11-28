@@ -7,6 +7,8 @@ pub struct SnapshotSummary;
 
 pub(crate) const OPERATION: &str = "operation";
 pub(crate) const REPLACE_PARTITIONS: &str = "replace-partitions";
+pub(crate) const SOURCE_SNAPSHOT_ID: &str = "source-snapshot-id";
+pub(crate) const PUBLISHED_WAP_ID: &str = "published-wap-id";
 pub(crate) const ADDED_DATA_FILES: &str = "added-data-files";
 pub(crate) const DELETED_DATA_FILES: &str = "deleted-data-files";
 pub(crate) const TOTAL_DATA_FILES: &str = "total-data-files";
@@ -32,9 +34,11 @@ pub(crate) const REMOVED_FILES_SIZE: &str = "removed-files-size";
 pub(crate) const TOTAL_FILES_SIZE: &str = "total-files-size";
 
 /// Summary fields maintained by Sail rather than by individual writes.
-pub(crate) const RESERVED_SNAPSHOT_PROPERTIES: [&str; 25] = [
+pub(crate) const RESERVED_SNAPSHOT_PROPERTIES: [&str; 27] = [
     OPERATION,
     REPLACE_PARTITIONS,
+    SOURCE_SNAPSHOT_ID,
+    PUBLISHED_WAP_ID,
     ADDED_DATA_FILES,
     DELETED_DATA_FILES,
     TOTAL_DATA_FILES,

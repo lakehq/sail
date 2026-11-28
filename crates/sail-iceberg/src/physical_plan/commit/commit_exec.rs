@@ -818,6 +818,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 snapshot_properties: commit_meta.snapshot_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 snapshot_update_kind,
+                dynamic_partition_overwrite,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };

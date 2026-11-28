@@ -189,7 +189,7 @@ fn prepare_main_update_nullable(
     prepare_main_reference_update(metadata, previous, target, output)
 }
 
-fn prepare_main_reference_update(
+pub(in crate::procedure) fn prepare_main_reference_update(
     metadata: &TableMetadata,
     previous: Option<i64>,
     target: i64,
@@ -223,7 +223,7 @@ fn prepare_main_reference_update(
     })
 }
 
-fn snapshot_change_batch(
+pub(in crate::procedure) fn snapshot_change_batch(
     schema: datafusion::arrow::datatypes::SchemaRef,
     previous: Option<i64>,
     current: i64,
@@ -272,7 +272,7 @@ fn required_current_snapshot(metadata: &TableMetadata) -> Result<i64> {
         .ok_or_else(|| DataFusionError::Plan("Iceberg table has no current snapshot".to_string()))
 }
 
-fn main_snapshot_id(metadata: &TableMetadata) -> Option<i64> {
+pub(in crate::procedure) fn main_snapshot_id(metadata: &TableMetadata) -> Option<i64> {
     metadata
         .refs
         .get(MAIN_BRANCH)
@@ -304,7 +304,10 @@ fn reference_snapshot_id(metadata: &TableMetadata, reference: &str) -> Result<i6
         .ok_or_else(|| DataFusionError::Plan(format!("Ref does not exist: {reference}")))
 }
 
-fn ancestor_chain(metadata: &TableMetadata, start: i64) -> Result<Vec<&Snapshot>> {
+pub(in crate::procedure) fn ancestor_chain(
+    metadata: &TableMetadata,
+    start: i64,
+) -> Result<Vec<&Snapshot>> {
     let mut current = Some(snapshot(metadata, start)?);
     let mut visited = HashSet::new();
     let mut ancestors = Vec::new();

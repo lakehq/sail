@@ -310,3 +310,34 @@ def test_add_files_catalog_location_with_literal_escape(spark, jvm_spark, hms_s3
     assert expected == [11]
     spark.sql(f"CALL system.add_files('{target}', '{source}')").collect()
     assert [row.id for row in spark.table(target).collect()] == expected
+
+
+def test_snapshot_publication(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    from pysail.testing._dev.spark.iceberg import exercise_snapshot_publication
+    from pysail.tests._dev.spark.catalog.hms.test_lakehouse_ddl import _iceberg_metadata
+
+    table = f"{hms_s3_database}.publication"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+    exercise_snapshot_publication(
+        spark, table, lambda: _iceberg_metadata(jvm_spark, hms_s3_database, "publication", hms_s3_env)
+    )
+
+
+def test_publish_jvm_staged_snapshots(spark, jvm_spark, hms_s3_database):
+    table = f"{hms_s3_database}.staged"
+    writer = jvm_spark.newSession()
+    reference = f"iceberg.{table}"
+    writer.sql(f"CREATE TABLE {reference} (id BIGINT) USING iceberg TBLPROPERTIES ('write.wap.enabled'='true')")
+    for identifier in (1, 2):
+        writer.conf.set("spark.wap.id", str(identifier))
+        writer.sql(f"INSERT INTO {reference} VALUES ({identifier})")
+    writer.conf.unset("spark.wap.id")
+    assert writer.table(reference).collect() == []
+    staged = {s.summary["wap.id"]: s.snapshot_id for s in writer.table(f"{reference}.snapshots").collect()}
+    first = staged["1"]
+    assert tuple(spark.sql(f"CALL system.cherrypick_snapshot('{table}', {first})").first()) == (first, first)
+    source, head = spark.sql(f"CALL system.publish_changes('{table}', '2')").first()
+    assert source == staged["2"]
+    assert head != source
+    writer.catalog.refreshTable(reference)
+    assert [row.id for row in writer.sql(f"SELECT id FROM {reference} ORDER BY id").collect()] == [1, 2]

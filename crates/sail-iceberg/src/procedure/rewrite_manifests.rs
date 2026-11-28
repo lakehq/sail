@@ -1,38 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Int32Array, RecordBatch};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, exec_err, not_impl_err, plan_err};
-use object_store::ObjectStoreExt;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
-use serde::Deserialize;
 
 use super::arguments::{optional_bool, optional_i32};
-use crate::io::StoreContext;
-use crate::spec::manifest::deserialize_optional_vec;
+use super::manifest::{
+    MAX_ENTRIES, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, missing_counts, populate_counts, read_entries,
+};
+use crate::io::{ManifestReadBudget, StoreContext};
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::snapshots::{SnapshotRetention, Summary};
 use crate::spec::{
-    DataContentType, Datum, FormatVersion, Literal, MAIN_BRANCH, Manifest, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestMetadata, ManifestStatus, ManifestWriter, Operation,
-    PrimitiveLiteral, PrimitiveType, SnapshotBuilder, SnapshotReference, TableMetadata,
-    TableRequirement, TableUpdate,
+    DataContentType, FormatVersion, Literal, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestMetadata, ManifestWriter, Operation, PrimitiveLiteral, SnapshotBuilder,
+    SnapshotReference, TableMetadata, TableRequirement, TableUpdate,
 };
 use crate::table::files::{
-    EntrySelection, ManifestScope, SnapshotScope, inherit_manifest_entries, scan_manifests,
+    EntrySelection, ManifestScope, SnapshotScope, scan_manifests_with_budget,
 };
 use crate::table::metadata_loader::table_metadata_location;
 
 const TARGET_SIZE_PROPERTY: &str = "commit.manifest.target-size-bytes";
 const DEFAULT_TARGET_SIZE: u64 = 8 * 1024 * 1024;
-// This coordinator implementation does not spill or distribute manifest entries.
-const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_ENTRIES: usize = 1_000_000;
-const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
-
 // Counts encoded payloads retained across all groups and the final manifest list.
 // Decoded entries, descriptors and serializer temporaries are not an RSS budget.
 struct OutputBudget {
@@ -107,7 +101,7 @@ impl RewriteManifests {
             table_url,
             metadata,
             output_schema,
-            MAX_ENTRIES,
+            ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
             MAX_OUTPUT_BYTES,
         )
         .await
@@ -127,7 +121,7 @@ impl RewriteManifests {
             table_url,
             metadata,
             output_schema,
-            max_entries,
+            ManifestReadBudget::new(MAX_INPUT_BYTES, max_entries),
             MAX_OUTPUT_BYTES,
         )
         .await
@@ -139,7 +133,7 @@ impl RewriteManifests {
         table_url: &url::Url,
         metadata: &TableMetadata,
         output_schema: SchemaRef,
-        max_entries: usize,
+        mut input: ManifestReadBudget,
         max_output_bytes: usize,
     ) -> Result<PreparedManifestRewrite> {
         let mut budget = OutputBudget::new(max_output_bytes);
@@ -173,13 +167,14 @@ impl RewriteManifests {
         if parent.key_id.is_some() || !metadata.encryption_keys.is_empty() {
             return not_impl_err!("rewrite_manifests does not support encrypted table metadata");
         }
-        let mut manifests = scan_manifests(
+        let mut manifests = scan_manifests_with_budget(
             store,
             metadata,
             &ManifestScope {
                 snapshots: SnapshotScope::Current,
                 content: None,
             },
+            &mut input,
         )
         .await?;
         let mut selected = HashSet::new();
@@ -250,7 +245,6 @@ impl RewriteManifests {
         };
         let mut added = vec![];
         let mut live_entries = 0usize;
-        let mut remaining_entries = max_entries;
         let mut replaced = HashSet::new();
         for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
             // Retain the original schema when rewriting historical manifests: using only the
@@ -261,7 +255,7 @@ impl RewriteManifests {
                 .filter(|m| m.content == content && selected.contains(&m.manifest_path))
             {
                 let (mut manifest_metadata, entries, mut needs_normalization) =
-                    read_entries(store, descriptor, &mut remaining_entries).await?;
+                    read_entries(store, descriptor, &mut input).await?;
                 needs_normalization |= manifest_metadata.format_version != metadata.format_version;
                 if metadata.format_version != FormatVersion::V1 && missing_counts(descriptor) {
                     needs_normalization = true;
@@ -390,8 +384,7 @@ impl RewriteManifests {
                         "rewrite_manifests supports at most {MAX_INPUT_BYTES} bytes of input manifests per call"
                     );
                 }
-                let (_, entries, _) =
-                    read_entries(store, descriptor, &mut remaining_entries).await?;
+                let (_, entries, _) = read_entries(store, descriptor, &mut input).await?;
                 populate_counts(descriptor, &entries)?;
             }
         }
@@ -475,41 +468,6 @@ impl RewriteManifests {
         prepared.output = output(output_schema, replaced.len(), added_count)?;
         Ok(prepared)
     }
-}
-
-fn missing_counts(descriptor: &ManifestFile) -> bool {
-    descriptor.added_files_count.is_none()
-        || descriptor.existing_files_count.is_none()
-        || descriptor.deleted_files_count.is_none()
-        || descriptor.added_rows_count.is_none()
-        || descriptor.existing_rows_count.is_none()
-        || descriptor.deleted_rows_count.is_none()
-}
-
-fn populate_counts(descriptor: &mut ManifestFile, entries: &[ManifestEntry]) -> Result<()> {
-    let mut counts = [(0i32, 0i64); 3];
-    for entry in entries {
-        let index = match entry.status {
-            ManifestStatus::Added => 0,
-            ManifestStatus::Existing => 1,
-            ManifestStatus::Deleted => 2,
-        };
-        let (files, rows) = &mut counts[index];
-        *files = files
-            .checked_add(1)
-            .ok_or_else(|| DataFusionError::Execution("Manifest file count overflow".into()))?;
-        *rows = i64::try_from(entry.data_file.record_count)
-            .ok()
-            .and_then(|count| rows.checked_add(count))
-            .ok_or_else(|| DataFusionError::Execution("Manifest row count overflow".into()))?;
-    }
-    descriptor.added_files_count.get_or_insert(counts[0].0);
-    descriptor.existing_files_count.get_or_insert(counts[1].0);
-    descriptor.deleted_files_count.get_or_insert(counts[2].0);
-    descriptor.added_rows_count.get_or_insert(counts[0].1);
-    descriptor.existing_rows_count.get_or_insert(counts[1].1);
-    descriptor.deleted_rows_count.get_or_insert(counts[2].1);
-    Ok(())
 }
 
 fn output(schema: SchemaRef, rewritten: usize, added: usize) -> Result<RecordBatch> {
@@ -629,101 +587,15 @@ fn encode_manifests_with_budget(
     Ok(output)
 }
 
-#[derive(Deserialize)]
-struct RawEntry {
-    data_file: RawBounds,
-}
-
-#[derive(Deserialize)]
-struct RawBounds {
-    #[serde(default, deserialize_with = "deserialize_optional_vec")]
-    lower_bounds: Option<Vec<RawBound>>,
-    #[serde(default, deserialize_with = "deserialize_optional_vec")]
-    upper_bounds: Option<Vec<RawBound>>,
-}
-
-#[derive(Deserialize)]
-struct RawBound {
-    key: i32,
-    value: serde_bytes::ByteBuf,
-}
-
-fn restore_bounds(raw: Option<Vec<RawBound>>, decoded: &mut HashMap<i32, Datum>) -> Result<()> {
-    // Bounds are opaque bytes in Iceberg. The scan reader drops bounds it cannot type
-    // (e.g. dropped columns or position-delete metadata). Keep these bytes on rewrite.
-    let mut seen = HashSet::new();
-    for bound in raw.unwrap_or_default() {
-        if !seen.insert(bound.key) {
-            return exec_err!("Duplicate Iceberg metric bound for field {}", bound.key);
-        }
-        let bytes = decoded
-            .get(&bound.key)
-            .map(Datum::to_bytes)
-            .transpose()
-            .map_err(DataFusionError::Execution)?;
-        if bytes.as_deref() != Some(bound.value.as_ref()) {
-            decoded.insert(
-                bound.key,
-                Datum::new(
-                    PrimitiveType::Binary,
-                    PrimitiveLiteral::Binary(bound.value.into_vec()),
-                ),
-            );
-        }
-    }
-    Ok(())
-}
-
-async fn read_entries(
-    store: &StoreContext,
-    descriptor: &ManifestFile,
-    remaining_entries: &mut usize,
-) -> Result<(ManifestMetadata, Vec<ManifestEntry>, bool)> {
-    if descriptor.key_metadata.is_some() {
-        return not_impl_err!("rewrite_manifests does not support encrypted manifests");
-    }
-    let (object_store, path) = store.resolve(&descriptor.manifest_path)?;
-    let bytes = object_store.get(&path).await?.bytes().await?;
-    let (manifest_metadata, decoded) =
-        Manifest::decode_avro_entries_with_limit(&bytes, *remaining_entries, |entry, value| {
-            apache_avro::from_value::<RawEntry>(value)
-                .map(|raw| (entry, raw))
-                .map_err(|error| format!("Avro decode manifest bounds error: {error}"))
-        })
-        .map_err(DataFusionError::Execution)?;
-    *remaining_entries -= decoded.len();
-    let (mut entries, raw_entries): (Vec<_>, Vec<_>) = decoded.into_iter().unzip();
-    let needs_normalization = entries.iter().any(|entry| {
-        entry.status != ManifestStatus::Existing
-            || entry.snapshot_id.is_none()
-            || (manifest_metadata.format_version != FormatVersion::V1
-                && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none()))
-            || (entry.data_file.content == DataContentType::Data
-                && entry.data_file.first_row_id.is_none()
-                && descriptor.first_row_id.is_some())
-    });
-    // Inherit using the source format, before upgrading or discarding deleted entries.
-    inherit_manifest_entries(descriptor, manifest_metadata.format_version, &mut entries)?;
-    for (entry, raw) in entries.iter_mut().zip(raw_entries) {
-        if EntrySelection::live().matches(entry) {
-            restore_bounds(
-                raw.data_file.lower_bounds,
-                &mut entry.data_file.lower_bounds,
-            )?;
-            restore_bounds(
-                raw.data_file.upper_bounds,
-                &mut entry.data_file.upper_bounds,
-            )?;
-        }
-    }
-    Ok((manifest_metadata, entries, needs_normalization))
-}
-
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 pub(crate) mod tests {
+    use object_store::ObjectStoreExt;
+
     use super::*;
-    use crate::spec::{DataFile, ManifestStatus, PartitionSpec, Schema};
+    use crate::spec::{
+        DataFile, Datum, Manifest, ManifestStatus, PartitionSpec, PrimitiveType, Schema,
+    };
 
     pub(crate) fn entry(index: i64, version: FormatVersion) -> ManifestEntry {
         let file: DataFile = serde_json::from_value(serde_json::json!({
@@ -888,7 +760,7 @@ pub(crate) mod tests {
                     .await
                     .expect("objects");
                 let error = RewriteManifests { spec_id: None }
-                    .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 4)
+                    .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 7)
                     .await
                     .err()
                     .expect("retained entries share budget");
@@ -906,7 +778,13 @@ pub(crate) mod tests {
             let counting = Arc::new(crate::io::test_store::TestStore::new(store.base.clone()));
             let store = StoreContext::new(counting.clone(), &url).expect("counting store");
             let prepared = RewriteManifests { spec_id: None }
-                .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 5)
+                .prepare_with_entry_limit(
+                    &store,
+                    &url,
+                    &metadata,
+                    output_schema(),
+                    if upgraded { 8 } else { 5 },
+                )
                 .await
                 .expect("prepare");
             let gets = counting.gets.lock().expect("get counts");
@@ -975,6 +853,56 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn inline_v1_rewrite_charges_discovery_even_for_a_noop() {
+        let version = FormatVersion::V1;
+        let (store, url, mut metadata, manifests) =
+            rewrite_fixture(version, vec![(0, vec![entry(1, version)])], false).await;
+        let descriptor = &manifests[0];
+        let size = descriptor.manifest_length as u64;
+        metadata.snapshots[0].manifest_list.clear();
+        metadata.snapshots[0].manifests = Some(vec![descriptor.manifest_path.clone()]);
+
+        // With one small manifest, discovery alone reads one path and one record.
+        // Forcing a rewrite must charge the read of that same file a second time.
+        for rewrite in [false, true] {
+            let (bytes, records) = if rewrite {
+                metadata
+                    .properties
+                    .insert(TARGET_SIZE_PROPERTY.into(), "1".into());
+                (2 * size, 3)
+            } else {
+                (size, 2)
+            };
+            for (byte_limit, entry_limit, error) in [
+                (
+                    bytes - 1,
+                    records,
+                    Some("Manifest input byte limit exceeded"),
+                ),
+                (bytes, records - 1, Some("Manifest entry limit exceeded")),
+                (bytes, records, None),
+            ] {
+                let result = operation()
+                    .prepare_with_limits(
+                        &store,
+                        &url,
+                        &metadata,
+                        output_schema(),
+                        ManifestReadBudget::new(byte_limit, entry_limit),
+                        MAX_OUTPUT_BYTES,
+                    )
+                    .await;
+                if let Some(error) = error {
+                    let err = result.err().expect("input budget must be enforced");
+                    assert!(err.to_string().contains(error), "{err}");
+                } else {
+                    assert_eq!(!result.expect("exact budget").updates.is_empty(), rewrite);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn entry_budget_counts_deleted_records_across_manifests_before_staging() {
         use futures::TryStreamExt;
 
@@ -1005,7 +933,7 @@ pub(crate) mod tests {
                 vec![(0, entries.clone())],
                 vec![(0, entries[..2].to_vec()), (0, entries[2..].to_vec())],
             ] {
-                let (store, url, mut metadata, _) =
+                let (store, url, mut metadata, descriptors) =
                     rewrite_fixture(FormatVersion::V2, inputs, false).await;
                 metadata
                     .properties
@@ -1017,11 +945,12 @@ pub(crate) mod tests {
                     .await
                     .expect("objects");
                 let metadata_before = serde_json::to_value(&metadata).expect("metadata");
-                for limit in [0, 2, 3] {
+                let records = descriptors.len() + entries.len();
+                for limit in [0, records - 1, records] {
                     let result = RewriteManifests { spec_id: None }
                         .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), limit)
                         .await;
-                    if limit < 3 {
+                    if limit < records {
                         let error = result.err().expect("entry limit");
                         assert!(
                             error.to_string().contains("Manifest entry limit exceeded"),
@@ -1182,7 +1111,14 @@ pub(crate) mod tests {
         assert_eq!(list.entries().len(), 3, "includes out-of-spec descriptor");
         for limit in [0, 1, manifests_size, manifests_size + 1] {
             let error = operation()
-                .prepare_with_limits(&store, &url, &metadata, output_schema(), MAX_ENTRIES, limit)
+                .prepare_with_limits(
+                    &store,
+                    &url,
+                    &metadata,
+                    output_schema(),
+                    ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
+                    limit,
+                )
                 .await
                 .err()
                 .expect("output limit");
@@ -1287,7 +1223,14 @@ pub(crate) mod tests {
         assert!(discarded_bytes < limit);
         assert!(discarded_bytes > 64);
         let prepared = operation()
-            .prepare_with_limits(&store, &url, &table, output_schema(), MAX_ENTRIES, limit)
+            .prepare_with_limits(
+                &store,
+                &url,
+                &table,
+                output_schema(),
+                ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
+                limit,
+            )
             .await
             .expect("released no-op budget");
         assert_eq!(
@@ -1614,7 +1557,7 @@ pub(crate) mod tests {
             );
             let mut original = vec![];
             let mut live = vec![];
-            let mut remaining_entries = MAX_ENTRIES;
+            let mut input = ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES);
             for index in 1..=2 {
                 let mut entry = entry(index, FormatVersion::V2);
                 entry.data_file.partition = vec![Some(Literal::Primitive(value.clone())); 2];
@@ -1651,7 +1594,7 @@ pub(crate) mod tests {
                     .await
                     .expect("write input");
                 live.extend(
-                    read_entries(&store, &descriptor, &mut remaining_entries)
+                    read_entries(&store, &descriptor, &mut input)
                         .await
                         .expect("read input")
                         .1,
@@ -1676,7 +1619,7 @@ pub(crate) mod tests {
                 entry.status = ManifestStatus::Existing;
             }
             assert_eq!(
-                read_entries(&store, &descriptor, &mut remaining_entries)
+                read_entries(&store, &descriptor, &mut input)
                     .await
                     .expect("read rewritten")
                     .1,
@@ -1685,103 +1628,5 @@ pub(crate) mod tests {
             assert_eq!(descriptor.existing_files_count, Some(2));
             assert_eq!(descriptor.min_sequence_number, 1);
         }
-    }
-
-    #[test]
-    fn raw_bounds_accept_optional_avro_encodings() {
-        use apache_avro::types::Value;
-
-        let bound = Value::Record(vec![
-            ("key".into(), Value::Int(999)),
-            ("value".into(), Value::Bytes(vec![0xff, 0, 0x80])),
-        ]);
-        let array = Value::Array(vec![bound.clone()]);
-        for value in [
-            Some(array.clone()),
-            Some(Value::Union(1, Box::new(array))),
-            Some(Value::Null),
-            Some(Value::Union(0, Box::new(Value::Null))),
-            None,
-        ] {
-            let fields = value
-                .clone()
-                .map(|value| {
-                    vec![
-                        ("lower_bounds".into(), value.clone()),
-                        ("upper_bounds".into(), value),
-                    ]
-                })
-                .unwrap_or_default();
-            let raw: RawBounds = apache_avro::from_value(&Value::Record(fields)).expect("bounds");
-            for bounds in [raw.lower_bounds, raw.upper_bounds] {
-                let mut decoded = HashMap::new();
-                restore_bounds(bounds, &mut decoded).expect("restore");
-                if matches!(value, Some(Value::Array(_) | Value::Union(1, _))) {
-                    assert_eq!(
-                        decoded[&999].to_bytes().expect("bytes"),
-                        vec![0xff, 0, 0x80]
-                    );
-                } else {
-                    assert!(decoded.is_empty());
-                }
-            }
-        }
-        for field in ["lower_bounds", "upper_bounds"] {
-            for value in [
-                Value::String("invalid".into()),
-                Value::Array(vec![Value::Record(vec![("key".into(), Value::Int(1))])]),
-                Value::Array(vec![Value::Record(vec![
-                    ("key".into(), Value::String("1".into())),
-                    ("value".into(), Value::Bytes(vec![1])),
-                ])]),
-            ] {
-                assert!(
-                    apache_avro::from_value::<RawBounds>(&Value::Record(vec![(
-                        field.into(),
-                        value
-                    ),]))
-                    .is_err()
-                );
-            }
-            let raw: RawBounds = apache_avro::from_value(&Value::Record(vec![(
-                field.into(),
-                Value::Array(vec![bound.clone(), bound.clone()]),
-            )]))
-            .expect("duplicate bounds decode");
-            assert!(
-                restore_bounds(raw.lower_bounds.or(raw.upper_bounds), &mut HashMap::new()).is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn opaque_bounds_survive_typed_reader_projection() {
-        let raw = vec![0xff, 0, 0x80];
-        let mut decoded = HashMap::new();
-        restore_bounds(
-            Some(vec![RawBound {
-                key: 2147483546,
-                value: raw.clone().into(),
-            }]),
-            &mut decoded,
-        )
-        .expect("restore raw bytes");
-        assert_eq!(decoded[&2147483546].to_bytes().expect("bytes"), raw);
-        assert!(
-            restore_bounds(
-                Some(vec![
-                    RawBound {
-                        key: 1,
-                        value: vec![1].into()
-                    },
-                    RawBound {
-                        key: 1,
-                        value: vec![2].into()
-                    },
-                ]),
-                &mut decoded
-            )
-            .is_err()
-        );
     }
 }

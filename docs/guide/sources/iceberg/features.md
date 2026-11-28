@@ -134,7 +134,7 @@ Sail works with filesystem-backed tables and tables in [Iceberg REST](../../cata
 | Position-delete rewrite procedures          | :construction:     | —                                                                                                                      |
 | Multi-table atomic transactions             | :construction:     | —                                                                                                                      |
 | Z-order clustering                          | :construction:     | —                                                                                                                      |
-| Write-audit-publish                         | :construction:     | —                                                                                                                      |
+| Write-audit-publish                         | :warning:          | Publish staged changes by snapshot ID with `cherrypick_snapshot` or by WAP ID with `publish_changes`.                  |
 | Streaming reads and writes                  | :construction:     | —                                                                                                                      |
 
 Use SQL `CALL` for the supported procedures; see [maintenance examples](./examples#metadata-and-maintenance).

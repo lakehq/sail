@@ -15,6 +15,8 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 _RESERVED_KEYS = (
     "operation",
     "replace-partitions",
+    "source-snapshot-id",
+    "published-wap-id",
     "added-data-files",
     "deleted-data-files",
     "total-data-files",
