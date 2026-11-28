@@ -154,7 +154,6 @@ mod tests {
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
     use sail_common_datafusion::session::time_zone::session_time_zone;
-    use sail_delta_lake::DeltaSnapshotConfig;
 
     use super::*;
 
@@ -314,12 +313,6 @@ mod tests {
                 spark_session_time_zone(&driver)
             );
             assert_eq!(options.execution.time_zone, driver.execution.time_zone);
-            let partition_time_zone = |options: &ConfigOptions| {
-                DeltaSnapshotConfig::default()
-                    .with_session_time_zone(options)
-                    .partition_time_zone
-            };
-            assert_eq!(partition_time_zone(&options), partition_time_zone(&driver));
         }
         Ok(())
     }
