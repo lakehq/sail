@@ -10,9 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: $/.github/actions/adjust-swap-space
+      # Use checkout-relative paths for actions for compatibility with Copilot code review.
 
-      - uses: $/.github/actions/mount-target-directory
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -20,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install protoc
-        uses: $/.github/actions/setup-protoc
+        uses: ./.github/actions/setup-protoc
 
       # We do not use our `setup-rust` action so that the environment is better suited
       # for development purposes.

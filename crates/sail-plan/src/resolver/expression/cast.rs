@@ -13,6 +13,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
+use sail_function::scalar::conversion::float_to_decimal::FloatToDecimal;
 use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
 use sail_function::scalar::datetime::date::Date;
 use sail_function::scalar::datetime::interval::{
@@ -345,6 +346,14 @@ impl PlanResolver<'_> {
             {
                 cast_struct_positionally(expr, &from, &to, is_try)
             }
+            (DataType::Float32 | DataType::Float64, DataType::Decimal128(precision, scale), _) => {
+                ScalarUDF::new_from_impl(FloatToDecimal::new(
+                    precision,
+                    scale,
+                    is_try || !self.config.ansi_mode,
+                ))
+                .call(vec![expr])
+            }
             (
                 from,
                 DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
@@ -616,6 +625,14 @@ fn need_rename_cast(naming: spec::CastNaming, expr: &expr::Expr) -> bool {
         spec::CastNaming::DataFrameProjectionItem => match expr {
             expr::Expr::Cast(cast) => need_rename_cast(naming, cast.expr.as_ref()),
             expr::Expr::TryCast(try_cast) => need_rename_cast(naming, try_cast.expr.as_ref()),
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().is::<FloatToDecimal>() =>
+            {
+                function
+                    .args
+                    .first()
+                    .is_none_or(|x| need_rename_cast(naming, x))
+            }
             expr::Expr::ScalarFunction(function)
                 if function
                     .func
