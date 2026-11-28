@@ -10437,6 +10437,19 @@
                         "nonTerminal": "Keyword(Use)"
                       },
                       {
+                        "nonTerminal": "Keyword(Catalog)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Use)"
+                      },
+                      {
                         "nonTerminal": "DatabaseKeyword"
                       },
                       {
@@ -10450,10 +10463,7 @@
                         "nonTerminal": "Keyword(Use)"
                       },
                       {
-                        "nonTerminal": "Keyword(Catalog)"
-                      },
-                      {
-                        "nonTerminal": "Identifier"
+                        "nonTerminal": "ObjectName"
                       }
                     ]
                   },

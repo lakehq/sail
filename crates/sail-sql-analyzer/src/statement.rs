@@ -223,6 +223,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::Use { r#use: _, name } => {
+            let node = spec::CommandNode::SetCurrentNamespace {
+                name: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::CreateDatabase {
             create: _,
             database: _,
