@@ -574,6 +574,21 @@ pub fn session_state_for_restart(state: &SessionState) -> SessionState {
     state
 }
 
+/// Returns the session state for optimizing the shared body of a CTE definition. The body
+/// is not the output of the query, so the view types of its columns are kept, as the
+/// references read them; `optimizer.expand_views_at_output` would otherwise cast such a
+/// column at the output of the body, which then does not have the types of the definition
+/// and is not shared (see [`share_references`]).
+pub fn session_state_for_shared_body(state: &SessionState) -> SessionState {
+    let mut state = state.clone();
+    state
+        .config_mut()
+        .options_mut()
+        .optimizer
+        .expand_views_at_output = false;
+    state
+}
+
 /// Returns whether the predicate holds for a node of the plan or of the CTE definitions
 /// that the plan refers to, as if each reference was its definition.
 pub fn exists_in_plan_or_cte_definitions(

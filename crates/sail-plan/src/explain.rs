@@ -22,7 +22,9 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
-use crate::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+use crate::shared_cte::{
+    optimize_and_plan_shared_ctes, session_state_for_restart, session_state_for_shared_body,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {
@@ -292,6 +294,7 @@ async fn collect_plan_with(
 
     let mut analyzed_logical = None;
     let mut restart = false;
+    let mut body_state = None;
     let records = Arc::new(Mutex::new(PhysicalPlanRecords::default()));
     let optimizers = std::iter::once(None)
         .chain(
@@ -318,7 +321,9 @@ async fn collect_plan_with(
         plan,
         &mut |plan, query| {
             if !query {
-                return session_state.optimize(&plan);
+                return body_state
+                    .get_or_insert_with(|| session_state_for_shared_body(&session_state))
+                    .optimize(&plan);
             }
             // The query is optimized again after a CTE reference is replaced by its definition.
             let restarted;
