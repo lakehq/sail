@@ -2988,10 +2988,11 @@ def test_delta_overwrite_that_reads_its_table_fails_after_another_session_change
         drop_delta_tables(spark)
 
 
-# Writes into the Iceberg table `t` (rows 1 and 2) that read `t`, while another session appends the row 100 to
-# `t`, with the rows of `t` after the write. The other session appends while the write is planned, or while
-# it runs for `running`. Neither write validates the rows that it read, as in Iceberg, so both commit after
-# the append, and the overwrite replaces the appended row.
+# Writes into the Iceberg table `t` (rows 1 and 2) that read `t`, while another statement of the session appends
+# the row 100 to `t` by its name, with the rows of `t` after the write. The append runs while the write is
+# planned, or while it runs for `running`, and moves the location of the metadata that the catalog entry of `t`
+# records. Neither write validates the rows that it read, as in Iceberg, so both commit after the append, and
+# the overwrite replaces the appended row.
 ICEBERG_WRITES_WHILE_APPENDED = [
     ("planned", "INSERT INTO t SELECT x + 10 FROM t, hook", [1, 2, 11, 12, 100]),
     ("running", "INSERT INTO t SELECT ehook(x) + 10 FROM t", [1, 2, 11, 12, 100]),
@@ -3001,15 +3002,15 @@ ICEBERG_WRITES_WHILE_APPENDED = [
 
 @pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
 @pytest.mark.parametrize(("when", "statement", "expected"), ICEBERG_WRITES_WHILE_APPENDED)
-def test_iceberg_write_that_reads_its_table_commits_after_another_session_appended(
-    spark, observer, tmp_path, run_while_planning, when, statement, expected
+def test_iceberg_write_that_reads_its_table_commits_after_another_statement_appended(
+    spark, tmp_path, run_while_planning, when, statement, expected
 ):
     if when == "running":
         spark.udf.register("ehook", execution_hook(tmp_path))
     spark.sql(f"CREATE TABLE t (x INT) USING iceberg LOCATION '{tmp_path / 't'}'")
     try:
         spark.sql("INSERT INTO t VALUES (1), (2)")
-        run_while_planning(statement, lambda: observer.sql("INSERT INTO t VALUES (100)").collect())
+        run_while_planning(statement, lambda: spark.sql("INSERT INTO t VALUES (100)").collect())
         assert rows(spark, "SELECT * FROM t") == [(x,) for x in expected]
     finally:
         spark.sql("DROP TABLE IF EXISTS t")

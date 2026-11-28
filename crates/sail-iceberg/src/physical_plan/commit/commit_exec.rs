@@ -57,7 +57,7 @@ use crate::table::metadata_loader::{
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
-const MAX_COMMIT_RETRIES: usize = 5;
+pub(crate) const MAX_COMMIT_RETRIES: usize = 5;
 
 fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
     let row_count = i64::try_from(row_count).map_err(|e| {
