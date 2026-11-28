@@ -136,7 +136,7 @@ pub(super) async fn execute(
     if logging {
         let properties = CommitProperties::default()
             .with_operation_metrics(start_metrics)
-            .with_partition_time_zone(snapshot.partition_time_zone().into());
+            .with_partition_time_zone(Arc::clone(snapshot.partition_time_zone()));
         CommitBuilder::from(properties)
             .build(
                 Some(snapshot.clone()),
@@ -188,7 +188,7 @@ pub(super) async fn execute(
         ]);
         let properties = CommitProperties::default()
             .with_operation_metrics(end_metrics)
-            .with_partition_time_zone(latest.partition_time_zone().into());
+            .with_partition_time_zone(Arc::clone(latest.partition_time_zone()));
         CommitBuilder::from(properties)
             .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
             .await?;

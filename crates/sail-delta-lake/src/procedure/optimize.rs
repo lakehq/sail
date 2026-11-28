@@ -326,7 +326,7 @@ pub(super) async fn finish(
         }
         let properties = CommitProperties::default()
             .with_operation_metrics(metrics)
-            .with_partition_time_zone(snapshot.partition_time_zone().into());
+            .with_partition_time_zone(Arc::clone(snapshot.partition_time_zone()));
         CommitBuilder::from(properties)
             .with_actions(actions)
             .build(Some(snapshot.clone()), log_store, operation)

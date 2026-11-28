@@ -398,7 +398,7 @@ impl DeltaSnapshot {
         &self.config
     }
 
-    pub fn partition_time_zone(&self) -> &str {
+    pub fn partition_time_zone(&self) -> &Arc<str> {
         &self.config.partition_time_zone
     }
 
