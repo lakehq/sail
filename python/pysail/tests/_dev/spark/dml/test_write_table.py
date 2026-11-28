@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -566,10 +564,6 @@ def test_insert_overwrite_table_from_scalar_subquery_of_itself(spark, tmp_path):
 
 
 @pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark reads the subquery after the overwrite deletes the table")
-@pytest.mark.skipif(
-    os.environ.get("SAIL_MODE") in ("local-cluster", "kubernetes-cluster"),
-    reason="the scalar subquery may read the table after the overwrite deletes it in cluster mode",
-)
 def test_insert_overwrite_table_from_scalar_subquery_reading_itself(spark, tmp_path):
     _create_self_overwrite_tables(spark, tmp_path)
     # The scalar subquery runs before the overwrite deletes the table.
