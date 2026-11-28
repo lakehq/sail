@@ -22,7 +22,7 @@ pub(super) fn prepare_reference(
     let mut prepared = PreparedSnapshotOperation {
         requirements: vec![],
         updates: vec![],
-        manifests: vec![],
+        staged_files: vec![],
         output: RecordBatch::new_empty(schema),
         changed: false,
     };
@@ -208,7 +208,7 @@ fn empty_snapshot(
             first_row_id,
         })
         .map_err(DataFusionError::Execution)?;
-    prepared.manifests.push((path.clone(), bytes));
+    prepared.staged_files.push((path.clone(), bytes));
     let mut summary = Summary::new(Operation::Append);
     for key in [
         crate::spec::snapshots::summary::TOTAL_RECORDS,

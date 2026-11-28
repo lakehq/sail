@@ -107,7 +107,10 @@ async fn preparation_reads_each_physical_manifest_once_and_preserves_retained_sp
             if noop {
                 op.older_than_ms = Some(0);
             }
-            let prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+            let prepared = op
+                .prepare(&TaskContext::default(), &store, &url, &metadata)
+                .await
+                .expect("prepare");
             let mut expected = HashMap::from([
                 ("table/metadata/list.avro".to_string(), 1),
                 ("table/metadata/input-0.avro".to_string(), 1),
@@ -131,7 +134,7 @@ async fn preparation_reads_each_physical_manifest_once_and_preserves_retained_sp
                     let path = checked_path(&store, &url, raw).expect("path");
                     let candidate = candidates
                         .paths
-                        .get(&path)
+                        .get(&path.into())
                         .expect("candidate including shared file");
                     assert_eq!(candidate.kind, kind);
                     assert!(candidate.selected);
@@ -169,6 +172,7 @@ async fn preparation_reads_each_physical_manifest_once_and_preserves_retained_sp
             prepared
                 .expiration
                 .finish(
+                    &TaskContext::default(),
                     &store,
                     &url,
                     Ok(current),
@@ -216,7 +220,7 @@ async fn refreshed_gc_property_controls_cleanup_before_any_inventory_reads() {
         let counted = Arc::new(TestStore::new(store.base));
         let store = StoreContext::new(counted.clone(), &url).expect("counted store");
         let mut prepared = operation()
-            .prepare(&store, &url, &metadata)
+            .prepare(&TaskContext::default(), &store, &url, &metadata)
             .await
             .expect("prepare with GC enabled");
         // Exercise every cleanup counter, including delete and statistics files.
@@ -229,7 +233,7 @@ async fn refreshed_gc_property_controls_cleanup_before_any_inventory_reads() {
                 .await
                 .expect("put");
             prepared.expiration.candidates.paths.insert(
-                path.clone(),
+                path.clone().into(),
                 InventoryEntry {
                     kind,
                     selected: true,
@@ -250,12 +254,18 @@ async fn refreshed_gc_property_controls_cleanup_before_any_inventory_reads() {
         }
         counted.gets.lock().expect("gets").clear();
         if !enabled {
-            assert!(operation().prepare(&store, &url, &metadata).await.is_err());
+            assert!(
+                operation()
+                    .prepare(&TaskContext::default(), &store, &url, &metadata)
+                    .await
+                    .is_err()
+            );
             assert!(counted.gets.lock().expect("gets").is_empty());
         }
         let batch = prepared
             .expiration
             .finish(
+                &TaskContext::default(),
                 &store,
                 &url,
                 Ok(metadata),
@@ -305,7 +315,10 @@ async fn cleanup_failures_retry_independently_with_bounded_concurrency_and_exact
         injected.yield_deletes = true;
         let mut op = operation();
         op.concurrency = concurrency;
-        let mut prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+        let mut prepared = op
+            .prepare(&TaskContext::default(), &store, &url, &metadata)
+            .await
+            .expect("prepare");
         let mut expected_attempts = HashMap::from([(Path::from("table/metadata/list.avro"), 1)]);
         let mut survivors = vec![];
         let mut removed = vec![Path::from("table/metadata/list.avro")];
@@ -343,7 +356,7 @@ async fn cleanup_failures_retry_independently_with_bounded_concurrency_and_exact
                     removed.push(path.clone());
                 }
                 prepared.expiration.candidates.paths.insert(
-                    path,
+                    path.into(),
                     InventoryEntry {
                         kind,
                         selected: true,
@@ -377,6 +390,7 @@ async fn cleanup_failures_retry_independently_with_bounded_concurrency_and_exact
         let batch = prepared
             .expiration
             .finish(
+                &TaskContext::default(),
                 &store,
                 &url,
                 Ok(metadata),
@@ -490,7 +504,7 @@ async fn selected_inventory_preserves_file_kinds_and_shared_statistics() {
         );
     }
     let prepared = operation()
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("prepare");
     for (raw, kind) in [
@@ -507,7 +521,7 @@ async fn selected_inventory_preserves_file_kinds_and_shared_statistics() {
                 .expiration
                 .candidates
                 .paths
-                .get(&path)
+                .get(&path.into())
                 .expect("candidate")
                 .kind,
             kind
@@ -534,15 +548,23 @@ async fn inventory_limit_counts_retained_paths_and_noop_validates_them() {
     op.older_than_ms = Some(0);
     metadata.statistics.push(
         serde_json::from_value(serde_json::json!({
-            "snapshot-id": 20, "statistics-path": "memory://foreign/table/stats.puffin",
+            "snapshot-id": 20, "statistics-path": "memory://foreign/table/stats.puffin?ambiguous",
             "file-size-in-bytes": 1, "file-footer-size-in-bytes": 0, "blob-metadata": []
         }))
         .expect("statistics"),
     );
-    assert!(op.prepare(&store, &url, &metadata).await.is_err());
+    assert!(
+        op.prepare(&TaskContext::default(), &store, &url, &metadata)
+            .await
+            .is_err()
+    );
     metadata.statistics.clear();
     metadata.snapshots[1].key_id = Some("encrypted".into());
-    assert!(op.prepare(&store, &url, &metadata).await.is_err());
+    assert!(
+        op.prepare(&TaskContext::default(), &store, &url, &metadata)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -648,14 +670,20 @@ async fn shared_manifests_refresh_and_missing_files_are_safe() {
         .expect("descriptor")
         .schema();
     let prepared = operation()
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("prepare");
     assert_eq!(prepared.expiration.candidates.paths.len(), 3);
     // A concurrent restoration observed by refresh protects the candidate.
     let batch = prepared
         .expiration
-        .finish(&store, &url, Ok(metadata.clone()), schema.clone())
+        .finish(
+            &TaskContext::default(),
+            &store,
+            &url,
+            Ok(metadata.clone()),
+            schema.clone(),
+        )
         .await
         .expect("finish");
     assert_eq!(
@@ -668,7 +696,7 @@ async fn shared_manifests_refresh_and_missing_files_are_safe() {
         0
     );
     let prepared = operation()
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("prepare");
     let mut current = metadata.clone();
@@ -680,7 +708,7 @@ async fn shared_manifests_refresh_and_missing_files_are_safe() {
         .expect("missing file");
     let batch = prepared
         .expiration
-        .finish(&store, &url, Ok(current), schema)
+        .finish(&TaskContext::default(), &store, &url, Ok(current), schema)
         .await
         .expect("finish");
     assert_eq!(
@@ -736,10 +764,16 @@ async fn encoded_uri_paths_preserve_live_paths_and_do_not_touch_double_escaped_k
         stats(20, "memory://bucket/table/metadata/shared%3A.puffin"),
     ];
     let prepared = operation()
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("prepare aliases");
-    assert!(prepared.expiration.candidates.paths.contains_key(&literal));
+    assert!(
+        prepared
+            .expiration
+            .candidates
+            .paths
+            .contains_key(&literal.clone().into())
+    );
     let mut current = metadata.clone();
     current.snapshots.remove(0);
     current.statistics.remove(0);
@@ -749,16 +783,23 @@ async fn encoded_uri_paths_preserve_live_paths_and_do_not_touch_double_escaped_k
         .schema();
     prepared
         .expiration
-        .finish(&store, &url, Ok(current), schema.clone())
+        .finish(
+            &TaskContext::default(),
+            &store,
+            &url,
+            Ok(current),
+            schema.clone(),
+        )
         .await
         .expect("finish");
     assert!(store.base.get(&literal).await.is_ok());
     assert!(store.base.get(&double).await.is_ok());
     // Once genuinely unreachable, remove exactly the literal key, not its encoded sibling.
     Expiration {
+        external_stores: HashMap::new(),
         candidates: Inventory {
             paths: HashMap::from([(
-                literal.clone(),
+                literal.clone().into(),
                 InventoryEntry {
                     kind: 5,
                     selected: true,
@@ -771,6 +812,7 @@ async fn encoded_uri_paths_preserve_live_paths_and_do_not_touch_double_escaped_k
         location: metadata.location.clone(),
     }
     .finish(
+        &TaskContext::default(),
         &store,
         &url,
         Ok({
@@ -881,7 +923,7 @@ async fn ambiguous_inventory_paths_fail_preflight_without_mutation() {
             metadata.ensure_required_format_fields();
             let metadata_before = metadata.to_json().expect("metadata");
             let error = operation()
-                .prepare(&store, &url, &metadata)
+                .prepare(&TaskContext::default(), &store, &url, &metadata)
                 .await
                 .err()
                 .expect("preflight refusal");
@@ -930,7 +972,12 @@ async fn windows_drive_aliases_are_rejected_before_publication_on_every_platform
             }))
             .expect("statistics"),
         ];
-        assert!(operation().prepare(&store, &url, &metadata).await.is_err());
+        assert!(
+            operation()
+                .prepare(&TaskContext::default(), &store, &url, &metadata)
+                .await
+                .is_err()
+        );
         assert_eq!(
             store
                 .base
@@ -999,16 +1046,28 @@ async fn disjoint_expirations_keep_shared_candidates_until_fresh_reachability() 
     op.older_than_ms = Some(0);
     op.snapshot_ids = HashSet::from([10]);
     let first = op
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("first inventory");
     op.snapshot_ids = HashSet::from([20]);
     let second = op
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("second inventory");
-    assert!(first.expiration.candidates.paths.contains_key(&path));
-    assert!(second.expiration.candidates.paths.contains_key(&path));
+    assert!(
+        first
+            .expiration
+            .candidates
+            .paths
+            .contains_key(&path.clone().into())
+    );
+    assert!(
+        second
+            .expiration
+            .candidates
+            .paths
+            .contains_key(&path.clone().into())
+    );
     let schema = IcebergProcedureType::ExpireSnapshots
         .descriptor()
         .expect("descriptor")
@@ -1019,7 +1078,13 @@ async fn disjoint_expirations_keep_shared_candidates_until_fresh_reachability() 
     metadata.statistics.retain(|file| file.snapshot_id != 10);
     first
         .expiration
-        .finish(&store, &url, Ok(metadata.clone()), schema.clone())
+        .finish(
+            &TaskContext::default(),
+            &store,
+            &url,
+            Ok(metadata.clone()),
+            schema.clone(),
+        )
         .await
         .expect("first finish");
     assert!(store.base.get(&path).await.is_ok());
@@ -1029,7 +1094,7 @@ async fn disjoint_expirations_keep_shared_candidates_until_fresh_reachability() 
     metadata.statistics.clear();
     second
         .expiration
-        .finish(&store, &url, Ok(metadata), schema)
+        .finish(&TaskContext::default(), &store, &url, Ok(metadata), schema)
         .await
         .expect("second finish");
     assert!(store.base.get(&path).await.is_err());
@@ -1040,7 +1105,7 @@ async fn changed_identity_and_unreadable_retained_inventory_preserve_candidates(
     for fault in 0..3 {
         let (store, url, mut metadata) = fixture().await;
         let prepared = operation()
-            .prepare(&store, &url, &metadata)
+            .prepare(&TaskContext::default(), &store, &url, &metadata)
             .await
             .expect("prepare");
         metadata.snapshots.remove(0);
@@ -1052,6 +1117,7 @@ async fn changed_identity_and_unreadable_retained_inventory_preserve_candidates(
         let batch = prepared
             .expiration
             .finish(
+                &TaskContext::default(),
                 &store,
                 &url,
                 Ok(metadata),
@@ -1096,7 +1162,10 @@ async fn expiration_requirements_guard_observed_heads_but_not_unseen_refs_or_pro
     );
     let mut op = operation();
     op.clean_metadata = true;
-    let prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+    let prepared = op
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
+        .await
+        .expect("prepare");
     assert!(
         prepared
             .requirements
@@ -1134,12 +1203,13 @@ async fn expiration_requirements_guard_observed_heads_but_not_unseen_refs_or_pro
 async fn failed_refresh_preserves_all_candidates() {
     let (store, url, metadata) = fixture().await;
     let prepared = operation()
-        .prepare(&store, &url, &metadata)
+        .prepare(&TaskContext::default(), &store, &url, &metadata)
         .await
         .expect("prepare");
     prepared
         .expiration
         .finish(
+            &TaskContext::default(),
             &store,
             &url,
             Err(DataFusionError::Execution("refresh failed".into())),
@@ -1323,4 +1393,60 @@ fn floor_micros_and_array_nulls_survive_serialization() {
     let op = ExpireSnapshots::from_invocation(&decoded).expect("arguments");
     assert_eq!(op.older_than_ms, Some(-1));
     assert_eq!(op.snapshot_ids, HashSet::from([1]));
+}
+
+#[tokio::test]
+async fn external_statistics_reachability_uses_the_store_and_key() {
+    for shared in [false, true] {
+        let (store, table, mut metadata) = fixture().await;
+        let ctx = TaskContext::default();
+        let external = Url::parse("memory://external/").expect("external store URL");
+        let other = Arc::new(object_store::memory::InMemory::new());
+        ctx.runtime_env()
+            .register_object_store(&external, other.clone());
+        let key = Path::from("stats/shared");
+        other.put(&key, "external".into()).await.expect("put");
+        store.base.put(&key, "table".into()).await.expect("put");
+        let statistic = |id, path: Url| {
+            serde_json::from_value(serde_json::json!({
+                "snapshot-id": id, "statistics-path": path.as_str(), "file-size-in-bytes": 8
+            }))
+            .expect("partition statistic")
+        };
+        let expired = external
+            .join(key.as_ref())
+            .expect("external statistics URL");
+        let retained = if shared {
+            expired.clone()
+        } else {
+            table.join("/stats/shared").expect("table statistics URL")
+        };
+        metadata.partition_statistics = vec![statistic(10, expired), statistic(20, retained)];
+        let prepared = operation()
+            .prepare(&ctx, &store, &table, &metadata)
+            .await
+            .expect("prepare");
+        metadata.snapshots.retain(|s| s.snapshot_id != 10);
+        metadata.partition_statistics.remove(0);
+        let schema = IcebergProcedureType::ExpireSnapshots
+            .descriptor()
+            .expect("descriptor")
+            .schema();
+        let batch = prepared
+            .expiration
+            .finish(&ctx, &store, &table, Ok(metadata), schema)
+            .await
+            .expect("finish");
+        assert_eq!(
+            batch
+                .column(5)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("count")
+                .value(0),
+            i64::from(!shared)
+        );
+        assert_eq!(other.head(&key).await.is_ok(), shared);
+        assert!(store.base.head(&key).await.is_ok());
+    }
 }

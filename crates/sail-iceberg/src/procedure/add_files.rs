@@ -807,7 +807,7 @@ async fn prepare_append(
             },
         ],
         updates,
-        manifests,
+        staged_files: manifests,
         output: output_schema.batch(count, partitions)?,
     })
 }

@@ -310,3 +310,13 @@ def test_add_files_catalog_location_with_literal_escape(spark, jvm_spark, hms_s3
     assert expected == [11]
     spark.sql(f"CALL system.add_files('{target}', '{source}')").collect()
     assert [row.id for row in spark.table(target).collect()] == expected
+
+
+def test_stats_procedures(spark, hms_s3_database, jvm_spark, hms_s3_env):
+    from pysail.tests._dev.spark.catalog.hms.test_lakehouse_ddl import _iceberg_metadata
+    from pysail.tests._dev.spark.catalog.stats_utils import check_iceberg_stats
+
+    def read_metadata():
+        return _iceberg_metadata(jvm_spark, hms_s3_database, "procedure_stats", hms_s3_env)[1]
+
+    check_iceberg_stats(spark, f"{hms_s3_database}.procedure_stats", read_metadata)

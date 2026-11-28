@@ -22,7 +22,7 @@ struct ReadableField {
 }
 
 pub(crate) fn schema(metadata: &TableMetadata) -> Result<SchemaRef> {
-    let partition_type = unified_partition_type(metadata)?;
+    let partition_type = unified_partition_type(metadata, false)?;
     let readable_fields = readable_fields(metadata)?;
     let mut fields = vec![
         Field::new("content", DataType::Int32, true),
@@ -105,7 +105,7 @@ pub(crate) struct FilesProjection<'a> {
 impl<'a> FilesProjection<'a> {
     pub(crate) fn try_new(metadata: &'a TableMetadata, projection: &[usize]) -> Result<Self> {
         let schema = Arc::new(schema(metadata)?.project(projection)?);
-        let partition_type = unified_partition_type(metadata)?;
+        let partition_type = unified_partition_type(metadata, false)?;
         let readable_fields = if schema
             .fields()
             .iter()
@@ -326,7 +326,7 @@ fn i32_list_scalar(values: &[i32]) -> Result<ScalarValue> {
     )
 }
 
-fn partition_value(
+pub(crate) fn partition_value(
     metadata: &TableMetadata,
     file: &DataFile,
     partition_type: &StructType,
@@ -483,7 +483,10 @@ fn readable_fields(metadata: &TableMetadata) -> Result<Vec<ReadableField>> {
     Ok(fields)
 }
 
-fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
+pub(crate) fn unified_partition_type(
+    metadata: &TableMetadata,
+    include_historical_sources: bool,
+) -> Result<StructType> {
     let schema = metadata.current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing the current schema".to_string())
     })?;
@@ -502,7 +505,18 @@ fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
             let Ok(source_id) = partition_field.source_id() else {
                 continue;
             };
-            let Some(source) = schema.field_by_id(source_id) else {
+            let source = schema.field_by_id(source_id).or_else(|| {
+                if !include_historical_sources {
+                    return None;
+                }
+                metadata
+                    .schemas
+                    .iter()
+                    .filter_map(|s| Some((s.schema_id(), s.field_by_id(source_id)?)))
+                    .max_by_key(|(id, _)| *id)
+                    .map(|(_, field)| field)
+            });
+            let Some(source) = source else {
                 continue;
             };
             let field_type = if matches!(partition_field.transform, crate::spec::Transform::Day) {

@@ -25,6 +25,7 @@ pub enum LakeProcedureDataType {
     TimestampMicros,
     /// SQL text resolved against the target table by the engine.
     SqlPredicate,
+    StringArray,
 }
 
 impl LakeProcedureDataType {
@@ -48,6 +49,7 @@ impl LakeProcedureDataType {
                 )),
                 false,
             ),
+            Self::StringArray => DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             Self::Int64Array => DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
             Self::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
         }
@@ -62,6 +64,7 @@ impl LakeProcedureDataType {
                 | (Self::Int64, LakeProcedureValue::Int64(_))
                 | (Self::Utf8 | Self::SqlPredicate, LakeProcedureValue::Utf8(_))
                 | (Self::StringMap, LakeProcedureValue::StringMap(_))
+                | (Self::StringArray, LakeProcedureValue::StringArray(_))
                 | (Self::Int64Array, LakeProcedureValue::Int64Array(_))
                 | (
                     Self::TimestampMicros,
@@ -87,6 +90,7 @@ pub enum LakeProcedureValue {
     StringMap(BTreeMap<String, String>),
     Int64Array(Vec<Option<i64>>),
     TimestampMicros(i64),
+    StringArray(Vec<Option<String>>),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

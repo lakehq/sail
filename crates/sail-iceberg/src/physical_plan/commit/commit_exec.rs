@@ -52,8 +52,8 @@ use crate::spec::{
     StructType, TableMetadata, TableRequirement, Type,
 };
 use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_file_version_from_path,
-    metadata_location_to_object_path_string, table_metadata_location,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
+    table_metadata_location,
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
@@ -1018,7 +1018,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     crate::table::find_latest_metadata_file(&object_store, &table_url).await?
                 };
 
-                let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
+                let bytes = crate::table::metadata_loader::load_registered_metadata(
+                    &context.runtime_env(),
+                    &object_store,
+                    catalog_metadata_location.as_deref(),
+                    &latest_meta,
+                )
+                .await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
@@ -1589,7 +1595,7 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
-    use crate::table::metadata_loader::encode_metadata_file;
+    use crate::table::metadata_loader::{encode_metadata_file, load_metadata_file_bytes};
 
     #[test]
     fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {

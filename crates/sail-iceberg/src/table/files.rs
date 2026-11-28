@@ -109,40 +109,50 @@ pub(crate) fn inherit_manifest_entries(
 ) -> Result<()> {
     let mut next_row_id = descriptor.first_row_id;
     for entry in entries {
+        inherit_manifest_entry(descriptor, version, &mut next_row_id, entry)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn inherit_manifest_entry(
+    descriptor: &ManifestFile,
+    version: FormatVersion,
+    next_row_id: &mut Option<i64>,
+    entry: &mut ManifestEntry,
+) -> Result<()> {
+    entry
+        .snapshot_id
+        .get_or_insert(descriptor.added_snapshot_id);
+    if version == FormatVersion::V1 {
+        entry.sequence_number.get_or_insert(0);
+        entry.file_sequence_number.get_or_insert(0);
+    } else if entry.status == ManifestStatus::Added {
         entry
-            .snapshot_id
-            .get_or_insert(descriptor.added_snapshot_id);
-        if version == FormatVersion::V1 {
-            entry.sequence_number.get_or_insert(0);
-            entry.file_sequence_number.get_or_insert(0);
-        } else if entry.status == ManifestStatus::Added {
-            entry
-                .sequence_number
-                .get_or_insert(descriptor.sequence_number);
-            entry
-                .file_sequence_number
-                .get_or_insert(descriptor.sequence_number);
-        } else if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
-            return exec_err!("Iceberg existing/deleted manifest entries require sequence numbers");
-        }
-        let file = &mut entry.data_file;
-        file.partition_spec_id = descriptor.partition_spec_id;
-        if file.content == DataContentType::Data
-            && entry.status != ManifestStatus::Deleted
-            && file.first_row_id.is_none()
-            && let Some(first_row_id) = next_row_id
-        {
-            file.first_row_id = Some(first_row_id);
-            next_row_id = Some(
-                i64::try_from(file.record_count)
-                    .ok()
-                    .and_then(|count| first_row_id.checked_add(count))
-                    .filter(|id| *id >= 0)
-                    .ok_or_else(|| {
-                        datafusion::common::exec_datafusion_err!("Iceberg row ID overflow")
-                    })?,
-            );
-        }
+            .sequence_number
+            .get_or_insert(descriptor.sequence_number);
+        entry
+            .file_sequence_number
+            .get_or_insert(descriptor.sequence_number);
+    } else if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+        return exec_err!("Iceberg existing/deleted manifest entries require sequence numbers");
+    }
+    let file = &mut entry.data_file;
+    file.partition_spec_id = descriptor.partition_spec_id;
+    if file.content == DataContentType::Data
+        && entry.status != ManifestStatus::Deleted
+        && file.first_row_id.is_none()
+        && let Some(first_row_id) = *next_row_id
+    {
+        file.first_row_id = Some(first_row_id);
+        *next_row_id = Some(
+            i64::try_from(file.record_count)
+                .ok()
+                .and_then(|count| first_row_id.checked_add(count))
+                .filter(|id| *id >= 0)
+                .ok_or_else(|| {
+                    datafusion::common::exec_datafusion_err!("Iceberg row ID overflow")
+                })?,
+        );
     }
     Ok(())
 }

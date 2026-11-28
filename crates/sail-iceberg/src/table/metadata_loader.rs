@@ -200,6 +200,20 @@ pub(crate) async fn write_version_hint(
     }
 }
 
+/// A metastore's metadata pointer may live on a different object store than the table data.
+pub(crate) async fn load_registered_metadata(
+    runtime: &datafusion::execution::runtime_env::RuntimeEnv,
+    table_store: &Arc<dyn object_store::ObjectStore>,
+    location: Option<&str>,
+    object_path: &str,
+) -> Result<Vec<u8>> {
+    let store = match location.and_then(crate::utils::parse_absolute_url) {
+        Some(url) => runtime.object_store_registry.get_store(&url)?,
+        None => table_store.clone(),
+    };
+    load_metadata_file_bytes(&store, object_path).await
+}
+
 pub(crate) async fn load_metadata_file_bytes(
     object_store: &Arc<dyn object_store::ObjectStore>,
     metadata_location: &str,

@@ -52,9 +52,10 @@ def namespace(spark: SparkSession) -> Generator[None, None, None]:
 def _load_lakekeeper_table(
     lakekeeper_endpoint: str,
     lakekeeper_warehouse_id: str,
+    name: str = TABLE,
 ) -> dict:
     namespace = urllib.parse.quote(NAMESPACE, safe="")
-    table = urllib.parse.quote(TABLE.rsplit(".", 1)[1], safe="")
+    table = urllib.parse.quote(name.rsplit(".", 1)[1], safe="")
     response = requests.get(
         f"{lakekeeper_endpoint}/catalog/v1/{lakekeeper_warehouse_id}/namespaces/{namespace}/tables/{table}",
         timeout=30,
@@ -118,3 +119,12 @@ def test_lakekeeper_remove_last_property(spark: SparkSession, lakekeeper_endpoin
         assert "custom" not in reference.refresh().properties
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_stats_procedures(spark, lakekeeper_endpoint, lakekeeper_warehouse_id):
+    from pysail.tests._dev.spark.catalog.stats_utils import check_iceberg_stats
+
+    table = f"sail.{NAMESPACE}.procedure_stats"
+    check_iceberg_stats(
+        spark, table, lambda: _load_lakekeeper_table(lakekeeper_endpoint, lakekeeper_warehouse_id, table)["metadata"]
+    )

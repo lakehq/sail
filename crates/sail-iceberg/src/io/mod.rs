@@ -13,6 +13,7 @@ use crate::spec::{
 };
 
 pub(crate) mod deletion_vector;
+pub(crate) mod puffin;
 #[cfg(test)]
 pub(crate) mod test_store;
 
@@ -54,6 +55,37 @@ impl StoreContext {
             &self.prefixed,
             ObjectPath::parse(raw).map_err(|e| DataFusionError::External(Box::new(e)))?,
         ))
+    }
+
+    /// Resolve a statistics file as a URI, including a metadata directory on another store.
+    pub(crate) fn statistics_object(
+        &self,
+        ctx: &datafusion::execution::TaskContext,
+        location: &str,
+    ) -> Result<(Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
+        if let Some(url) = crate::utils::parse_absolute_url(location) {
+            let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
+            let path = self.statistics_uri_path(&url, location)?;
+            Ok((store, path))
+        } else {
+            let (store, path) = self.resolve(location)?;
+            Ok((store.clone(), path))
+        }
+    }
+
+    pub(crate) fn statistics_uri_path(
+        &self,
+        url: &Url,
+        location: &str,
+    ) -> Result<ObjectPath, DataFusionError> {
+        if url.scheme() == "file" {
+            let file = url.to_file_path().map_err(|()| {
+                DataFusionError::Plan(format!("Invalid statistics file URI {url}"))
+            })?;
+            Ok(ObjectPath::from_absolute_path(file)?)
+        } else {
+            self.resolve_to_absolute_path(location)
+        }
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {

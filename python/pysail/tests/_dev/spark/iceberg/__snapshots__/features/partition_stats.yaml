@@ -1,0 +1,99 @@
+# serializer version: 1
+---
+name: "test_a_v3_table_reuses_avro_statistics_with_null_v2_delete_counts"
+data:
+  data_record_count:
+    required: true
+    value: 3
+  dv_count:
+    required: true
+    value: 0
+  equality_delete_file_count:
+    required: true
+    value: 0
+  equality_delete_record_count:
+    required: true
+    value: 0
+  position_delete_file_count:
+    required: true
+    value: 0
+  position_delete_record_count:
+    required: true
+    value: 0
+  total_record_count:
+    required: false
+    value: null
+---
+name: "test_incremental_avro_statistics_preserve_typed_partition_values"
+data:
+  partition:
+    b:
+      id: 1000
+      type: boolean
+      value: true
+    bytes:
+      id: 1010
+      type: binary
+      value: '010203'
+    d:
+      id: 1004
+      type: double
+      value: 3.1415926
+    date:
+      id: 1005
+      type: date
+      value: 18993
+    dec_11_2:
+      id: 1012
+      type: decimal(11, 2)
+      value: '1234567.89'
+    dec_38_10:
+      id: 1013
+      type: decimal(38, 10)
+      value: '12345678901234567890.1234567890'
+    dec_9_0:
+      id: 1011
+      type: decimal(9, 0)
+      value: '123456789'
+    f:
+      id: 1003
+      type: float
+      value: 3.140000104904175
+    fixed:
+      id: 1009
+      type: fixed[7]
+      value: '00010203040506'
+    i:
+      id: 1001
+      type: int
+      value: 42
+    l:
+      id: 1002
+      type: long
+      value: 42
+    s:
+      id: 1007
+      type: string
+      value: string
+    time:
+      id: 1014
+      type: time
+      value: 36610000000
+    ts:
+      id: 1006
+      type: timestamp
+      value: 1512123175038194
+    uuid:
+      id: 1008
+      type: uuid
+      value: 00112233-4455-6677-8899-aabbccddeeff
+  statistics:
+    data_file_count: 2
+    data_record_count: 3
+    equality_delete_file_count: 0
+    equality_delete_record_count: 0
+    position_delete_file_count: 0
+    position_delete_record_count: 0
+    spec_id: 0
+    total_data_file_size_in_bytes: 30
+    total_record_count: null

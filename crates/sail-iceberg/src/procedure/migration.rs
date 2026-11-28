@@ -321,7 +321,7 @@ async fn publish_rest_import(
     let (requirements, mut updates) =
         crate::operations::replacement::rest_table_changes(&replacement, &metadata, &metadata)?;
     updates.extend(prepared.updates);
-    let mut cleanup = stage_manifests(store, &prepared.manifests).await?;
+    let mut cleanup = stage_manifests(store, &prepared.staged_files).await?;
     let ctx = Arc::clone(ctx);
     let publish = async move {
         let coordinator =
@@ -382,7 +382,7 @@ async fn publish_path_import(
             replacement,
             Box::pin(async move {
                 ensure_new_table_location(&store, &url).await?;
-                let mut cleanup = stage_manifests(&store, &prepared.manifests).await?;
+                let mut cleanup = stage_manifests(&store, &prepared.staged_files).await?;
                 cleanup.publication_started();
                 match publication.write(&store).await {
                     Ok(MetadataWriteOutcome::Written) => publication.write_hint(&store).await,

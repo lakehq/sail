@@ -334,6 +334,22 @@ pub(crate) fn apply_snapshot_actions(
                     .partition_specs
                     .retain(|spec| !spec_ids.contains(&spec.spec_id()));
             }
+            TableUpdate::SetStatistics { statistics } => {
+                metadata
+                    .statistics
+                    .retain(|file| file.snapshot_id != statistics.snapshot_id);
+                metadata.statistics.push(statistics.clone());
+            }
+            TableUpdate::SetPartitionStatistics {
+                partition_statistics,
+            } => {
+                metadata
+                    .partition_statistics
+                    .retain(|file| file.snapshot_id != partition_statistics.snapshot_id);
+                metadata
+                    .partition_statistics
+                    .push(partition_statistics.clone());
+            }
             TableUpdate::RemoveStatistics { snapshot_id } => metadata
                 .statistics
                 .retain(|file| file.snapshot_id != *snapshot_id),

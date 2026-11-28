@@ -930,7 +930,13 @@ pub(crate) async fn plan_iceberg_write(
             Table::load_with_metadata_location(
                 ctx.runtime_env().as_ref(),
                 table_url.clone(),
-                Some(metadata_path.clone()),
+                Some(
+                    planned_metadata_location
+                        .as_ref()
+                        .or(metadata_location.as_ref().filter(|_| catalog_managed_table))
+                        .unwrap_or(metadata_path)
+                        .clone(),
+                ),
             )
             .await?,
         )

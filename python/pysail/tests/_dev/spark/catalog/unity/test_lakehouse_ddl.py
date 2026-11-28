@@ -83,3 +83,18 @@ def test_unity_native_iceberg_create_rejected_before_storage(spark, unity_storag
         assert not location.exists()
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def test_iceberg_stats_on_unity_delta(spark, unity_rest_url):
+    database = "stats_catalog"
+    table = f"{database}.items"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING delta")
+        before = _unity_table_info(unity_rest_url, table)
+        for procedure in ("compute_table_stats", "compute_partition_stats"):
+            with pytest.raises(Exception, match=r"(?i)(iceberg|procedure|format)"):
+                spark.sql(f"CALL system.{procedure}('{table}')").collect()
+        assert _unity_table_info(unity_rest_url, table) == before
+    finally:
+        spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")

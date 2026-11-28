@@ -148,7 +148,7 @@ async fn register(
         0,
         MetadataFileStyle::Unique,
     )?;
-    let mut cleanup = stage_import_metadata(&store, &publication, &prepared.manifests).await?;
+    let mut cleanup = stage_import_metadata(&store, &publication, &prepared.staged_files).await?;
     let mut options = request.options.clone();
     options.properties = request
         .metadata
