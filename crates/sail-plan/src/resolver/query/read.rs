@@ -387,6 +387,7 @@ impl PlanResolver<'_> {
                         .as_ref()
                         .map(|(_, relation)| relation.name().to_string()),
                     format: format.clone(),
+                    format_required: required_format.is_some(),
                     options,
                     temporal_options,
                     read_case_sensitive: self.config.case_sensitive,

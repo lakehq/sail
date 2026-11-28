@@ -130,6 +130,9 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     pub lake_relation: Option<String>,
     /// The format of the table, which the time travel options are written for.
     pub format: String,
+    /// Whether the read requires the table to have the format, as
+    /// `spark.read.format(...).table(...)` does.
+    pub format_required: bool,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
     pub read_case_sensitive: bool,
@@ -1196,6 +1199,13 @@ impl PlanResolver<'_> {
                 view_name(view),
             ))));
         };
+        if origin.format_required && !format.eq_ignore_ascii_case(&origin.format) {
+            return Err(PlanError::invalid(format!(
+                "{} is not an {} table",
+                origin.name.join("."),
+                origin.format,
+            )));
+        }
         if origin.travels_in_time() && !format.eq_ignore_ascii_case(&origin.format) {
             return Err(PlanError::AnalysisError(format!(
                 "the temporary view {} reads a version of {}, which has been created again \
@@ -1739,6 +1749,7 @@ mod tests {
             session_table: None,
             lake_relation: None,
             format: String::new(),
+            format_required: false,
             options: vec![],
             temporal_options: vec![],
             read_case_sensitive: false,

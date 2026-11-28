@@ -1947,6 +1947,18 @@ def test_data_frame_view_that_travels_in_time_by_a_read_option_reads_its_version
     assert spark.table(view).columns == ["id"]
 
 
+def test_data_frame_view_of_a_read_in_a_required_format_fails_after_another_format(spark, tables):
+    table = tables("iceberg")
+    table.insert("(1)")
+    view = table.create_view("dv", frame=spark.read.format("iceberg").load(table.name))
+    current = table.create_view("dv", frame=spark.table(table.name))
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    table.recreate("id BIGINT", "(5)", fmt="parquet")
+    # The view fails as its data frame does, and a view of a read in any format follows the table.
+    assert "is not an iceberg table" in error(spark, f"SELECT * FROM {view}")
+    assert rows(spark, f"SELECT * FROM {current}") == [(5,)]
+
+
 def test_data_frame_view_of_a_version_of_a_removed_path_reports_its_columns(spark, tables):
     table = tables("delta")
     table.insert("(1)")
