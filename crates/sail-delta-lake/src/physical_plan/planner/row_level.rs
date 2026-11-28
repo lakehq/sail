@@ -3,12 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err};
+use datafusion::logical_expr::TableSource;
+use datafusion::logical_expr::expr::Cast;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::Expr;
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{RowLevelCommand, RowLevelWriteMode};
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::{MergeMatchedAction, MergeNotMatchedBySourceAction};
 use sail_logical_plan::row_level::{RowLevelEffectPlans, RowLevelWriteNode};
@@ -30,16 +35,27 @@ pub async fn create_row_level_write_physical_plan(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let target_snapshot = find_target_snapshot(node.raw_target())?;
+    let (target_snapshot, target_schema) = find_target_source(node.raw_target())?;
     let effects = collect_physical_effects(node.effects(), physical_inputs)?;
     let target = node.target().clone();
 
     match node.command() {
         RowLevelCommand::Truncate | RowLevelCommand::Delete => {
+            let condition = node
+                .condition()
+                .cloned()
+                .map(|condition| {
+                    cast_condition_to_target_types(
+                        condition,
+                        &target_schema,
+                        target_snapshot.schema(),
+                    )
+                })
+                .transpose()?;
             let info = RowLevelWriteInfo {
                 command: node.command(),
                 target,
-                condition: node.condition().cloned(),
+                condition,
                 expanded_input: None,
                 change_data_plan: None,
                 change_data_preimage: None,
@@ -233,26 +249,67 @@ async fn create_delta_row_level_writer(
     }
 }
 
-fn delete_condition(
-    info: &RowLevelWriteInfo,
-) -> sail_common_datafusion::logical_expr::ExprWithSource {
-    info.condition.clone().unwrap_or_else(|| {
-        sail_common_datafusion::logical_expr::ExprWithSource::new(datafusion_expr::lit(true), None)
-    })
+fn delete_condition(info: &RowLevelWriteInfo) -> ExprWithSource {
+    info.condition
+        .clone()
+        .unwrap_or_else(|| ExprWithSource::new(datafusion_expr::lit(true), None))
 }
 
-fn find_target_snapshot(plan: &datafusion_expr::LogicalPlan) -> Result<Arc<DeltaSnapshot>> {
-    let mut snapshot = None;
+/// Casts the TIMESTAMP columns of a DELETE condition to their time zone label in the target scan,
+/// which the condition was resolved against. The DELETE planner evaluates the condition against
+/// the Delta table schema, whose TIMESTAMP columns are labelled UTC, while the scan of a catalog
+/// table can label them with the session time zone, so functions such as `hour` would otherwise
+/// read the values in UTC rather than as a query of the table reads them.
+fn cast_condition_to_target_types(
+    condition: ExprWithSource,
+    target: &ArrowSchema,
+    table: &ArrowSchema,
+) -> Result<ExprWithSource> {
+    let expr = condition
+        .expr
+        .transform_up(|expr| {
+            let Expr::Column(column) = &expr else {
+                return Ok(Transformed::no(expr));
+            };
+            let (Ok(target_field), Ok(table_field)) = (
+                target.field_with_name(&column.name),
+                table.field_with_name(&column.name),
+            ) else {
+                return Ok(Transformed::no(expr));
+            };
+            match (target_field.data_type(), table_field.data_type()) {
+                (
+                    DataType::Timestamp(target_unit, Some(target_zone)),
+                    DataType::Timestamp(table_unit, Some(table_zone)),
+                ) if target_unit == table_unit && target_zone != table_zone => {
+                    let data_type = target_field.data_type().clone();
+                    Ok(Transformed::yes(Expr::Cast(Cast::new(
+                        Box::new(expr),
+                        data_type,
+                    ))))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        })?
+        .data;
+    Ok(ExprWithSource::new(expr, condition.source))
+}
+
+/// Returns the snapshot of the row-level target and the schema its scan reads it with.
+fn find_target_source(
+    plan: &datafusion_expr::LogicalPlan,
+) -> Result<(Arc<DeltaSnapshot>, SchemaRef)> {
+    let mut target = None;
     plan.apply(|node| {
         if let datafusion_expr::LogicalPlan::TableScan(scan) = node
             && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
         {
-            snapshot = Some(Arc::clone(source.snapshot()));
+            target = Some((Arc::clone(source.snapshot()), source.schema()));
             return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    snapshot.ok_or_else(|| {
+    target.ok_or_else(|| {
         DataFusionError::Internal(
             "row-level target does not contain a Delta table snapshot".to_string(),
         )
@@ -348,4 +405,49 @@ fn build_merge_operation(node: &RowLevelWriteNode) -> Option<DeltaOperation> {
         not_matched_predicates,
         not_matched_by_source_predicates,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use datafusion::common::Result;
+    use datafusion::logical_expr::expr::Cast;
+    use datafusion_expr::{Expr, col, lit};
+    use sail_common_datafusion::logical_expr::ExprWithSource;
+
+    use super::cast_condition_to_target_types;
+
+    fn timestamp(time_zone: &str) -> DataType {
+        DataType::Timestamp(TimeUnit::Microsecond, Some(time_zone.into()))
+    }
+
+    #[test]
+    fn delete_condition_reads_timestamps_with_the_target_time_zone() -> Result<()> {
+        let schema = |time_zone| {
+            ArrowSchema::new(vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("ts", timestamp(time_zone), true),
+            ])
+        };
+        let target = schema("America/Los_Angeles");
+        let condition = col("ts").is_null().or(col("x").eq(lit(1)));
+        let relabelled = Expr::Cast(Cast::new(
+            Box::new(col("ts")),
+            timestamp("America/Los_Angeles"),
+        ))
+        .is_null()
+        .or(col("x").eq(lit(1)));
+        for (table, expected) in [
+            (schema("UTC"), relabelled),
+            (schema("America/Los_Angeles"), condition.clone()),
+        ] {
+            let actual = cast_condition_to_target_types(
+                ExprWithSource::new(condition.clone(), None),
+                &target,
+                &table,
+            )?;
+            assert_eq!(actual.expr, expected);
+        }
+        Ok(())
+    }
 }

@@ -206,6 +206,42 @@ def test_delta_timestamp_partition_values_are_utc(spark, tmp_path, session_timez
         spark.sql("DROP TABLE IF EXISTS ts_partition").collect()
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
+@pytest.mark.parametrize(
+    "condition", ["hour(ts) = 0", "dayofweek(ts) = 1", "hour(ts) = 0 OR x < 0", "hour(ts) = 0 AND x > 0", "hour(d) = 0"]
+)
+def test_delta_delete_removes_the_rows_that_select_returns(
+    spark, tmp_path, session_timezone, deletion_vectors, condition
+):
+    """A DELETE removes the rows its condition selects in a query, with the TIMESTAMP values in the
+    session time zone, for a table referenced by name and by path."""
+    _ = session_timezone
+    properties = "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')" if deletion_vectors else ""
+    names = ["delete_by_name", "delete_by_path"]
+    try:
+        for name in names:
+            spark.sql(
+                f"CREATE TABLE {name} (id INT, x INT, ts TIMESTAMP, d TIMESTAMP) USING delta PARTITIONED BY (ts) "
+                f"LOCATION '{escape_sql_string_literal(str(tmp_path / name))}' {properties}"
+            )
+            # 16:00 on a Sunday and 00:00 on a Monday in the session time zone, 00:00 and 08:00 on a Monday in UTC.
+            spark.sql(
+                f"INSERT INTO {name} VALUES "  # noqa: S608
+                "(1, 1, TIMESTAMP '2023-12-31 16:00:00', TIMESTAMP '2023-12-31 16:00:00'), "
+                "(2, 2, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2024-01-01 00:00:00')"
+            ).collect()
+        for table in ["delete_by_name", f"delta.`{tmp_path / 'delete_by_path'}`"]:
+            selected = [row.id for row in spark.sql(f"SELECT id FROM {table} WHERE {condition}").collect()]  # noqa: S608
+            assert len(selected) == 1
+            spark.sql(f"DELETE FROM {table} WHERE {condition}").collect()  # noqa: S608
+            left = {row.id for row in spark.sql(f"SELECT id FROM {table}").collect()}  # noqa: S608
+            assert {1, 2} - left == set(selected), table
+    finally:
+        for name in names:
+            spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
 def declare_table_without_offsets(spark, tmp_path, name):
     """Declares `name` over a table whose TIMESTAMP partition values have no offset, as older
     writers wrote them: `2024-01-01 09:00:00.000000` for ids 1, 2 and 5, `10:00` for id 3."""
