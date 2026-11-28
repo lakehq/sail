@@ -128,7 +128,14 @@ impl PlanResolver<'_> {
         // The query resolves its names, and resolves them again later, in the catalog and the
         // database that are current now, even if the session changes them meanwhile.
         let namespace = manager.current_namespace()?;
-        let scope = Arc::new(ViewDefinitionScope::create(namespace.clone()));
+        // The query resolves its formats by the data sources that are registered now, also
+        // when they are registered again later.
+        let data_sources = Arc::new(self.ctx.extension::<DataSourceRegistry>()?.snapshot()?)
+            as Arc<dyn Any + Send + Sync>;
+        let scope = Arc::new(ViewDefinitionScope::create(
+            namespace.clone(),
+            Arc::clone(&data_sources),
+        ));
         state.begin_view_definition();
         let input = Arc::clone(&scope)
             .run(self.resolve_query_plan(*input, state))
@@ -176,8 +183,7 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
-                data_sources: self.ctx.extension::<DataSourceRegistry>()?
-                    as Arc<dyn Any + Send + Sync>,
+                data_sources,
                 resolves_at_each_read,
             }))
         } else {

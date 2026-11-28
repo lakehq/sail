@@ -144,8 +144,8 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
     pub partition_value_cast: (bool, Arc<str>),
-    /// The data sources that the read resolves the format of the table by: those of the
-    /// session that resolved the query.
+    /// The data sources that the read resolves the format of the table by: those that the
+    /// query was resolved with.
     pub data_sources: Arc<DataSourceRegistry>,
 }
 

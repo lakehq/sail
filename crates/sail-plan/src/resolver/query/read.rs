@@ -263,9 +263,9 @@ impl PlanResolver<'_> {
         Ok(state.share_catalog_table(session_catalog, table, status, resolved))
     }
 
-    /// Returns the data sources that formats are resolved by: those of the session that
-    /// created a temporary view while the view resolves its query again, or else those of
-    /// this session.
+    /// Returns the data sources that formats are resolved by: those that were registered
+    /// when a temporary view was created, while the view is created or resolves its query
+    /// again, or else those of this session.
     pub(super) fn data_source_registry(&self) -> PlanResult<Arc<DataSourceRegistry>> {
         match ViewDefinitionScope::pinned_data_sources()
             .and_then(|x| x.downcast::<DataSourceRegistry>().ok())

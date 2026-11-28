@@ -190,8 +190,8 @@ pub struct TemporaryViewDefinition {
     /// The catalogs of the session that each session has its own instance of, in which the
     /// query resolves again in any session.
     pub catalogs: Arc<dyn Any + Send + Sync>,
-    /// The data sources of the session that created the view, by which the query resolves
-    /// its formats again in any session.
+    /// The data sources that were registered in the session that created the view when it
+    /// was created, by which the query resolves its formats again in any session.
     pub data_sources: Arc<dyn Any + Send + Sync>,
     /// Whether the query resolves again at each read of the view, as Spark analyzes it: the
     /// query read tables that the plan of the view does not scan, or persistent views, which

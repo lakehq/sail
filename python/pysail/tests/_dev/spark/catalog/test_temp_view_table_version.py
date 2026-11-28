@@ -2275,8 +2275,8 @@ def test_view_over_a_python_data_source_table_reads_the_table_of_each_read(spark
 
 
 @pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
-@pytest.mark.parametrize("kind", ["gv", "dgv"])
-def test_global_view_over_a_python_data_source_table_reads_by_the_source_of_its_session(spark, observer, kind):
+@pytest.mark.parametrize("kind", ["sv", "dv", "gv", "dgv"])
+def test_view_over_a_python_data_source_table_reads_by_the_sources_registered_at_its_creation(spark, observer, kind):
     from pyspark.sql.datasource import DataSource, DataSourceReader
     from pyspark.sql.types import IntegerType, StructField, StructType
 
@@ -2306,12 +2306,17 @@ def test_global_view_over_a_python_data_source_table_reads_by_the_source_of_its_
         spark.sql(f"CREATE TABLE {name} USING {name}")
         view = create_view(spark, kind, f"SELECT * FROM {name}")
         views.append(view)
-        # The view reads by the source of the session that created it, which another session
-        # does not have, or has under another implementation.
-        assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
-        observer.dataSource.register(source(99))
-        assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
+        # The view reads by the source that was registered when it was created, and a direct
+        # read by the source that is registered now.
+        spark.dataSource.register(source(99))
         assert rows(spark, f"SELECT * FROM {view}") == [(7,)]
+        assert rows(spark, f"SELECT * FROM {name}") == [(99,)]
+        assert rows(spark, f"SELECT * FROM {view} UNION ALL SELECT * FROM {name}") == [(7,), (99,)]
+        if view.startswith("global_temp."):
+            # Another session reads the view by the same source, whatever it registers.
+            assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
+            observer.dataSource.register(source(5))
+            assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
     finally:
         for view in views:
             drop_view(spark, view)

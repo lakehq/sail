@@ -594,6 +594,18 @@ impl DataSourceRegistry {
         }
     }
 
+    /// Returns a registry of the data sources that are registered now, which later
+    /// registrations do not change.
+    pub fn snapshot(&self) -> Result<Self> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        Ok(Self {
+            sources: RwLock::new(sources.clone()),
+        })
+    }
+
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
         let mut sources = self
             .sources
