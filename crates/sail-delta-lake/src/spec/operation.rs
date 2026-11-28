@@ -384,9 +384,9 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            Self::Clone { .. } | Self::Truncate {} => true,
-            // A conditional overwrite does not yet check its condition against concurrent file
-            // additions. A dynamic partition overwrite reads only the partitions that it writes.
+            Self::Clone { .. } | Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
+            // An overwrite reads the whole table, unless its commit checks the partitions that it
+            // read.
             Self::Write {
                 mode: SaveMode::Overwrite,
                 ..

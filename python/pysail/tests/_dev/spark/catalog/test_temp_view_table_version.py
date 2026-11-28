@@ -2902,31 +2902,46 @@ def test_delta_overwrite_keeps_a_row_that_another_session_appended(
 
 
 # Overwrites of the rows of partition 1 of the Delta Lake table `t` (partition 1 with the rows 1 and 2, and
-# partition 2 with the row 3) that read the partition, with a condition or dynamically, while another session
-# changes `t`, with the error of the overwrite and the rows of `t` after it. An overwrite that reads `t`
-# conflicts with a change of the rows that it read, which are all the rows for a condition on the data, and
-# the rows of the partitions that it writes for a dynamic overwrite.
+# partition 2 with the row 3) with the rows of partition 1 of `t` plus 10, or with the rows of the table `o`
+# (partition 1 with the rows 7 and 8), while another session changes `t`, with the error of the overwrite and
+# the rows of `t` after it. The other session changes `t` while an overwrite of `t` is planned, and while an
+# overwrite from `o` runs. As in Delta Lake, an overwrite conflicts with a change of the partitions that it
+# read: the partitions that the conjuncts of its condition on partition columns only select, the partitions
+# that a dynamic overwrite writes, or else all the partitions.
 PARTITION_OVERWRITES = [
-    ({"replaceWhere": "x < 50"}, (2, 100), APPENDED, [(1, 1), (1, 2), (2, 3), (2, 100)]),
-    ({"replaceWhere": "p = 1"}, (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
-    ({"partitionOverwriteMode": "dynamic"}, (1, 100), APPENDED, [(1, 1), (1, 2), (1, 100), (2, 3)]),
-    ({"partitionOverwriteMode": "dynamic"}, (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
-    ({"partitionOverwriteMode": "dynamic"}, "DELETE FROM delta.`{t}` WHERE x = 2", CONCURRENT, [(1, 1), (2, 3)]),
+    ({"replaceWhere": "p = 1"}, "t", (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
+    ({"replaceWhere": "p = 1"}, "t", (1, 100), APPENDED, [(1, 1), (1, 2), (1, 100), (2, 3)]),
+    ({"replaceWhere": "p = 1"}, "o", (2, 100), None, [(1, 7), (1, 8), (2, 3), (2, 100)]),
+    ({"replaceWhere": "p = 1"}, "o", (1, 100), APPENDED, [(1, 1), (1, 2), (1, 100), (2, 3)]),
+    ({"replaceWhere": "p = 1 AND x < 50"}, "t", (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
+    ({"replaceWhere": "p = 1 AND x < 50"}, "t", (1, 5), APPENDED, [(1, 1), (1, 2), (1, 5), (2, 3)]),
+    ({"replaceWhere": "x < 50"}, "t", (2, 100), APPENDED, [(1, 1), (1, 2), (2, 3), (2, 100)]),
+    ({"replaceWhere": "p = 1 OR x < 2"}, "t", (2, 100), APPENDED, [(1, 1), (1, 2), (2, 3), (2, 100)]),
+    ({}, "t", (2, 100), APPENDED, [(1, 1), (1, 2), (2, 3), (2, 100)]),
+    ({"partitionOverwriteMode": "dynamic"}, "t", (1, 100), APPENDED, [(1, 1), (1, 2), (1, 100), (2, 3)]),
+    ({"partitionOverwriteMode": "dynamic"}, "t", (2, 100), None, [(1, 11), (1, 12), (2, 3), (2, 100)]),
+    ({"partitionOverwriteMode": "dynamic"}, "o", (2, 100), None, [(1, 7), (1, 8), (2, 3), (2, 100)]),
+    ({"partitionOverwriteMode": "dynamic"}, "t", "DELETE FROM delta.`{t}` WHERE x = 2", CONCURRENT, [(1, 1), (2, 3)]),
 ]
 
 
 @pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
-@pytest.mark.parametrize(("options", "change", "error", "expected"), PARTITION_OVERWRITES)
+@pytest.mark.parametrize(("options", "source", "change", "error", "expected"), PARTITION_OVERWRITES)
 def test_delta_partition_overwrite_keeps_the_rows_that_another_session_changed(
-    spark, observer, tmp_path, run_while_planning, options, change, error, expected
+    spark, observer, tmp_path, run_while_planning, options, source, change, error, expected
 ):
     path = str(tmp_path / "t")
     spark.createDataFrame([(1, 1), (1, 2), (2, 3)], "p INT, x INT").write.format("delta").partitionBy("p").save(path)
+    spark.createDataFrame([(1, 7), (1, 8)], "p INT, x INT").write.format("delta").save(str(tmp_path / "o"))
 
     def overwrite():
-        frame = spark.read.format("delta").load(path).where("p = 1").crossJoin(spark.table("hook"))
-        writer = frame.select("p", (col("x") + 10).alias("x")).write.format("delta").mode("overwrite")
-        writer.options(**options).save(path)
+        if source == "t":
+            frame = spark.read.format("delta").load(path).where("p = 1").crossJoin(spark.table("hook"))
+            frame = frame.select("p", (col("x") + 10).alias("x"))
+        else:
+            frame = spark.read.format("delta").load(str(tmp_path / "o"))
+            frame = frame.select("p", execution_hook(tmp_path)(col("x")).alias("x"))
+        frame.write.format("delta").mode("overwrite").options(**options).save(path)
 
     def act():
         if isinstance(change, str):

@@ -995,6 +995,8 @@ message DeltaCommitExecNode {
   DeltaCommitContext commit_context = 8;
   string lakehouse_table_json = 9;
   CommandOutput output = 10;
+  optional bytes read_partition_schema = 11;
+  optional bytes read_partition_predicate = 12;
 }
 
 message DeltaScanByAddsExecNode {

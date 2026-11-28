@@ -135,6 +135,7 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use sail_data_source::options::r#gen::RateReadOptions;
+use sail_delta_lake::datasource::pruning::PartitionPredicate;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaLogReplayExec,
@@ -1125,10 +1126,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context,
                 lakehouse_table_json,
                 output,
+                read_partition_schema,
+                read_partition_predicate,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
                 let sink_schema = try_decode_schema(&sink_schema)?;
+                let read_partition_predicate =
+                    match (read_partition_schema, read_partition_predicate) {
+                        (Some(schema), Some(predicate)) => {
+                            let schema = Arc::new(try_decode_schema(&schema)?);
+                            let predicate = try_decode_physical_expr_with_converter(
+                                ctx,
+                                self,
+                                proto_converter,
+                                &predicate,
+                                &schema,
+                            )?;
+                            Some(PartitionPredicate::new(schema, predicate))
+                        }
+                        (None, None) => None,
+                        _ => {
+                            return plan_err!(
+                                "Incomplete read partition predicate for DeltaCommitExec"
+                            );
+                        }
+                    };
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
 
@@ -1157,7 +1180,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         commit_context,
                         lakehouse_table,
                     )
-                    .with_output(Self::try_decode_command_output(output)?),
+                    .with_output(Self::try_decode_command_output(output)?)
+                    .with_read_partition_predicate(read_partition_predicate),
                 ))
             }
             NodeKind::DeltaScanByAdds(r#gen::DeltaScanByAddsExecNode {
@@ -2933,6 +2957,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 delta_commit_exec.input().clone(),
             )?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
+            let (read_partition_schema, read_partition_predicate) =
+                match delta_commit_exec.read_partition_predicate() {
+                    Some(predicate) => (
+                        Some(try_encode_schema(predicate.schema())?),
+                        Some(try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            predicate.predicate(),
+                        )?),
+                    ),
+                    None => (None, None),
+                };
             NodeKind::DeltaCommit(r#gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
@@ -2947,6 +2983,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_commit_exec.lakehouse_table())?,
+                read_partition_schema,
+                read_partition_predicate,
             })
         } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
             let input = try_encode_physical_plan_with_converter(

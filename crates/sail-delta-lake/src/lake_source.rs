@@ -882,16 +882,15 @@ pub(crate) async fn plan_delta_write(
                     LakehouseOperation::Create | LakehouseOperation::Register
                 )
         });
-    // An overwrite that reads its own table writes on the snapshot that the statement read, as
-    // one Delta transaction does, so that it removes the files that it read and commits on the
+    // A write that reads its own table writes on the snapshot that the statement read, as one
+    // Delta transaction does, so that it removes the files that it read and commits on the
     // version that it read. Reads that travel in time do not record their snapshots.
     let pinned = snapshot_pins
         .map(|pins| {
             pins.get::<DeltaSnapshot>(table_url.as_str(), lakehouse_planning_context.is_some())
         })
         .transpose()?
-        .flatten()
-        .filter(|pinned| writes_on_read_snapshot(&mode, pinned.metadata().partition_columns()));
+        .flatten();
     let table = match pinned {
         Some(pinned) => Some(
             open_delta_write_base_table(
@@ -1113,29 +1112,6 @@ async fn open_delta_write_planning_table(
             table_config,
         )
         .await
-    }
-}
-
-/// Whether an overwrite that reads its own table writes on the snapshot that it read. The commit
-/// of an overwrite with a condition that selects partitions would have to check the files that
-/// concurrent commits add against the selected partitions only, which it does not, so such an
-/// overwrite writes on the latest snapshot.
-fn writes_on_read_snapshot(mode: &PhysicalSinkMode, partition_columns: &[String]) -> bool {
-    match mode {
-        PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwritePartitions => true,
-        PhysicalSinkMode::OverwriteIf {
-            condition: Some(condition),
-            ..
-        } => !split_conjunction(&condition.expr).into_iter().any(|expr| {
-            let columns = expr.column_refs();
-            !columns.is_empty()
-                && columns.iter().all(|column| {
-                    partition_columns
-                        .iter()
-                        .any(|partition| partition.eq_ignore_ascii_case(&column.name))
-                })
-        }),
-        _ => false,
     }
 }
 

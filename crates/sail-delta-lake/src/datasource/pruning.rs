@@ -21,6 +21,7 @@ use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::conversion::{ScalarConverter, parse_optional_partition_value};
 use crate::schema::arrow_field_physical_name;
@@ -144,50 +145,104 @@ pub(crate) fn partition_filter_mask(
     adds: &[Add],
     predicate: Expr,
 ) -> Result<BooleanArray> {
-    let mut fields = Vec::new();
-    let mut columns = Vec::new();
-    let referenced_columns = predicate.column_refs();
-    for name in snapshot.metadata().partition_columns() {
-        if !referenced_columns.iter().any(|column| column.name == *name) {
-            continue;
-        }
-        let field = logical_schema.field_with_name(name)?;
-        let physical_name = arrow_field_physical_name(
-            snapshot.schema().field_with_name(name)?,
-            snapshot.effective_column_mapping_mode(),
-        );
-        let values = adds
-            .iter()
-            .map(|add| {
-                let raw = add
-                    .partition_values
-                    .get(physical_name)
-                    .and_then(Option::as_deref);
-                parse_optional_partition_value(raw, field.data_type())
-            })
-            .collect::<crate::DeltaResult<Vec<_>>>()?;
-        let column = if values.is_empty() {
-            new_empty_array(field.data_type())
-        } else {
-            ScalarValue::iter_to_array(values)?
-        };
-        fields.push(field.clone().with_nullable(true));
-        columns.push(column);
+    PartitionPredicate::try_new(session, snapshot, logical_schema, predicate)?
+        .evaluate(snapshot, adds)
+}
+
+/// A predicate on the values of the partition columns of files, over the schema of the
+/// partition columns that it references.
+#[derive(Debug, Clone)]
+pub struct PartitionPredicate {
+    schema: SchemaRef,
+    predicate: Arc<dyn PhysicalExpr>,
+}
+
+impl PartitionPredicate {
+    pub fn new(schema: SchemaRef, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self { schema, predicate }
     }
-    let batch = RecordBatch::try_new_with_options(
-        Arc::new(Schema::new(fields)),
-        columns,
-        &RecordBatchOptions::new().with_row_count(Some(adds.len())),
-    )?;
-    let predicate = session.create_physical_expr(predicate, &batch.schema().to_dfschema()?)?;
-    let values = predicate.evaluate(&batch)?.into_array(batch.num_rows())?;
-    values
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Delta partition predicate must return Boolean".into())
-        })
+
+    pub(crate) fn try_new(
+        session: &dyn Session,
+        snapshot: &DeltaSnapshot,
+        logical_schema: &Schema,
+        predicate: Expr,
+    ) -> Result<Self> {
+        let referenced_columns = predicate.column_refs();
+        let fields = snapshot
+            .metadata()
+            .partition_columns()
+            .iter()
+            .filter(|name| {
+                referenced_columns
+                    .iter()
+                    .any(|column| column.name == **name)
+            })
+            .map(|name| {
+                Ok(logical_schema
+                    .field_with_name(name)?
+                    .clone()
+                    .with_nullable(true))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let schema = Arc::new(Schema::new(fields));
+        let predicate = session.create_physical_expr(predicate, &schema.clone().to_dfschema()?)?;
+        Ok(Self { schema, predicate })
+    }
+
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    pub fn predicate(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.predicate
+    }
+
+    /// Evaluates the predicate on the partition values of the files of the snapshot.
+    pub(crate) fn evaluate(&self, snapshot: &DeltaSnapshot, adds: &[Add]) -> Result<BooleanArray> {
+        let columns = self
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let physical_name = arrow_field_physical_name(
+                    snapshot.schema().field_with_name(field.name())?,
+                    snapshot.effective_column_mapping_mode(),
+                );
+                let values = adds
+                    .iter()
+                    .map(|add| {
+                        let raw = add
+                            .partition_values
+                            .get(physical_name)
+                            .and_then(Option::as_deref);
+                        parse_optional_partition_value(raw, field.data_type())
+                    })
+                    .collect::<crate::DeltaResult<Vec<_>>>()?;
+                Ok(if values.is_empty() {
+                    new_empty_array(field.data_type())
+                } else {
+                    ScalarValue::iter_to_array(values)?
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(adds.len())),
+        )?;
+        let values = self
+            .predicate
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())?;
+        values
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Internal("Delta partition predicate must return Boolean".into())
+            })
+    }
 }
 
 /// Prune a set of `Add` actions using a DataFusion physical predicate and per-file stats.

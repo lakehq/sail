@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::checkpoint::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
+use crate::datasource::pruning::PartitionPredicate;
 use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
 use crate::delta_log::{
     CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
@@ -1151,6 +1152,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 impl Default for CommitBuilder {
@@ -1165,6 +1167,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            read_partition_predicate: None,
         }
     }
 }
@@ -1176,6 +1179,13 @@ impl CommitBuilder {
     /// `CheckpointMetadata`) are rejected at compile time.
     pub fn with_actions(mut self, actions: Vec<CommitAction>) -> Self {
         self.actions = actions;
+        self
+    }
+
+    /// The partitions that the transaction read, if it read only the partitions that satisfy
+    /// the predicate, against which the commit checks the files that concurrent commits add.
+    pub fn with_read_partition_predicate(mut self, predicate: Option<PartitionPredicate>) -> Self {
+        self.read_partition_predicate = predicate;
         self
     }
 
@@ -1235,6 +1245,7 @@ impl CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            read_partition_predicate: self.read_partition_predicate,
         }
     }
 }
@@ -1248,6 +1259,7 @@ pub struct PreCommit {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 impl std::future::IntoFuture for PreCommit {
@@ -1290,6 +1302,7 @@ impl PreCommit {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                read_partition_predicate: this.read_partition_predicate,
             })
         })
     }
@@ -1318,6 +1331,7 @@ pub struct PreparedCommit {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_partition_predicate: Option<PartitionPredicate>,
 }
 
 // impl PreparedCommit<'_> {
@@ -1490,6 +1504,7 @@ impl std::future::IntoFuture for PreparedCommit {
                                     snapshot,
                                     &local_actions,
                                     &this.data.operation,
+                                    this.read_partition_predicate.as_ref(),
                                 )?;
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,

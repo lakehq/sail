@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use datafusion::common::ScalarValue;
 
 use crate::datasource::actions::PartitionKeys;
+use crate::datasource::pruning::PartitionPredicate;
 use crate::delta_log::{LogStore, get_actions};
 use crate::spec::{
     Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaOperation,
@@ -32,16 +33,27 @@ pub(crate) struct TransactionInfo<'a> {
     read_snapshot: &'a DeltaSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
-    /// The partitions that a dynamic partition overwrite read, which are the partitions that it
-    /// writes
-    read_partitions: Option<(PartitionKeys, HashSet<Vec<ScalarValue>>)>,
+    /// The partitions that the transaction read, if it read only some partitions
+    read_partitions: Option<ReadPartitions>,
+}
+
+/// The partitions that a transaction read.
+enum ReadPartitions {
+    /// The partitions that a dynamic partition overwrite writes, by their typed values
+    Written(PartitionKeys, HashSet<Vec<ScalarValue>>),
+    /// The partitions whose values satisfy the partition-only conjuncts of the condition of an
+    /// overwrite
+    Matching(PartitionPredicate),
 }
 
 impl<'a> TransactionInfo<'a> {
+    /// Describes the transaction of the operation, which read the partitions that satisfy
+    /// `read_partition_predicate` if it is given.
     pub fn try_new(
         read_snapshot: &'a DeltaSnapshot,
         actions: &'a [CommitAction],
         operation: &DeltaOperation,
+        read_partition_predicate: Option<&PartitionPredicate>,
     ) -> DeltaResult<Self> {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
@@ -50,8 +62,9 @@ impl<'a> TransactionInfo<'a> {
             }
         }
 
-        let mut info = Self::new(read_snapshot, actions, operation.read_whole_table());
-        if matches!(operation, DeltaOperation::DynamicPartitionOverwrite { .. }) {
+        let read_partitions = if let Some(predicate) = read_partition_predicate {
+            Some(ReadPartitions::Matching(predicate.clone()))
+        } else if matches!(operation, DeltaOperation::DynamicPartitionOverwrite { .. }) {
             let keys = PartitionKeys::try_new(read_snapshot, actions)?;
             let partitions = actions
                 .iter()
@@ -60,8 +73,13 @@ impl<'a> TransactionInfo<'a> {
                     _ => None,
                 })
                 .collect::<DeltaResult<_>>()?;
-            info.read_partitions = Some((keys, partitions));
-        }
+            Some(ReadPartitions::Written(keys, partitions))
+        } else {
+            None
+        };
+        let read_whole_table = operation.read_whole_table() && read_partitions.is_none();
+        let mut info = Self::new(read_snapshot, actions, read_whole_table);
+        info.read_partitions = read_partitions;
         Ok(info)
     }
 
@@ -86,18 +104,37 @@ impl<'a> TransactionInfo<'a> {
         }
     }
 
-    /// Whether the transaction read the partition of the file, which it does unless it read only
-    /// some partitions.
-    fn reads_partition_of(&self, file: &Add) -> Result<bool, CommitConflictError> {
-        let Some((keys, partitions)) = &self.read_partitions else {
-            return Ok(true);
+    /// The files in the partitions that the transaction read, which are all the files unless it
+    /// read only some partitions.
+    fn files_in_read_partitions(&self, files: Vec<Add>) -> Result<Vec<Add>, CommitConflictError> {
+        let corrupted = |source: Box<dyn std::error::Error + Send + Sync>| {
+            CommitConflictError::CorruptedState { source }
         };
-        let key = keys
-            .key(file)
-            .map_err(|error| CommitConflictError::CorruptedState {
-                source: Box::new(error),
-            })?;
-        Ok(partitions.contains(&key))
+        match &self.read_partitions {
+            None => Ok(files),
+            Some(ReadPartitions::Written(keys, partitions)) => {
+                let mut read = vec![];
+                for file in files {
+                    let key = keys
+                        .key(&file)
+                        .map_err(|error| corrupted(Box::new(error)))?;
+                    if partitions.contains(&key) {
+                        read.push(file);
+                    }
+                }
+                Ok(read)
+            }
+            Some(ReadPartitions::Matching(predicate)) => {
+                let matches = predicate
+                    .evaluate(self.read_snapshot, &files)
+                    .map_err(|error| corrupted(Box::new(error)))?;
+                Ok(files
+                    .into_iter()
+                    .zip(matches.iter())
+                    .filter_map(|(file, matched)| matched.unwrap_or(false).then_some(file))
+                    .collect())
+            }
+        }
     }
 
     /// Whether the transaction changed the tables metadatas
@@ -467,13 +504,8 @@ impl<'a> ConflictChecker<'a> {
         let added_files_matching_predicates = if self.txn_info.read_whole_table() {
             added_files_to_check
         } else if self.txn_info.read_partitions.is_some() {
-            let mut files = vec![];
-            for file in added_files_to_check {
-                if self.txn_info.reads_partition_of(&file)? {
-                    files.push(file);
-                }
-            }
-            files
+            self.txn_info
+                .files_in_read_partitions(added_files_to_check)?
         } else {
             vec![]
         };
@@ -491,12 +523,12 @@ impl<'a> ConflictChecker<'a> {
         &self,
     ) -> Result<(), CommitConflictError> {
         // Fail if files have been deleted that the txn read.
-        let mut read_file_keys = HashSet::<LogicalFileKey>::new();
-        for f in self.txn_info.read_files()? {
-            if self.txn_info.reads_partition_of(&f)? {
-                read_file_keys.insert(logical_file_key(&f.path, f.deletion_vector.as_ref()));
-            }
-        }
+        let read_file_keys: HashSet<LogicalFileKey> = self
+            .txn_info
+            .files_in_read_partitions(self.txn_info.read_files()?.collect())?
+            .iter()
+            .map(|f| logical_file_key(&f.path, f.deletion_vector.as_ref()))
+            .collect();
         let deleted_read_overlap = self
             .winning_commit_summary
             .removed_files()
