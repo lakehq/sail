@@ -781,6 +781,41 @@ fn loads(fixture: &Fixture) -> (usize, usize) {
 }
 
 #[tokio::test]
+async fn test_temporary_view_does_not_keep_its_session_alive() -> TestResult {
+    let fixture = create_session_fixture().await?;
+    fixture.create_table(&["t"], &["k", "v"]).await?;
+    fixture
+        .execute("CREATE TEMPORARY VIEW keeps_nothing AS SELECT * FROM t")
+        .await?;
+    let manager = Arc::downgrade(&fixture.session.extension::<CatalogManager>()?);
+    drop(fixture);
+    assert!(manager.upgrade().is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_global_temporary_view_does_not_keep_its_session_alive() -> TestResult {
+    let creator = create_session_fixture().await?;
+    let reader = create_session_fixture().await?;
+    creator
+        .create_table_at(&["mine"], &["k", "v"], "memory:///mine")
+        .await?;
+    creator
+        .execute("CREATE GLOBAL TEMPORARY VIEW keeps_no_session AS SELECT * FROM mine")
+        .await?;
+    let manager = Arc::downgrade(&creator.session.extension::<CatalogManager>()?);
+    let source = Arc::clone(&creator.source);
+    drop(creator);
+    assert!(manager.upgrade().is_none());
+    // The view still reads the table of the session that created it.
+    let sql = "SELECT * FROM global_temp.keeps_no_session";
+    take(&source.created)?;
+    reader.resolve(sql).await?.assert_loads(0, 0, sql);
+    assert_eq!(take(&source.created)?.len(), 1, "{sql}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_global_temporary_view_in_another_session() -> TestResult {
     let creator = create_session_fixture().await?;
     let reader = create_session_fixture().await?;

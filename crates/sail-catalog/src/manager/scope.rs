@@ -22,11 +22,11 @@ tokio::task_local! {
 #[derive(Debug)]
 pub enum ViewDefinitionScope {
     /// The view is created in the catalog and the database that were current when the
-    /// creation began, with the session as it was then, and the temporary views and the
-    /// functions of the session that the query resolves are recorded.
+    /// creation began, with the settings that the session had then, and the temporary views
+    /// and the functions of the session that the query resolves are recorded.
     Create {
         namespace: (Arc<str>, Namespace),
-        session: Arc<dyn Any + Send + Sync>,
+        settings: Arc<dyn Any + Send + Sync>,
         objects: Mutex<TemporaryViewObjects>,
     },
     /// The view resolves its query again. A name that referred to a temporary view or a
@@ -36,10 +36,10 @@ pub enum ViewDefinitionScope {
 }
 
 impl ViewDefinitionScope {
-    pub fn create(namespace: (Arc<str>, Namespace), session: Arc<dyn Any + Send + Sync>) -> Self {
+    pub fn create(namespace: (Arc<str>, Namespace), settings: Arc<dyn Any + Send + Sync>) -> Self {
         Self::Create {
             namespace,
-            session,
+            settings,
             objects: Mutex::default(),
         }
     }
@@ -105,12 +105,12 @@ impl ViewDefinitionScope {
         catalogs.get(name).cloned()
     }
 
-    /// Returns the session that created the view, as it was when the creation began, while
-    /// the view is created or resolves its query again.
-    pub fn pinned_session() -> Option<Arc<dyn Any + Send + Sync>> {
+    /// Returns the settings that the session that created the view had when the creation
+    /// began, while the view is created or resolves its query again.
+    pub fn pinned_settings() -> Option<Arc<dyn Any + Send + Sync>> {
         match Self::current()?.as_ref() {
-            Self::Create { session, .. } => Some(Arc::clone(session)),
-            Self::Resolve(definition) => Some(Arc::clone(&definition.session)),
+            Self::Create { settings, .. } => Some(Arc::clone(settings)),
+            Self::Resolve(definition) => Some(Arc::clone(&definition.settings)),
         }
     }
 

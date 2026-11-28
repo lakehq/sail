@@ -22,8 +22,9 @@ use std::task::{Context, Poll};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::source_as_provider;
-use datafusion::execution::SessionState;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -43,9 +44,11 @@ use sail_common::spec::{
     SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
 use sail_common_datafusion::catalog::{TableKind, TableStatus, TemporaryViewDefinition};
+use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
 
@@ -117,8 +120,8 @@ pub(in crate::resolver) struct LakePathOrigin {
     pub read_case_sensitive: bool,
     /// Whether the read options select a version of the table.
     pub travels_in_time: bool,
-    /// The session that builds the source of the read (see [`CatalogTableOrigin::session`]).
-    pub session: Option<Arc<SessionState>>,
+    /// The settings that build the source of the read (see [`CatalogTableOrigin::settings`]).
+    pub settings: Option<Arc<ViewSourceSettings>>,
 }
 
 /// A read of a catalog table, as the query wrote it.
@@ -146,9 +149,71 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
     pub partition_value_cast: (bool, Arc<str>),
-    /// The session that created the temporary view that the read belongs to, as it was then,
-    /// which builds the sources of the read (see [`PlanResolver::source_build_session`]).
-    pub session: Option<Arc<SessionState>>,
+    /// The settings of the session that created the temporary view that the read belongs to,
+    /// as they were then, which build the sources of the read (see
+    /// [`PlanResolver::source_build_settings`]).
+    pub settings: Option<Arc<ViewSourceSettings>>,
+}
+
+/// The settings of a session that the sources of tables are built with: its DataFusion
+/// configuration, its Spark configuration, and its data sources. A temporary view keeps those
+/// of the session that created it, as they were then. They hold values and no session, so a
+/// view does not keep the session alive.
+pub(in crate::resolver) struct ViewSourceSettings {
+    pub options: Arc<ConfigOptions>,
+    pub spark: Option<Arc<SessionConfigService>>,
+    pub data_sources: Arc<DataSourceRegistry>,
+}
+
+impl std::fmt::Debug for ViewSourceSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewSourceSettings").finish_non_exhaustive()
+    }
+}
+
+impl ViewSourceSettings {
+    /// Returns the settings of the session configuration as they are now.
+    pub fn try_new(config: &SessionConfig) -> PlanResult<Self> {
+        let spark = config
+            .get_extension::<SessionConfigService>()
+            .map(|x| x.snapshot())
+            .transpose()?
+            .map(Arc::new);
+        let data_sources = config
+            .get_extension::<DataSourceRegistry>()
+            .ok_or_else(|| PlanError::internal("session without data sources"))?
+            .snapshot()?;
+        Ok(Self {
+            options: Arc::clone(config.options()),
+            spark,
+            data_sources: Arc::new(data_sources),
+        })
+    }
+
+    /// Whether the settings build sources as the session configuration does: the two have the
+    /// same Spark configuration, the same DataFusion configuration, and the same data sources.
+    pub fn is_same_as(&self, config: &SessionConfig) -> PlanResult<bool> {
+        let spark = |service: Option<&SessionConfigService>| {
+            service.map(|x| x.get_options_with_prefix("")).transpose()
+        };
+        let options = |options: &ConfigOptions| {
+            options
+                .entries()
+                .into_iter()
+                .map(|x| (x.key, x.value))
+                .collect::<Vec<_>>()
+        };
+        let live_spark = config.get_extension::<SessionConfigService>();
+        if spark(self.spark.as_deref())? != spark(live_spark.as_deref())?
+            || options(&self.options) != options(config.options())
+        {
+            return Ok(false);
+        }
+        let live_data_sources = config
+            .get_extension::<DataSourceRegistry>()
+            .ok_or_else(|| PlanError::internal("session without data sources"))?;
+        Ok(self.data_sources.has_same_sources(&live_data_sources)?)
+    }
 }
 
 /// The source of a table scan in the stored plan of a temporary view. It is not a table
@@ -1214,7 +1279,7 @@ impl PlanResolver<'_> {
         let lake_relation = match &origin.lake_relation {
             Some(name) => {
                 let relation = self
-                    .session_data_sources(origin.session.as_deref())?
+                    .session_data_sources(origin.settings.as_deref())?
                     .get_lake_source_if_supported(format)?
                     .and_then(|x| x.relation_provider())
                     .and_then(|provider| match provider.resolve_relation(name) {
@@ -1751,7 +1816,7 @@ mod tests {
             travels_in_time: false,
             read_case_sensitive: false,
             partition_value_cast: (false, Arc::from("UTC")),
-            session: None,
+            settings: None,
         }))
     }
 

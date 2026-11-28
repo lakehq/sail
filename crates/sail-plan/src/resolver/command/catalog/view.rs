@@ -15,13 +15,12 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TemporaryViewDefinition, TemporaryViewSource};
-use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
-use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::query::ViewSourceSettings;
 use crate::resolver::state::PlanResolverState;
 use crate::shared_cte::inline_deterministic_references;
 impl PlanResolver<'_> {
@@ -131,17 +130,11 @@ impl PlanResolver<'_> {
         let namespace = manager.current_namespace()?;
         // The query builds the sources of its tables, and builds them again later, with the
         // configuration and the data sources of the session as they are now.
-        let mut session = self.ctx.state();
-        let config = session.config_mut();
-        if let Some(service) = config.get_extension::<SessionConfigService>() {
-            config.set_extension(Arc::new(service.snapshot()?));
-        }
-        let data_sources = self.ctx.extension::<DataSourceRegistry>()?.snapshot()?;
-        config.set_extension(Arc::new(data_sources));
-        let session = Arc::new(session) as Arc<dyn Any + Send + Sync>;
+        let settings = Arc::new(ViewSourceSettings::try_new(&self.ctx.session_config())?)
+            as Arc<dyn Any + Send + Sync>;
         let scope = Arc::new(ViewDefinitionScope::create(
             namespace.clone(),
-            Arc::clone(&session),
+            Arc::clone(&settings),
         ));
         state.begin_view_definition();
         let input = Arc::clone(&scope)
@@ -190,7 +183,7 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
-                session,
+                settings,
                 resolves_at_each_read,
             }))
         } else {

@@ -36,10 +36,10 @@ pub(super) struct TableSourceKey {
     /// The ANSI mode and the session time zone of the read, which cast the values of the
     /// partitions that the catalog lists, for a source other than Delta Lake and Iceberg.
     pub partition_value_cast: Option<(bool, Arc<str>)>,
-    /// The address of the session that builds the source, for a source that a temporary view
-    /// builds with the session that created it as it was then (see
-    /// [`PlanResolver::source_build_session`]).
-    pub session: Option<usize>,
+    /// The address of the settings that build the source, for a source that a temporary view
+    /// builds with the settings that the session that created it had then (see
+    /// [`PlanResolver::source_build_settings`]).
+    pub settings: Option<usize>,
     /// The catalog instance of the table, for a table that a global temporary view reads
     /// in a catalog of the session that created the view.
     pub session_catalog: Option<usize>,
@@ -57,8 +57,8 @@ pub(super) struct LakePathSourceKey {
     /// The options of the read, sorted by key.
     pub options: Vec<(String, String)>,
     pub schema: Option<Schema>,
-    /// The address of the session that builds the source (see [`TableSourceKey::session`]).
-    pub session: Option<usize>,
+    /// The address of the settings that build the source (see [`TableSourceKey::settings`]).
+    pub settings: Option<usize>,
 }
 
 impl std::fmt::Debug for SharedTableSource {
@@ -188,8 +188,8 @@ pub(super) struct PlanResolverState {
     /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
     /// reads of a path in the query read one version of the table.
     lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
-    /// Whether the session of each address, which created a temporary view that the query
-    /// reads, builds sources as this session does.
+    /// Whether the settings of each address, of the session that created a temporary view
+    /// that the query reads, build sources as this session does.
     same_source_sessions: HashMap<usize, bool>,
     /// The versions of the lake tables read so far, so that the reads of a table in the
     /// query read one version of it, by name or by path and with any read options.
