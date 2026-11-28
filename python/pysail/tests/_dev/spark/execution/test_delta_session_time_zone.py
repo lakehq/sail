@@ -36,6 +36,27 @@ def ntz_rows(spark):
     )
 
 
+def check_timestamp_ntz_append(spark, path, wall_clock, micros, partition=""):
+    """Appends the TIMESTAMP_NTZ value `wall_clock` to a TIMESTAMP column and checks that it is written as
+    the instant `micros`, which is Spark's cast of the value in the session time zone."""
+    spark.sql(
+        f"CREATE TABLE ntz_cast (id INT, ts TIMESTAMP) USING delta {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        cast = f"CAST(TIMESTAMP_NTZ '{wall_clock}' AS TIMESTAMP)"
+        assert spark.sql(f"SELECT unix_micros({cast}) AS micros").collect()[0].micros == micros
+        # Two input partitions make a worker run the Delta writer.
+        spark.sql(
+            f"SELECT * FROM VALUES (1, TIMESTAMP_NTZ '{wall_clock}'), (2, TIMESTAMP_NTZ '{wall_clock}') AS t(id, ts)"  # noqa: S608
+        ).repartition(2).write.format("delta").mode("append").save(str(path))
+        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_cast ORDER BY id").collect()
+        assert [(row.id, row.micros) for row in rows] == [(1, micros), (2, micros)]
+        assert spark.sql(f"SELECT id FROM ntz_cast WHERE ts = {cast}").count() == 2  # noqa: S608
+    finally:
+        spark.sql("DROP TABLE IF EXISTS ntz_cast").collect()
+
+
 def utc_micros(hour):
     return int(datetime(2024, 1, 1, hour, tzinfo=UTC).timestamp()) * 1_000_000
 
@@ -82,24 +103,8 @@ def test_delta_append_casts_timestamp_ntz_as_spark_casts(
     spark, tmp_path, session_timezone, wall_clock, micros, partitioned
 ):
     _ = session_timezone
-    path = tmp_path / "table"
     partition = "PARTITIONED BY (ts)" if partitioned else ""
-    spark.sql(
-        f"CREATE TABLE ntz_cast (id INT, ts TIMESTAMP) USING delta {partition} "
-        f"LOCATION '{escape_sql_string_literal(str(path))}'"
-    )
-    try:
-        cast = f"CAST(TIMESTAMP_NTZ '{wall_clock}' AS TIMESTAMP)"
-        assert spark.sql(f"SELECT unix_micros({cast}) AS micros").collect()[0].micros == micros
-        # Two input partitions make a worker run the Delta writer.
-        spark.sql(
-            f"SELECT * FROM VALUES (1, TIMESTAMP_NTZ '{wall_clock}'), (2, TIMESTAMP_NTZ '{wall_clock}') AS t(id, ts)"  # noqa: S608
-        ).repartition(2).write.format("delta").mode("append").save(str(path))
-        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_cast ORDER BY id").collect()
-        assert [(row.id, row.micros) for row in rows] == [(1, micros), (2, micros)]
-        assert spark.sql(f"SELECT id FROM ntz_cast WHERE ts = {cast}").count() == 2  # noqa: S608
-    finally:
-        spark.sql("DROP TABLE IF EXISTS ntz_cast").collect()
+    check_timestamp_ntz_append(spark, tmp_path / "table", wall_clock, micros, partition)
 
 
 @pytest.mark.parametrize(
@@ -115,20 +120,7 @@ def test_delta_append_casts_timestamp_ntz_at_the_ends_of_chrono_range(
     spark, tmp_path, session_timezone, wall_clock, micros
 ):
     _ = session_timezone
-    path = tmp_path / "table"
-    spark.sql(
-        f"CREATE TABLE ntz_range (id INT, ts TIMESTAMP) USING delta LOCATION '{escape_sql_string_literal(str(path))}'"
-    )
-    try:
-        cast = f"CAST(TIMESTAMP_NTZ '{wall_clock}' AS TIMESTAMP)"
-        assert spark.sql(f"SELECT unix_micros({cast}) AS micros").collect()[0].micros == micros
-        spark.sql(
-            f"SELECT * FROM VALUES (1, TIMESTAMP_NTZ '{wall_clock}'), (2, TIMESTAMP_NTZ '{wall_clock}') AS t(id, ts)"  # noqa: S608
-        ).repartition(2).write.format("delta").mode("append").save(str(path))
-        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_range ORDER BY id").collect()
-        assert [(row.id, row.micros) for row in rows] == [(1, micros), (2, micros)]
-    finally:
-        spark.sql("DROP TABLE IF EXISTS ntz_range").collect()
+    check_timestamp_ntz_append(spark, tmp_path / "table", wall_clock, micros)
 
 
 @pytest.mark.parametrize(
