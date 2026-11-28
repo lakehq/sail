@@ -25,6 +25,7 @@ use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
 use crate::conversion::{PartitionValueParser, ScalarExt};
+use crate::datasource::partition_value_parsers;
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
@@ -362,21 +363,10 @@ pub(super) async fn finish(
 fn bin_key_columns(
     snapshot: &DeltaSnapshot,
 ) -> Result<Vec<(PhysicalPartitionColumn, Option<PartitionValueParser>)>> {
-    snapshot
-        .physical_partition_columns()
-        .into_iter()
-        .map(|column| {
-            let parser = snapshot
-                .schema()
-                .field_with_name(&column.logical_name)
-                .ok()
-                .map(|field| {
-                    PartitionValueParser::try_new(field.data_type(), snapshot.partition_time_zone())
-                })
-                .transpose()?;
-            Ok((column, parser))
-        })
-        .collect()
+    let columns = snapshot.physical_partition_columns();
+    let parsers =
+        partition_value_parsers(&columns, snapshot.schema(), snapshot.partition_time_zone())?;
+    Ok(columns.into_iter().zip(parsers).collect())
 }
 
 /// Returns the partition of a file for grouping files into bins, without changing the `Add`.
