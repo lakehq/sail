@@ -804,19 +804,25 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
         )
         .await?;
     // A table in the catalog of the session that created the view is read in that
-    // catalog, once for each statement, whatever the session of the reader has. The views
-    // read their tables by the data sources of the session that created them.
-    for sql in [
-        "SELECT * FROM global_temp.xs_mine",
-        "SELECT * FROM global_temp.xs_mine_df",
-        "SELECT * FROM global_temp.xs_mine a JOIN global_temp.xs_mine_df b ON a.k = b.k",
+    // catalog, once for each statement, whatever the session of the reader has. Each view
+    // builds the sources of its tables with the session that created it, as that session
+    // was when the view was created, so two views read one table version by two sources.
+    for (sql, count) in [
+        ("SELECT * FROM global_temp.xs_mine", 1),
+        ("SELECT * FROM global_temp.xs_mine_df", 1),
+        (
+            "SELECT * FROM global_temp.xs_mine a JOIN global_temp.xs_mine_df b ON a.k = b.k",
+            2,
+        ),
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
         take(&creator.source.created)?;
         reader.resolve(sql).await?.assert_loads(0, 0, sql);
         let sources = take(&creator.source.created)?;
-        assert_eq!(sources.len(), 1, "{sql}");
-        assert_eq!(sources[0].snapshot, before.0.to_string(), "{sql}");
+        assert_eq!(sources.len(), count, "{sql}");
+        for source in &sources {
+            assert_eq!(source.snapshot, before.0.to_string(), "{sql}");
+        }
         assert_eq!(loads(&creator), (before.0 + 1, before.1), "{sql}");
         assert_eq!(loads(&reader), snapshot, "{sql}");
         reader.execute(sql).await?;
@@ -833,19 +839,26 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
     assert_eq!(take(&creator.source.created)?.len(), 1, "{sql}");
     assert_eq!(loads(&creator), (before.0 + 1, before.1));
     // A table in a catalog that is the same in every session is read in the catalog of
-    // the reader, with the other references to the table in the statement.
-    for sql in [
-        "SELECT * FROM global_temp.xs_shared",
-        "SELECT * FROM global_temp.xs_shared_df",
-        "SELECT * FROM global_temp.xs_shared a JOIN second.default.shared b ON a.k = b.k \
-            JOIN global_temp.xs_shared_df c ON a.k = c.k",
+    // the reader, with the other references to the table in the statement, which read the
+    // version of the table that the first read loaded.
+    for (sql, count, direct) in [
+        ("SELECT * FROM global_temp.xs_shared", 1, 0),
+        ("SELECT * FROM global_temp.xs_shared_df", 1, 0),
+        (
+            "SELECT * FROM global_temp.xs_shared a JOIN second.default.shared b ON a.k = b.k \
+                JOIN global_temp.xs_shared_df c ON a.k = c.k",
+            2,
+            1,
+        ),
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
         take(&creator.source.created)?;
-        reader.resolve(sql).await?.assert_loads(0, 0, sql);
+        let direct_sources = reader.resolve(sql).await?.assert_loads(0, direct, sql);
         let sources = take(&creator.source.created)?;
-        assert_eq!(sources.len(), 1, "{sql}");
-        assert_eq!(sources[0].snapshot, snapshot.1.to_string(), "{sql}");
+        assert_eq!(sources.len(), count, "{sql}");
+        for source in sources.iter().chain(&direct_sources) {
+            assert_eq!(source.snapshot, snapshot.1.to_string(), "{sql}");
+        }
         assert_eq!(loads(&reader), (snapshot.0, snapshot.1 + 1), "{sql}");
         assert_eq!(loads(&creator), before, "{sql}");
     }
