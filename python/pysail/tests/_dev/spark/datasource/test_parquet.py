@@ -1997,10 +1997,8 @@ def test_parquet_table_reads_not_null_struct_of_timestamps(spark, tmp_path, time
     # The file stores the struct column as a column that allows nulls, and the timestamp
     # field of the struct needs a cast when the file is read.
     path = tmp_path / "table"
-    spark.sql(
-        f"SELECT k, IF(k >= 0, named_struct('y', {timestamp_type} '2020-01-01 00:00:00' + make_interval(0, 0, 0, k), "
-        "'z', k), NULL) AS c FROM VALUES (0), (1) AS v(k)"
-    ).write.parquet(str(path))
+    struct = f"named_struct('y', {timestamp_type} '2020-01-01 00:00:00' + make_interval(0, 0, 0, k), 'z', k)"
+    spark.sql(f"SELECT k, IF(k >= 0, {struct}, NULL) AS c FROM VALUES (0), (1) AS v(k)").write.parquet(str(path))  # noqa: S608
     table_name = "parquet_not_null_struct_of_timestamps"
     try:
         spark.sql(
