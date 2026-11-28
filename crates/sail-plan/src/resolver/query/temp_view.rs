@@ -1311,12 +1311,7 @@ impl PlanResolver<'_> {
             Err(CatalogError::NotFound(object, _)) => {
                 return Ok(Err(CatalogError::NotFound(
                     object,
-                    format!(
-                        "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {} (read by the \
-                        temporary view {})",
-                        quote_names(&origin.name),
-                        view_name(view),
-                    ),
+                    view_table_not_found(&quote_names(&origin.name), view),
                 )
                 .into()));
             }
@@ -1352,11 +1347,9 @@ impl PlanResolver<'_> {
                         _ => None,
                     });
                 let Some(relation) = relation else {
-                    return Ok(Err(PlanError::AnalysisError(format!(
-                        "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {} (read by the \
-                        temporary view {})",
-                        quote_name_if_needed(name),
-                        view_name(view),
+                    return Ok(Err(PlanError::AnalysisError(view_table_not_found(
+                        &quote_name_if_needed(name),
+                        view,
                     ))));
                 };
                 Some(relation)
@@ -1440,6 +1433,14 @@ fn view_name(view: &TableStatus) -> String {
     let mut name = view.database.clone();
     name.push(view.name.clone());
     quote_names(&name)
+}
+
+/// Returns the message that a table or a relation that a temporary view reads is not found.
+fn view_table_not_found(table: &str, view: &TableStatus) -> String {
+    format!(
+        "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {table} (read by the temporary view {})",
+        view_name(view),
+    )
 }
 
 /// Returns the columns that the plan reads of each source that a temporary view obtains

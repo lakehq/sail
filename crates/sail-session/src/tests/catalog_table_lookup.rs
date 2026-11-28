@@ -640,6 +640,21 @@ impl Fixture {
         self.resolve_plan(from_ast_statement(parse_one_statement(sql)?)?)
             .await
     }
+
+    /// Runs `action` once when a statement requests the table of the catalog `sail`, such
+    /// as a commit to another table in the middle of the statement.
+    fn on_request(
+        &self,
+        table: &str,
+        action: impl Future<Output = ()> + Send + 'static,
+    ) -> TestResult {
+        self.catalog
+            .on_request
+            .lock()
+            .map_err(|e| e.to_string())?
+            .push((table.to_string(), Box::pin(action)));
+        Ok(())
+    }
 }
 
 /// Takes the recorded items out of the list.

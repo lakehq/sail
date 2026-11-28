@@ -74,21 +74,13 @@ impl Fixture {
         commits: Vec<(Path, String)>,
     ) -> TestResult {
         let store = Arc::clone(store);
-        self.catalog
-            .on_request
-            .lock()
-            .map_err(|e| e.to_string())?
-            .push((
-                table.to_string(),
-                Box::pin(async move {
-                    for commit in commits {
-                        // A failed commit fails the check of the version that a later
-                        // statement reads.
-                        let _ = put(&store, commit).await;
-                    }
-                }),
-            ));
-        Ok(())
+        self.on_request(table, async move {
+            for commit in commits {
+                // A failed commit fails the check of the version that a later
+                // statement reads.
+                let _ = put(&store, commit).await;
+            }
+        })
     }
 
     /// Returns the versions of the Delta table that the statement reads, in plan order.
@@ -272,18 +264,10 @@ async fn test_delta_table_created_again_with_fewer_versions_after_a_read_without
     // The table is created again with only version 0 after the first read read version 1
     // without its files.
     let log = Arc::clone(&store);
-    fixture
-        .catalog
-        .on_request
-        .lock()
-        .map_err(|e| e.to_string())?
-        .push((
-            "t".to_string(),
-            Box::pin(async move {
-                let _ = log.delete(&commit(1, "first").0).await;
-                let _ = put(&log, commit(0, "second")).await;
-            }),
-        ));
+    fixture.on_request("t", async move {
+        let _ = log.delete(&commit(1, "first").0).await;
+        let _ = put(&log, commit(0, "second")).await;
+    })?;
     let plan = reads_without_then_with_files()?;
     assert_replaced(fixture.delta_versions(plan).await);
     Ok(())
@@ -314,19 +298,11 @@ async fn test_delta_reads_do_not_load_the_log_again() -> TestResult {
     // The commits that the first read read are removed, as the cleanup of the log removes
     // the commits before a checkpoint.
     let log = Arc::clone(&store);
-    fixture
-        .catalog
-        .on_request
-        .lock()
-        .map_err(|e| e.to_string())?
-        .push((
-            "t".to_string(),
-            Box::pin(async move {
-                for version in 0..=1 {
-                    let _ = log.delete(&commit(version, "first").0).await;
-                }
-            }),
-        ));
+    fixture.on_request("t", async move {
+        for version in 0..=1 {
+            let _ = log.delete(&commit(version, "first").0).await;
+        }
+    })?;
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
@@ -346,17 +322,9 @@ async fn test_catalog_managed_delta_reads_request_the_ratified_commits_once() ->
     // The log is removed between the reads, as a cleanup of the log after a checkpoint
     // removes the commits that the first read read.
     let log = Arc::clone(&store);
-    fixture
-        .catalog
-        .on_request
-        .lock()
-        .map_err(|e| e.to_string())?
-        .push((
-            "t".to_string(),
-            Box::pin(async move {
-                let _ = log.delete(&commit(0, "first").0).await;
-            }),
-        ));
+    fixture.on_request("t", async move {
+        let _ = log.delete(&commit(0, "first").0).await;
+    })?;
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),

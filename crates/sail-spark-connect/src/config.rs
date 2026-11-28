@@ -48,15 +48,22 @@ pub(crate) struct SparkRuntimeConfig {
     config: HashMap<String, String>,
 }
 
-/// A snapshot of the configuration of a session.
+/// The configuration of a session, which a clone of it keeps as it is now.
 impl SessionConfigProvider for SparkRuntimeConfig {
     fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
-        Ok(self.options(keys))
+        Ok(keys
+            .iter()
+            .map(|key| self.get_option(key).map(str::to_owned))
+            .collect())
     }
 
     fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
-        self.options_with_prefix(prefix)
-            .map_err(|e| internal_datafusion_err!("{e}"))
+        Ok(self
+            .get_all(Some(prefix))
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .into_iter()
+            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
+            .collect())
     }
 
     fn snapshot(&self) -> Result<Arc<dyn SessionConfigProvider>> {
@@ -227,20 +234,6 @@ impl SparkRuntimeConfig {
                 key: k.to_string(),
                 value: Some(v.to_string()),
             })
-            .collect())
-    }
-
-    fn options(&self, keys: &[&str]) -> Vec<Option<String>> {
-        keys.iter()
-            .map(|key| self.get_option(key).map(str::to_owned))
-            .collect()
-    }
-
-    fn options_with_prefix(&self, prefix: &str) -> SparkResult<BTreeMap<String, String>> {
-        Ok(self
-            .get_all(Some(prefix))?
-            .into_iter()
-            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
             .collect())
     }
 

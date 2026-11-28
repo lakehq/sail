@@ -77,18 +77,10 @@ async fn test_iceberg_reads_with_other_options_read_one_version_of_the_metadata(
     // The version with the column `v` is committed when the statement requests the table
     // by name, after the read by path loaded the metadata.
     let log = Arc::clone(&store);
-    fixture
-        .catalog
-        .on_request
-        .lock()
-        .map_err(|e| e.to_string())?
-        .push((
-            "i".to_string(),
-            Box::pin(async move {
-                let (path, contents) = metadata(2);
-                let _ = log.put(&path, contents.into()).await;
-            }),
-        ));
+    fixture.on_request("i", async move {
+        let (path, contents) = metadata(2);
+        let _ = log.put(&path, contents.into()).await;
+    })?;
     let plan = union_all(
         [
             read_path("iceberg", LOCATION, &[]),

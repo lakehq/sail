@@ -124,17 +124,12 @@ impl ViewDefinitionScope {
     pub(super) fn pinned_temporary_view<T: AsRef<str>>(
         reference: &[T],
     ) -> Option<Option<TableStatus>> {
+        let definition = Self::pinned()?;
         let reference = reference
             .iter()
             .map(|x| x.as_ref().to_string())
             .collect::<Vec<_>>();
-        Some(
-            Self::pinned()?
-                .objects
-                .temporary_views
-                .get(&reference)
-                .cloned(),
-        )
+        Some(definition.objects.temporary_views.get(&reference).cloned())
     }
 
     /// Records the temporary view that a reference names when the view is created.

@@ -581,9 +581,6 @@ impl PlanResolver<'_> {
         };
         let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
         let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
-        // Repeated references to the same table within a query share its source,
-        // so that they can share scalar subqueries. Delta Lake and Iceberg sources
-        // also pin one table snapshot, while file tables still list files for each scan.
         let settings = self.source_build_settings(origin.settings.as_ref(), state)?;
         let data_source_registry = self.session_data_sources(settings.as_deref())?;
         // Delta Lake and Iceberg sources read their columns by the metadata of the table,
@@ -592,6 +589,9 @@ impl PlanResolver<'_> {
         let is_lake_source = data_source_registry
             .get_lake_source_if_supported(&format)?
             .is_some();
+        // Repeated references to the same table within a query share its source,
+        // so that they can share scalar subqueries. Delta Lake and Iceberg sources
+        // also pin one table snapshot, while file tables still list files for each scan.
         let source_key = lake_relation.is_none().then(|| TableSourceKey {
             catalog: status.catalog,
             database: status.database,
