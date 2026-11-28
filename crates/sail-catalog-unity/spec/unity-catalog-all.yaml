@@ -185,6 +185,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SchemaInfo'
+        '4XX':
+          description: The request was rejected. The body describes the error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       tags:
         - Schemas
@@ -320,6 +326,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StagingTableInfo'
+        '4XX':
+          description: The request was rejected. The body describes the error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /tables:
     post:
       operationId: createTable
@@ -343,6 +355,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TableInfo'
+        '4XX':
+          description: The request was rejected. The body describes the error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       tags:
         - Tables
@@ -1815,6 +1833,17 @@ components:
         - data_source_format
         - columns
         - storage_location
+    ErrorResponse:
+      description: |
+        The body of a rejected request. Unity Catalog 0.4 answers a request to create an existing
+        object with 409 and the error code `ALREADY_EXISTS`, while 0.6 and later answer with 400 and
+        an error code such as `SCHEMA_ALREADY_EXISTS` or `TABLE_ALREADY_EXISTS`.
+      type: object
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
     StagingTableInfo:
       type: object
       properties:
