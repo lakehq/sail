@@ -1344,8 +1344,7 @@ fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> 
         .get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
     {
-        let path = url::Url::parse(location)
-            .ok()
+        let path = sail_common_datafusion::location::parse_absolute_url(location)
             .and_then(|url| url.to_file_path().ok());
         return match path {
             Some(path) => Ok(Some(path)),
@@ -1950,7 +1949,7 @@ mod tests {
         for location in ["s3://bucket/key", "memory:///t", "hdfs://nn/path"] {
             assert!(matches!(local_table_dir(location), Ok(None)), "{location}");
         }
-        for location in ["", "file://otherhost/tmp/t"] {
+        for location in ["", "file://otherhost/tmp/t", "file:tmp/t", "file:"] {
             assert!(local_table_dir(location).is_err(), "{location}");
         }
     }

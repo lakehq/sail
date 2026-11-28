@@ -26,7 +26,6 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 moka = { workspace = true }
-url = { workspace = true }
 log = { workspace = true }
 base64 = { workspace = true }
 

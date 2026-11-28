@@ -1828,12 +1828,8 @@ fn merge_protocol_for_upgrade(
 /// Parse a location string into a [`Url`]. Accepts both fully-qualified URLs and
 /// local absolute file system paths.
 pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
-    if let Ok(url) = Url::parse(path) {
-        // Reject "scheme-like" strings on Windows such as `c:/foo` that `Url::parse`
-        // accepts as opaque URLs.
-        if url.scheme().len() > 1 {
-            return Ok(url);
-        }
+    if let Some(url) = sail_data_source::parse_absolute_url(path) {
+        return Ok(url);
     }
     if std::path::Path::new(path).is_absolute() {
         return Url::from_file_path(path)

@@ -1021,41 +1021,6 @@ pub(crate) fn resolve_base_directory_url(path: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Parse an absolute directory location without glob expansion or filesystem probes.
-/// Only the path gets a trailing separator; URL authority, escapes, query and fragment stay intact.
-pub fn parse_absolute_directory_url(path: &str) -> Option<Url> {
-    let mut url = parse_absolute_url(path).or_else(|| file_url_from_absolute_path(path))?;
-    if !url.path().ends_with('/') {
-        url.set_path(&format!("{}/", url.path()));
-    }
-    Some(url)
-}
-
-pub fn parse_absolute_url(raw: &str) -> Option<Url> {
-    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
-}
-
-pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
-    if std::path::Path::new(path).is_absolute() {
-        return Url::from_file_path(path).ok();
-    }
-    windows_drive_path_to_file_url(path)
-}
-
-fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
-    let bytes = path.as_bytes();
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || !matches!(bytes[2], b'/' | b'\\')
-    {
-        return None;
-    }
-
-    let path = path.replace('\\', "/");
-    Url::parse(&format!("file:///{path}")).ok()
-}
-
 /// Resolve aliases even when the last components do not exist yet.
 pub fn canonical_local_path(url: &Url) -> Result<PathBuf> {
     let path = url
@@ -1157,6 +1122,7 @@ pub async fn rewrite_directory_url(mut url: GlobUrl, session: &dyn Session) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse_absolute_directory_url;
 
     #[test]
     fn test_pattern_segment_parser() {

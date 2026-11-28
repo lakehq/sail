@@ -130,3 +130,24 @@ def test_file_uri_with_other_host_is_rejected(spark, tmp_path):
         spark.read.parquet(f"file://otherhost{path}").write.mode("overwrite").parquet(path)
     assert sorted(spark.read.parquet(path).collect()) == sorted(ROWS)
 
+
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark reports a different error")
+def test_lakehouse_location_with_relative_file_uri_is_rejected(spark):
+    with pytest.raises(Exception, match="must be an absolute path or URL: file:rel"):
+        spark.sql("SELECT * FROM iceberg.`file:rel`").collect()
+    try:
+        with pytest.raises(Exception, match="must be an absolute path or URL: file:rel"):
+            spark.sql("CREATE TABLE hadoop_file_uri_relative (a INT) USING delta LOCATION 'file:rel'")
+    finally:
+        spark.sql("DROP TABLE IF EXISTS hadoop_file_uri_relative")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Needs the Delta format")
+@pytest.mark.parametrize("location", ["s3a:/bucket/key", "s3a:///bucket/key"])
+def test_lakehouse_location_without_authority_is_not_local(spark, location):
+    try:
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            spark.sql(f"CREATE TABLE hadoop_file_uri_s3a (a INT) USING delta LOCATION '{location}'")
+    finally:
+        spark.sql("DROP TABLE IF EXISTS hadoop_file_uri_s3a")
+    _assert_no_local_scheme_dir("s3a")
