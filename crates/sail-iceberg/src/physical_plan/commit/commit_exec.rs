@@ -57,7 +57,7 @@ use crate::table::metadata_loader::{
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
-const MAX_COMMIT_RETRIES: usize = 5;
+pub(crate) const MAX_COMMIT_RETRIES: usize = 5;
 
 fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
     let row_count = i64::try_from(row_count).map_err(|e| {
@@ -514,6 +514,16 @@ impl IcebergCommitExec {
                 previous_metadata_location,
                 new_metadata_location,
             )
+            .await
+    }
+
+    async fn publish_filesystem_metadata_location(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        new_metadata_location: &str,
+    ) -> Result<()> {
+        IcebergCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+            .publish_filesystem_metadata_location(new_metadata_location, MAX_COMMIT_RETRIES)
             .await
     }
 
@@ -976,11 +986,9 @@ impl ExecutionPlan for IcebergCommitExec {
                             &table_url,
                             &bootstrap_result.metadata_file,
                         )?;
-                        Self::update_catalog_metadata_location(
+                        Self::publish_filesystem_metadata_location(
                             &context,
                             catalog_table,
-                            &commit_info.table_properties,
-                            catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
                         .await
@@ -1242,11 +1250,9 @@ impl ExecutionPlan for IcebergCommitExec {
                             &table_url,
                             &bootstrap_result.metadata_file,
                         )?;
-                        Self::update_catalog_metadata_location(
+                        Self::publish_filesystem_metadata_location(
                             &context,
                             catalog_table,
-                            &commit_info.table_properties,
-                            catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
                         .await
@@ -1499,11 +1505,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await
                     .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
-                    Self::update_catalog_metadata_location(
+                    Self::publish_filesystem_metadata_location(
                         &context,
                         catalog_table,
-                        &commit_info.table_properties,
-                        catalog_recorded_metadata_location.as_deref(),
                         metadata_location,
                     )
                     .await

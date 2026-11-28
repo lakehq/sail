@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -22,6 +24,7 @@ from pyiceberg.types import (
     StructType,
     TimestampType,
 )
+from pyspark.sql import functions as sf
 from pyspark.sql.types import (
     DecimalType as SparkDecimalType,
 )
@@ -673,3 +676,53 @@ def test_iceberg_write_rejects_incompatible_type_without_merge_schema(spark, sql
             df.write.format("iceberg").mode("overwrite").save(table.location())
     finally:
         sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_insert_that_reads_its_table_commits_after_an_append_while_it_runs(spark, tmp_path):
+    """The catalog entry of a path table only mirrors the location of its latest metadata file. An insert
+    that reads the table commits after another statement appends to the table while the insert runs, and the
+    catalog entry then records the commit of the insert."""
+    path = tmp_path / "t"
+    spark.sql(f"CREATE TABLE t (x INT) USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+    try:
+        spark.sql("INSERT INTO t VALUES (1), (2)")
+        ready = str(tmp_path / "writer-ready")
+        release = str(tmp_path / "writer-release")
+
+        @sf.udf("int")
+        def blocked(value):
+            import time
+            from pathlib import Path
+
+            Path(ready).touch()
+            deadline = time.monotonic() + 30
+            while not Path(release).exists():
+                if time.monotonic() >= deadline:
+                    message = "insert barrier timed out"
+                    raise RuntimeError(message)
+                time.sleep(0.01)
+            return value
+
+        spark.udf.register("blocked", blocked)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(lambda: spark.sql("INSERT INTO t SELECT blocked(x) + 10 FROM t").collect())
+            try:
+                deadline = time.monotonic() + 30
+                while not (tmp_path / "writer-ready").exists() and time.monotonic() < deadline:
+                    if future.done():
+                        future.result()
+                    time.sleep(0.01)
+                assert (tmp_path / "writer-ready").exists()
+                spark.sql("INSERT INTO t VALUES (100)")
+            finally:
+                (tmp_path / "writer-release").touch()
+            future.result(timeout=30)
+
+        expected = [(1,), (2,), (11,), (12,), (100,)]
+        assert sorted(spark.table("t").collect()) == expected
+        assert sorted(spark.read.format("iceberg").load(str(path)).collect()) == expected
+        assert spark.sql("SELECT * FROM t.snapshots").count() == 3
+        spark.sql("INSERT INTO t VALUES (7)")
+        assert sorted(spark.table("t").collect()) == sorted([*expected, (7,)])
+    finally:
+        spark.sql("DROP TABLE IF EXISTS t")
