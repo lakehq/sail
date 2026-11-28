@@ -3,20 +3,142 @@
 use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job_graph::JobGraph;
+use crate::id::JobId;
+use crate::job_graph::{JobGraph, OutputDistribution, Stage};
+use crate::proto::{
+    RemoteExecutionCodec, encode_remote_partitioning, encode_remote_physical_expr,
+    encode_remote_physical_plan,
+};
+use crate::task::definition::TaskOutputDistribution;
+
+/// The parts of a task definition that are independent of task assignments.
+#[derive(Debug)]
+pub struct EncodedStage {
+    pub plan: Arc<[u8]>,
+    pub distribution: TaskOutputDistribution,
+}
+
+impl EncodedStage {
+    fn try_new(stage: &Stage) -> ExecutionResult<Self> {
+        let plan = encode_remote_physical_plan(&RemoteExecutionCodec, stage.plan.clone())?.into();
+        let distribution = match &stage.distribution {
+            OutputDistribution::Hash { keys, channels } => {
+                let keys = keys
+                    .iter()
+                    .map(|expr| {
+                        let expr = encode_remote_physical_expr(&RemoteExecutionCodec, expr)?;
+                        Ok(Arc::from(expr))
+                    })
+                    .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
+                TaskOutputDistribution::Hash {
+                    keys,
+                    channels: *channels,
+                }
+            }
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let channels = *channels;
+                let partitioning = encode_remote_partitioning(
+                    &RemoteExecutionCodec,
+                    &Partitioning::Range(partitioning.clone()),
+                )?;
+                TaskOutputDistribution::Range {
+                    partitioning: Arc::from(partitioning),
+                    channels,
+                }
+            }
+            OutputDistribution::RoundRobinBatch { channels } => {
+                TaskOutputDistribution::RoundRobinBatch {
+                    channels: *channels,
+                }
+            }
+            OutputDistribution::RoundRobinRow { channels } => {
+                TaskOutputDistribution::RoundRobinRow {
+                    channels: *channels,
+                }
+            }
+            OutputDistribution::Channel { channels } => TaskOutputDistribution::Channel {
+                channels: *channels,
+            },
+        };
+        Ok(Self { plan, distribution })
+    }
+}
+
+/// A graph and its task dependencies, built together on the compute runtime.
+#[derive(Debug)]
+pub struct PlannedJob {
+    pub graph: Arc<JobGraph>,
+    pub topology: JobTopology,
+    stages: Vec<EncodedStage>,
+}
+
+impl TryFrom<JobGraph> for PlannedJob {
+    type Error = ExecutionError;
+
+    fn try_from(graph: JobGraph) -> ExecutionResult<Self> {
+        let topology = JobTopology::try_new(&graph)?;
+        let stages = graph
+            .stages()
+            .iter()
+            .map(EncodedStage::try_new)
+            .collect::<ExecutionResult<_>>()?;
+        Ok(Self {
+            graph: Arc::new(graph),
+            topology,
+            stages,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RangeShuffleUpdate {
+    graph: Arc<JobGraph>,
+    topology: JobTopology,
+    changed: Vec<(usize, EncodedStage)>,
+}
+
+impl RangeShuffleUpdate {
+    pub fn try_new(
+        job_id: JobId,
+        graph: &JobGraph,
+        shuffle: usize,
+        partitions: usize,
+    ) -> ExecutionResult<Self> {
+        let mut graph = graph.clone();
+        let changed = graph.resize_range_shuffle(shuffle, partitions)?;
+        log::debug!("job {job_id} job graph after range shuffle {shuffle}\n{graph}");
+        let topology = JobTopology::try_new(&graph)?;
+        let changed = changed
+            .into_iter()
+            .map(|s| Ok((s, EncodedStage::try_new(&graph.stages()[s])?)))
+            .collect::<ExecutionResult<_>>()?;
+        Ok(Self {
+            graph: Arc::new(graph),
+            topology,
+            changed,
+        })
+    }
+}
 
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
     pub context: Arc<TaskContext>,
-    pub graph: JobGraph,
+    pub graph: Arc<JobGraph>,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
+    /// Region retries can relaunch a stage after its output was cleaned up.
+    /// Keep the definitions until the whole job is closed.
+    pub stage_definitions: Vec<EncodedStage>,
     pub regions: Vec<TaskRegionDescriptor>,
     /// The state of each range shuffle of the job graph.
     pub range_shuffles: Vec<RangeShuffleState>,
@@ -68,11 +190,12 @@ impl JobState {
 }
 
 impl JobDescriptor {
-    pub fn try_new(
-        graph: JobGraph,
-        state: JobState,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<Self> {
+    pub fn new(plan: PlannedJob, state: JobState, context: Arc<TaskContext>) -> Self {
+        let PlannedJob {
+            graph,
+            topology,
+            stages: stage_definitions,
+        } = plan;
         let stages = graph
             .stages()
             .iter()
@@ -83,18 +206,18 @@ impl JobDescriptor {
                 state: StageState::Active,
             })
             .collect();
-        let topology = JobTopology::try_new(&graph)?;
         let regions = TaskRegionDescriptor::new_regions(&topology);
         let range_shuffles = vec![RangeShuffleState::Sampling; graph.range_shuffles().len()];
-        Ok(Self {
+        Self {
             context,
             graph,
             topology,
             stages,
             regions,
+            stage_definitions,
             range_shuffles,
             state,
-        })
+        }
     }
 
     /// Gives the range shuffle its number of partitions, and the stages that read it
@@ -103,17 +226,24 @@ impl JobDescriptor {
     pub fn resolve_range_shuffle(
         &mut self,
         shuffle: usize,
-        partitions: usize,
+        update: RangeShuffleUpdate,
     ) -> ExecutionResult<Vec<usize>> {
-        let changed = self.graph.resize_range_shuffle(shuffle, partitions)?;
-        for &s in &changed {
+        let RangeShuffleUpdate {
+            graph,
+            topology,
+            changed,
+        } = update;
+        let mut updated = Vec::with_capacity(changed.len());
+        for (s, definition) in changed {
             let stage = &mut self.stages[s];
             if stage.tasks.iter().any(|task| !task.attempts.is_empty()) {
                 return Err(ExecutionError::InternalError(format!(
                     "stage {s} has run before the partitions of range shuffle {shuffle} are known"
                 )));
             }
-            let partitions = self.graph.stages()[s]
+            self.stage_definitions[s] = definition;
+            updated.push(s);
+            let partitions = graph.stages()[s]
                 .plan
                 .output_partitioning()
                 .partition_count();
@@ -121,10 +251,11 @@ impl JobDescriptor {
                 stage.tasks = TaskDescriptor::new_tasks(partitions);
             }
         }
-        self.topology = JobTopology::try_new(&self.graph)?;
+        self.graph = graph;
+        self.topology = topology;
         self.regions = TaskRegionDescriptor::new_regions(&self.topology);
         self.range_shuffles[shuffle] = RangeShuffleState::Resolved;
-        Ok(changed)
+        Ok(updated)
     }
 
     /// Whether the stage waits for the partitions of a range shuffle.
@@ -146,7 +277,7 @@ pub struct StageDescriptor {
     pub state: StageState,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub enum StageState {
     /// The tasks in the stage are not yet completed,
     /// or the task streams are still being consumed.

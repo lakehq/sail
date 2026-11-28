@@ -18,6 +18,7 @@ use crate::task_runner::registry::TaskRegistry;
 
 pub struct TaskRunnerActor {
     session_id: String,
+    compute: tokio::runtime::Handle,
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
     tasks: TaskRegistry,
     extensions: TaskRunnerExtensions,

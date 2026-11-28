@@ -11,6 +11,7 @@ use crate::shuffle::ShuffleBackendKind;
 
 #[readonly::make]
 pub struct WorkerPoolOptions {
+    pub compute: tokio::runtime::Handle,
     pub enable_tls: bool,
     pub batch_size: usize,
     pub session_id: String,
@@ -34,6 +35,7 @@ pub struct WorkerPoolOptions {
 impl From<&DriverOptions> for WorkerPoolOptions {
     fn from(options: &DriverOptions) -> Self {
         Self {
+            compute: options.runtime.compute().clone(),
             enable_tls: options.enable_tls,
             batch_size: options.batch_size,
             session_id: options.session_id.clone(),

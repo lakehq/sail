@@ -7,6 +7,7 @@ use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::common::spawn_buffered;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
@@ -19,6 +20,7 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
+use crate::driver::job_scheduler::PlannedJob;
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
@@ -154,7 +156,21 @@ impl JobRunner for ClusterJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = execute_job(&self.driver, plan, ctx.task_ctx()).await?;
+        log::debug!(
+            "execution plan\n{}",
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+        let graph = JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                shuffle_backend: self.shuffle_backend.clone(),
+            },
+        )
+        .map_err(|error| internal_datafusion_err!("{error}"))?;
+        log::debug!("job graph\n{graph}");
+        let job = PlannedJob::try_from(graph)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let stream = execute_job(&self.driver, job, ctx.task_ctx()).await?;
         Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
@@ -165,13 +181,13 @@ impl JobRunner for ClusterJobRunner {
 
 async fn execute_job(
     driver: &DriverHandle,
-    plan: Arc<dyn ExecutionPlan>,
+    graph: PlannedJob,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     let (tx, rx) = oneshot::channel();
     driver
         .send(DriverMessage::ExecuteJob {
-            plan,
+            graph,
             context,
             result: tx,
         })

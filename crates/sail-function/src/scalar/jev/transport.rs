@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use futures::{TryStreamExt, stream};
+use sail_common_datafusion::session::runtime::IoRuntime;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -400,6 +401,7 @@ struct AttemptFailure {
 }
 
 async fn send(
+    io: &IoRuntime,
     runtime: &Runtime,
     models: bool,
     group: &Group,
@@ -416,27 +418,45 @@ async fn send(
             .header("content-type", "application/json")
             .body(group.body.clone())
     };
-    let response = request
-        .bearer_auth(&*group.options.api_key)
-        .send()
-        .await
-        .map_err(|e| AttemptFailure {
+    let request = request.bearer_auth(&*group.options.api_key);
+    let attempt = async move {
+        let response = request.send().await.map_err(|e| AttemptFailure {
             retry: e.is_connect() || e.is_timeout() || e.is_body() || e.is_request(),
             delay: None,
             message: "Jev HTTP connection failed".to_owned(),
         })?;
-    let status = response.status();
-    let request_id = response
-        .headers()
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.bytes().await.map_err(|_| AttemptFailure {
+            retry: true,
+            delay: None,
+            message: "Jev response body could not be read".to_owned(),
+        })?;
+        Ok((status, headers, bytes))
+    };
+    let timeout = group.options.timeout;
+    let (status, retry_headers, bytes) = io
+        .spawn(async move {
+            tokio::time::timeout(timeout, attempt)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(AttemptFailure {
+                        retry: true,
+                        delay: None,
+                        message: "Jev HTTP attempt timed out".to_owned(),
+                    })
+                })
+        })
+        .await
+        .map_err(|error| AttemptFailure {
+            retry: false,
+            delay: None,
+            message: format!("Jev HTTP task failed: {error}"),
+        })??;
+    let request_id = retry_headers
         .get("x-typesafe-request-id")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let retry_headers = response.headers().clone();
-    let bytes = response.bytes().await.map_err(|_| AttemptFailure {
-        retry: true,
-        delay: None,
-        message: "Jev response body could not be read".to_owned(),
-    })?;
     if !status.is_success() {
         let detail = serde_json::from_slice::<Value>(&bytes)
             .map(|body| {
@@ -483,6 +503,7 @@ async fn send(
 }
 
 async fn execute(
+    io: &IoRuntime,
     runtime: Arc<Runtime>,
     kind: JevKind,
     group: Group,
@@ -505,15 +526,7 @@ async fn execute(
             runtime: &runtime,
             _permit: permit,
         };
-        let result = tokio::time::timeout(group.options.timeout, send(&runtime, models, &group))
-            .await
-            .unwrap_or_else(|_| {
-                Err(AttemptFailure {
-                    retry: true,
-                    delay: None,
-                    message: "Jev HTTP attempt timed out".to_owned(),
-                })
-            });
+        let result = send(io, &runtime, models, &group).await;
         drop(active);
         match result {
             Ok(value) => break value,
@@ -610,6 +623,7 @@ async fn execute(
 }
 
 pub(crate) async fn evaluate<F>(
+    io: &IoRuntime,
     kind: JevKind,
     number_rows: usize,
     row: F,
@@ -635,7 +649,7 @@ where
         }
     });
     let results = groups
-        .map_ok(|group| execute(Arc::clone(&runtime), kind, group))
+        .map_ok(|group| execute(io, Arc::clone(&runtime), kind, group))
         .try_buffer_unordered(runtime.limits.pending);
     futures::pin_mut!(results);
     let mut output = vec![None; number_rows];

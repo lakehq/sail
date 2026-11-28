@@ -101,6 +101,7 @@ impl Actor for WorkerActor {
         let task_runner = ctx
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                compute: self.options.runtime.compute().clone(),
                 session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
@@ -130,6 +131,7 @@ impl Actor for WorkerActor {
                     ctx.handle().clone(),
                     task_runner,
                     task_context,
+                    self.options.runtime.compute().clone(),
                     addr,
                     self.options.shuffle_backend.flight_compression(),
                 )

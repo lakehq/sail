@@ -11,18 +11,16 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::QueryCancellation;
 use sail_telemetry::events::SystemEventReporter;
-pub use state::{JobState, TaskState};
+pub use state::{JobState, PlannedJob, RangeShuffleUpdate, TaskState};
 
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
-use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
@@ -30,7 +28,6 @@ pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    codec: Box<dyn PhysicalExtensionCodec>,
     event_reporter: SystemEventReporter,
 }
 
@@ -41,7 +38,6 @@ impl JobScheduler {
             shutdown: Arc::new(QueryCancellation::default()),
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
-            codec: Box::new(RemoteExecutionCodec),
             event_reporter,
         }
     }
@@ -71,6 +67,7 @@ pub enum JobAction {
     /// Reads the split points of a range shuffle on the driver, for the number of
     /// partitions of the shuffle (see [`crate::job_graph::RangeShuffle`]).
     ReadRangeSplitPoints {
+        graph: Arc<crate::job_graph::JobGraph>,
         job_id: JobId,
         shuffle: usize,
         key: TaskStreamKey,

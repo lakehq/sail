@@ -11,6 +11,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
+use sail_object_store::GetResultExt;
 use url::Url;
 
 const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
@@ -209,7 +210,7 @@ pub(crate) async fn load_metadata_file_bytes(
         .get(&metadata_path)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
+        .read_bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     decode_metadata_file(metadata_location, &metadata_data)

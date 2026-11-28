@@ -9,12 +9,15 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
+use prost::Message;
 use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_system_store::SystemEvent;
+use tokio::runtime::Handle;
 use tokio::time::Instant;
+use tokio_util::task::AbortOnDropHandle;
 use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
@@ -364,11 +367,19 @@ impl WorkerPool {
             }
         };
         let handle = ctx.handle().clone();
+        let compute = self.options.compute.clone();
         ctx.spawn(async move {
-            if let Err(error) = client
-                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
-                .await
-            {
+            let dispatch = async {
+                let definition = AbortOnDropHandle::new(compute.spawn(async move {
+                    crate::task::r#gen::TaskDefinition::from(Arc::unwrap_or_clone(definition))
+                        .encode_to_vec()
+                }))
+                .await?;
+                client
+                    .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                    .await
+            };
+            if let Err(error) = dispatch.await {
                 for task in tasks {
                     let _ = handle
                         .send(DriverMessage::UpdateTask {
@@ -443,11 +454,16 @@ impl WorkerPool {
             });
             return Ok(Box::pin(futures::stream::empty()));
         }
+        // The reader can poll this stream on compute. Open the Flight connection on
+        // the driver runtime so its HTTP/2 transport keeps running during computation.
+        let primary = Handle::current();
         let stream = futures::stream::once(async move {
-            client
-                .fetch_task_streams(keys, schema.clone())
-                .await
-                .map_err(|e| TaskStreamError::External(Arc::new(e)))
+            AbortOnDropHandle::new(
+                primary.spawn(async move { client.fetch_task_streams(keys, schema).await }),
+            )
+            .await
+            .map_err(|e| TaskStreamError::External(Arc::new(e)))?
+            .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })
         .try_flatten();
         Ok(Box::pin(stream))

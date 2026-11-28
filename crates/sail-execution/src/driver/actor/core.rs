@@ -118,6 +118,7 @@ impl Actor for DriverActor {
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
+                compute: self.options.runtime.compute().clone(),
                 session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
@@ -165,10 +166,10 @@ impl Actor for DriverActor {
                 self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
             DriverMessage::ExecuteJob {
-                plan,
+                graph,
                 context,
                 result,
-            } => self.handle_execute_job(ctx, plan, context, result),
+            } => self.handle_execute_job(ctx, graph, context, result),
             DriverMessage::CleanUpJob { job_id, outcome } => {
                 self.handle_clean_up_job(ctx, job_id, outcome)
             }
@@ -183,8 +184,8 @@ impl Actor for DriverActor {
             DriverMessage::RangeSplitPointsRead {
                 job_id,
                 shuffle,
-                partitions,
-            } => self.handle_range_split_points_read(ctx, job_id, shuffle, partitions),
+                update,
+            } => self.handle_range_split_points_read(ctx, job_id, shuffle, update),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }

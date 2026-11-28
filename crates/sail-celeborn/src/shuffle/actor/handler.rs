@@ -6,6 +6,8 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use sail_common::actor::{ActorAction, ActorContext};
+use sail_common::runtime::spawn_stream_on;
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::common::{PartitionLocation, SlotReservation};
@@ -387,7 +389,6 @@ impl ShuffleClientActor {
 
     pub(super) fn handle_read_partition_stream_complete(
         &mut self,
-        ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
         result: CelebornResult<SlotReservation>,
@@ -433,8 +434,8 @@ impl ShuffleClientActor {
                 )
             })
             .collect::<Vec<_>>();
-        ctx.spawn(async move {
-            let stream = stream::iter(clients)
+        let stream = spawn_stream_on(Handle::current(), (), move |_| {
+            stream::iter(clients)
                 .then(move |client| {
                     let shuffle_key = shuffle_key.clone();
                     async move {
@@ -443,9 +444,10 @@ impl ShuffleClientActor {
                             .await
                     }
                 })
-                .flatten();
-            let _ = reply.send(Box::pin(stream));
+                .flatten()
+                .boxed()
         });
+        let _ = reply.send(stream);
         ActorAction::Continue
     }
 

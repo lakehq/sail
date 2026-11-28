@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
@@ -17,7 +16,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::{JobAction, TaskState};
+use crate::driver::job_scheduler::{JobAction, PlannedJob, RangeShuffleUpdate, TaskState};
 use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
@@ -213,11 +212,11 @@ impl DriverActor {
     pub(super) fn handle_execute_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        plan: Arc<dyn ExecutionPlan>,
+        graph: PlannedJob,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
+        let out = self.job_scheduler.accept_job(ctx, graph, context);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
@@ -301,11 +300,11 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
         shuffle: usize,
-        partitions: ExecutionResult<usize>,
+        update: ExecutionResult<RangeShuffleUpdate>,
     ) -> ActorAction {
         for action in self
             .job_scheduler
-            .resolve_range_shuffle(job_id, shuffle, partitions)
+            .resolve_range_shuffle(job_id, shuffle, update)
         {
             self.run_job_action(ctx, action);
         }
@@ -429,9 +428,12 @@ impl DriverActor {
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
-        debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { region } => {
+                debug!(
+                    "scheduling task region with {} task sets",
+                    region.tasks.len()
+                );
                 if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
                     // Failing one task fails the entire region. Report this as a
                     // separate message so that the current job actions finish first.
@@ -458,6 +460,7 @@ impl DriverActor {
                 }
             }
             JobAction::CancelTask { key } => {
+                debug!("canceling task {}", TaskKeyDisplay(&key));
                 self.task_assigner.exclude_task(&key);
                 if let Some(assignment) = self.unassign_task(ctx, &key) {
                     match assignment {
@@ -481,6 +484,7 @@ impl DriverActor {
                 schema,
                 retry_cause,
             } => {
+                debug!("extending job output with {}", TaskStreamKeyDisplay(&key));
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
                 let (result, receiver) = oneshot::channel();
@@ -538,21 +542,25 @@ impl DriverActor {
                 });
             }
             JobAction::FailJobOutput { handle, cause } => {
+                debug!("failing job output");
                 ctx.spawn(async move {
                     handle.send(JobOutputItem::Error { cause }).await;
                 });
             }
             JobAction::ReadRangeSplitPoints {
+                graph,
                 job_id,
                 shuffle,
                 key,
                 schema,
             } => {
+                debug!("reading split points for job {job_id} range shuffle {shuffle}");
                 // The split points are picked on the driver, so their stream is local.
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
+                let compute = self.options.runtime.compute().clone();
                 ctx.spawn(async move {
-                    let partitions = async {
+                    let plan = compute.spawn(async move {
                         let task_runner = task_runner.ok_or_else(|| {
                             ExecutionError::InternalError("task runner is not started".to_string())
                         })?;
@@ -574,14 +582,22 @@ impl DriverActor {
                                         "cannot read the range split points: {e}"
                                     ))
                                 })?;
-                        Ok(range_split_from_batches(&batches)?.partitions())
-                    }
-                    .await;
+                        RangeShuffleUpdate::try_new(
+                            job_id,
+                            &graph,
+                            shuffle,
+                            range_split_from_batches(&batches)?.partitions(),
+                        )
+                    });
+                    let update = tokio_util::task::AbortOnDropHandle::new(plan)
+                        .await
+                        .map_err(ExecutionError::from)
+                        .and_then(|result| result);
                     let _ = driver
                         .send(DriverMessage::RangeSplitPointsRead {
                             job_id,
                             shuffle,
-                            partitions,
+                            update,
                         })
                         .await;
                 });
@@ -591,6 +607,7 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                debug!("cleaning up job {job_id} stage {stage:?}");
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
                 // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {
@@ -754,11 +771,17 @@ impl DriverActor {
             } else {
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
+                let compute = self.options.runtime.compute().clone();
                 ctx.spawn(async move {
                     let output = async {
                         let task_runner = task_runner.ok_or_else(|| {
                             ExecutionError::InternalError("task runner is not started".into())
                         })?;
+                        let definition =
+                            tokio_util::task::AbortOnDropHandle::new(compute.spawn(async move {
+                                Arc::unwrap_or_clone(definition).decode_plan().map(Arc::new)
+                            }))
+                            .await??;
                         let (result, rx) = oneshot::channel();
                         task_runner
                             .send(TaskRunnerMessage::RunTaskBatch {

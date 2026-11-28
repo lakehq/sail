@@ -12,6 +12,7 @@ use sail_common_datafusion::lakesource::{
     LakeSourceCreateTableResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::session::runtime::IoRuntime;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -956,7 +957,8 @@ impl CatalogCommand {
                             dir.display()
                         )));
                     }
-                    tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                    let io = IoRuntime::from_options(ctx.session_config().options());
+                    io.0.spawn_blocking(move || -> CatalogResult<()> {
                         // Like Spark, recreate the directory if it is gone.
                         if !dir.exists() {
                             return std::fs::create_dir_all(&dir).map_err(|e| {

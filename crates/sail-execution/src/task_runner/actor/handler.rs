@@ -7,7 +7,6 @@ use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{error, warn};
-use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
@@ -30,7 +29,7 @@ impl TaskRunnerActor {
         job_id: JobId,
         stage: usize,
         tasks: Vec<TaskAttempt>,
-        definition: Arc<TaskDefinition>,
+        definition: Arc<TaskDefinition<PhysicalPlanNode>>,
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
@@ -59,11 +58,6 @@ impl TaskRunnerActor {
         if !self.tasks.check_batch(job_id, stage, &tasks)? {
             return Ok(());
         }
-        // Validate shared descriptions before admitting any task. Only descriptions are shared;
-        // every task gets a fresh converter, executable plan, and shuffle reader/writer.
-        let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
-            |error| ExecutionError::InvalidArgument(format!("invalid physical plan: {error}")),
-        )?);
         self.tasks.record_batch(job_id, stage, &tasks);
         for task in tasks {
             let key = task.task_key(job_id, stage);
@@ -72,15 +66,13 @@ impl TaskRunnerActor {
                 handle: ctx.handle().clone(),
                 celeborn: self.extensions.celeborn_streams.is_some(),
             }
-            .stream(
-                key.clone(),
-                definition.clone(),
-                proto.clone(),
-                context.clone(),
-            );
+            .stream(key.clone(), definition.clone(), context.clone());
             let (tx, rx) = oneshot::channel();
             self.signals.insert(key.clone(), tx);
-            ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
+            ctx.spawn(
+                TaskMonitor::new(ctx.handle().clone(), key, stream, rx)
+                    .supervise(self.compute.clone()),
+            );
         }
         Ok(())
     }

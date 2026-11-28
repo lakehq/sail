@@ -6,6 +6,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
+use sail_object_store::GetResultExt;
 use serde::{Deserialize, Serialize};
 
 use super::{ActionCommit, Transaction};
@@ -1175,7 +1176,7 @@ impl<'a> SnapshotProducer<'a> {
                 .get(&manifest_list_path)
                 .await
                 .map_err(|e| format!("Failed to get parent manifest list: {}", e))?
-                .bytes()
+                .read_bytes()
                 .await
                 .map_err(|e| format!("Failed to read parent manifest list bytes: {}", e))?;
             let parent_manifest_list =

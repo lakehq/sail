@@ -7052,6 +7052,7 @@ dependencies = [
  "sail-thrift",
  "serde_json",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -7202,9 +7203,11 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
+ "async-stream",
  "axum",
  "fastrace",
  "figment",
+ "futures",
  "glob",
  "half",
  "iana-time-zone",
@@ -7299,6 +7302,7 @@ dependencies = [
  "arrow",
  "arrow-pyarrow",
  "arrow-schema",
+ "async-stream",
  "async-trait",
  "bigdecimal",
  "bytes",
@@ -7331,6 +7335,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-common-spark",
  "sail-function",
+ "sail-object-store",
  "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
@@ -7378,6 +7383,7 @@ dependencies = [
  "sail-data-source",
  "sail-function",
  "sail-logical-plan",
+ "sail-object-store",
  "sail-physical-plan",
  "serde",
  "serde_arrow",
@@ -7590,6 +7596,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-logical-plan",
+ "sail-object-store",
  "sail-physical-plan",
  "sail-sql-analyzer",
  "sail-telemetry",
@@ -7671,6 +7678,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -8040,6 +8048,7 @@ dependencies = [
  "thiserror",
  "thrift",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

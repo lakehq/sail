@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::common::DataFusionError;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
+use sail_object_store::GetResultExt;
 use url::Url;
 
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
@@ -112,7 +113,7 @@ pub async fn load_manifest_list_with_version(
         .get(&path)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
+        .read_bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     ManifestList::parse_with_version(&bytes, format_version).map_err(DataFusionError::Execution)
@@ -127,7 +128,7 @@ pub async fn load_manifest(
         .get(&path)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
+        .read_bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)

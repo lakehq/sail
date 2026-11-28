@@ -266,6 +266,26 @@ async fn batches_of_tasks_with_different_nullability_are_encoded_in_one_stream()
     Ok(())
 }
 
+#[test]
+fn flight_body_is_polled_on_the_request_runtime() -> Result<(), TestError> {
+    use tokio::runtime::{Handle, Runtime};
+
+    let primary = Runtime::new()?;
+    let compute = Runtime::new()?;
+    let primary_id = primary.handle().id();
+    let body = futures::stream::once(async move {
+        assert_eq!(Handle::current().id(), primary_id);
+        Err(tonic::Status::unavailable("connection closed"))
+    });
+    let batches = {
+        let _guard = primary.enter();
+        decode_task_stream(body, Arc::new(Schema::empty()))
+    };
+    let result = compute.block_on(batches.try_collect::<Vec<_>>());
+    assert!(matches!(result, Err(error) if error.to_string().contains("connection closed")));
+    Ok(())
+}
+
 /// A fetcher of streams that have no data. It counts the requests.
 struct EmptyStreamFetcher(Arc<AtomicUsize>);
 

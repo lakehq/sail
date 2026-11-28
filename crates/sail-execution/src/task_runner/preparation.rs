@@ -41,24 +41,22 @@ impl TaskPreparation {
     pub fn stream(
         self,
         key: TaskKey,
-        definition: Arc<TaskDefinition>,
-        proto: Arc<PhysicalPlanNode>,
+        definition: Arc<TaskDefinition<PhysicalPlanNode>>,
         context: Arc<TaskContext>,
     ) -> SendableRecordBatchStream {
         preparation_stream(key.clone(), move |canceled| {
-            self.execute_plan(&key, &definition, &proto, &canceled, context)
+            self.execute_plan(&key, &definition, &canceled, context)
         })
     }
 
     fn execute_plan(
         &self,
         key: &TaskKey,
-        definition: &TaskDefinition,
-        proto: &PhysicalPlanNode,
+        definition: &TaskDefinition<PhysicalPlanNode>,
         canceled: &CancellationToken,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
-        let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
+        let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, &definition.plan)?;
         let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             key,

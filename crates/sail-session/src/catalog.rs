@@ -112,7 +112,7 @@ pub fn create_catalog_manager(
                             )?;
                             Ok(provider)
                         },
-                        runtime.io().clone(),
+                        runtime.primary().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
                         Arc::new(runtime_aware),
@@ -150,7 +150,7 @@ pub fn create_catalog_manager(
                                 },
                             )
                         },
-                        runtime.io().clone(),
+                        runtime.primary().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
                         Arc::new(runtime_aware),
@@ -202,7 +202,7 @@ pub fn create_catalog_manager(
                                 token.clone(),
                             )
                         },
-                        runtime.io().clone(),
+                        runtime.primary().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
                         Arc::new(runtime_aware),
@@ -226,7 +226,7 @@ pub fn create_catalog_manager(
                     };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || Ok(GlueCatalogProvider::new(name.to_string(), config)),
-                        runtime.io().clone(),
+                        runtime.primary().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
                         Arc::new(runtime_aware),
@@ -254,8 +254,7 @@ pub fn create_catalog_manager(
                         min_sasl_qop: min_sasl_qop.clone(),
                         connect_timeout_secs: *connect_timeout_secs,
                     };
-                    let provider =
-                        HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone())?;
+                    let provider = HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone())?;
                     let provider =
                         wrap_catalog_provider(Arc::new(provider), name, cache, &cache_manager)?;
                     Ok((name.to_string(), provider))

@@ -17,6 +17,7 @@ use log::{debug, error};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 use sail_common_datafusion::error::CommitStateUnknownError;
+use sail_object_store::GetResultExt;
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
@@ -203,21 +204,21 @@ impl LogStore for DefaultLogStore {
                     Ok(_) => Ok(()),
                     Err(ObjectStoreError::AlreadyExists { .. }) => {
                         // A conditional PUT retry may collide with its own durable write.
-                        let existing = async { store.get(&path).await?.bytes().await }
+                        let existing = async { store.get(&path).await?.read_bytes().await }
                             .await
                             .map_err(|source| {
-                                let msg = format!(
-                                    "Failed to verify Delta commit at version {version} ({path}): \
+                            let msg = format!(
+                                "Failed to verify Delta commit at version {version} ({path}): \
                                      commit outcome unknown; commit may have succeeded"
-                                );
-                                TransactionError::LogStoreError {
-                                    source: Box::new(CommitStateUnknownError::with_source(
-                                        msg.clone(),
-                                        source,
-                                    )),
-                                    msg,
-                                }
-                            })?;
+                            );
+                            TransactionError::LogStoreError {
+                                source: Box::new(CommitStateUnknownError::with_source(
+                                    msg.clone(),
+                                    source,
+                                )),
+                                msg,
+                            }
+                        })?;
                         if existing == log_bytes {
                             Ok(())
                         } else {
@@ -286,7 +287,7 @@ async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResu
     let commit_uri = commit_path(version);
     match storage.get(&commit_uri).await {
         Ok(res) => {
-            let bytes = res.bytes().await?;
+            let bytes = res.read_bytes().await?;
             debug!(
                 "commit entry read successfully (size={} bytes)",
                 bytes.len()

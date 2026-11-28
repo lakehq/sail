@@ -15,6 +15,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::delimited::newline_delimited_stream;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 use sail_common_datafusion::type_coercion::binary_type_coercion::type_union_coercion;
+use sail_object_store::GetResultExt;
 
 use super::decoder::{CsvInputDecoder, decode_csv_input_stream};
 use super::source::CsvSource;
@@ -84,7 +85,7 @@ impl ReadFormat for CsvReadFormat {
             for object in &group.objects {
                 let stream = group.store.get(&object.location).await?;
                 let stream: BoxStream<'static, Result<Bytes>> = stream
-                    .into_stream()
+                    .read_stream()
                     .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                     .boxed();
 

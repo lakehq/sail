@@ -37,6 +37,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
         // since we need built-in functions to be available for the codec
         // when decoding the execution plan.
         let mut config = SessionConfig::default()
+            .with_option_extension(self.runtime_env.io_runtime())
             .with_extension(Arc::new(DeltaTableCache::default()))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,

@@ -14,6 +14,7 @@ use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::{JobService, QueryCancellation};
+use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_plan::resolve_and_execute_plan;
 use sail_session::shutdown;
 use tonic::Status;
@@ -155,6 +156,7 @@ async fn handle_execute_plan(
         stream,
         spark.options().execution_heartbeat_interval,
         mode,
+        IoRuntime::from_options(ctx.state_ref().read().config_options()).0,
     );
     let rx = executor.start()?;
     spark.add_executor(executor)?;

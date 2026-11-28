@@ -5,6 +5,7 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
 use sail_common_datafusion::error::CommitStateUnknownError;
+use sail_object_store::GetResultExt;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -155,7 +156,7 @@ impl MetadataFileCommit {
                 // An internal retry can return AlreadyExists after the first PUT succeeded.
                 // Only exact-object readback can resolve that lost acknowledgement.
                 let observed = match store.prefixed.get(&self.path).await {
-                    Ok(object) => object.bytes().await.ok(),
+                    Ok(object) => object.read_bytes().await.ok(),
                     Err(_) => None,
                 };
                 match observed {

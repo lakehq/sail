@@ -15,6 +15,7 @@ use datafusion::prelude::SessionConfig;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
+use sail_object_store::GetResultExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
@@ -1851,7 +1852,7 @@ impl PostCommit {
         let store = self.log_store.object_store(None);
         let prev_crc_path = checksum_path(prev_version);
         let prev_crc_bytes = match store.get(&prev_crc_path).await {
-            Ok(result) => match result.bytes().await {
+            Ok(result) => match result.read_bytes().await {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     debug!(

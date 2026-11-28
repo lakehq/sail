@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
@@ -22,7 +23,7 @@ pub enum TaskRunnerMessage {
         job_id: JobId,
         stage: usize,
         tasks: Vec<TaskAttempt>,
-        definition: Arc<TaskDefinition>,
+        definition: Arc<TaskDefinition<PhysicalPlanNode>>,
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
         result: oneshot::Sender<ExecutionResult<()>>,

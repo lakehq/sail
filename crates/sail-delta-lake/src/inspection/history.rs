@@ -6,6 +6,7 @@ use datafusion::arrow::array::RecordBatch;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt};
+use sail_object_store::GetResultExt;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -94,7 +95,7 @@ pub(super) async fn batch(
                 Err(error) => return Err(DeltaError::from(error)),
             };
             let modified = result.meta.last_modified.timestamp_millis();
-            let bytes = result.bytes().await?;
+            let bytes = result.read_bytes().await?;
             let mut info = json!({});
             for action in serde_json::Deserializer::from_slice(&bytes).into_iter::<Value>() {
                 if let Some(commit_info) = action?.get("commitInfo") {

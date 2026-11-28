@@ -9,6 +9,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::Buffer;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatchOptions;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use futures::{Stream, TryStreamExt};
@@ -136,7 +137,11 @@ impl DecodedMultiFlowEventStream {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| exec_datafusion_err!("invalid retracted array type"))?;
-        let data = RecordBatch::try_new(self.schema.clone(), columns.cloned().collect())?;
+        let data = RecordBatch::try_new_with_options(
+            self.schema.clone(),
+            columns.cloned().collect(),
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?;
         Ok((marker, retracted, data))
     }
 

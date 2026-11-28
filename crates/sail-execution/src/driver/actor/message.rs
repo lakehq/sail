@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
@@ -16,6 +15,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
+use crate::driver::job_scheduler::{PlannedJob, RangeShuffleUpdate};
 use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
@@ -58,7 +58,7 @@ pub enum DriverMessage {
         instant: Instant,
     },
     ExecuteJob {
-        plan: Arc<dyn ExecutionPlan>,
+        graph: PlannedJob,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
@@ -83,7 +83,7 @@ pub enum DriverMessage {
     RangeSplitPointsRead {
         job_id: JobId,
         shuffle: usize,
-        partitions: ExecutionResult<usize>,
+        update: ExecutionResult<RangeShuffleUpdate>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -208,7 +208,7 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::RETRY_ATTEMPT, request.attempt.to_string()));
             }
             DriverMessage::ExecuteJob {
-                plan: _,
+                graph: _,
                 context: _,
                 result: _,
             } => {}
@@ -260,7 +260,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::RangeSplitPointsRead {
                 job_id,
                 shuffle: _,
-                partitions: _,
+                update: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }

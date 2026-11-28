@@ -126,6 +126,11 @@ def test_socket_with_projection(spark):
     assert actual == [("hello", "hello")]
 
 
+def test_socket_with_empty_projection(spark):
+    actual = spark.sql("SELECT 1 FROM t1 LIMIT 2").collect()
+    assert actual == [(1,), (1,)]
+
+
 def test_socket_with_filtering(spark):
     actual = spark.sql("SELECT * FROM t1 WHERE value LIKE '%w%' LIMIT 1").collect()
     assert actual == [("world",)]

@@ -18,6 +18,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::schema_evolution::FIELD_ALIASES_METADATA_KEY;
+use sail_object_store::GetResultExt;
 
 use crate::datasource::scan::{
     FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
@@ -244,7 +245,7 @@ impl ChangeDataFeedSource {
                 ))
             })?;
             let meta = result.meta.clone();
-            let actions = get_actions(version, &result.bytes().await?)?;
+            let actions = get_actions(version, &result.read_bytes().await?)?;
             let mut timestamp = resolve_commit_timestamp_from_actions(
                 version,
                 &meta,

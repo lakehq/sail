@@ -27,6 +27,7 @@ use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_object_store::GetResultExt;
 use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
@@ -507,7 +508,7 @@ impl DeltaCommitExec {
             .get(&staged.staged_path)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .bytes()
+            .read_bytes()
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         match store

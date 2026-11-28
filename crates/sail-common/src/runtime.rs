@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use tokio::runtime::{Handle, Runtime};
+use tokio::sync::mpsc;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::config::RuntimeConfig;
 use crate::error::{CommonError, CommonResult};
 
 #[derive(Debug)]
 pub struct RuntimeManager {
+    // Drop compute first so I/O remains available while query tasks shut down.
+    compute: Runtime,
     primary: Runtime,
-    // FIXME:
-    //  Ideally IO bound tasks should be run on the primary runtime,
-    //  and CPU bound tasks on the secondary runtime.
-    io: Runtime,
 }
 
 impl RuntimeManager {
@@ -25,19 +27,20 @@ impl RuntimeManager {
     ///
     /// Returns a `CommonError` if the runtime manager fails to initialize.
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
-        let primary = Self::build_runtime(config.stack_size)?;
-        let io = Self::build_runtime(config.stack_size)?;
-        Ok(Self { primary, io })
+        let primary = Self::build_runtime("sail-primary", config.stack_size)?;
+        let compute = Self::build_runtime("sail-compute", config.stack_size)?;
+        Ok(Self { primary, compute })
     }
 
     pub fn handle(&self) -> RuntimeHandle {
         let primary = self.primary.handle().clone();
-        let io = self.io.handle().clone();
-        RuntimeHandle { primary, io }
+        let compute = self.compute.handle().clone();
+        RuntimeHandle { primary, compute }
     }
 
-    fn build_runtime(stack_size: usize) -> CommonResult<Runtime> {
+    fn build_runtime(name: &'static str, stack_size: usize) -> CommonResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
+            .thread_name(name)
             .thread_stack_size(stack_size)
             .enable_all()
             .build()
@@ -48,21 +51,53 @@ impl RuntimeManager {
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     primary: Handle,
-    io: Handle,
+    compute: Handle,
 }
 
 impl RuntimeHandle {
-    pub fn new(primary: Handle, io: Handle) -> Self {
-        Self { primary, io }
+    pub fn new(primary: Handle, compute: Handle) -> Self {
+        Self { primary, compute }
     }
 
+    /// Runs servers, I/O and control-plane tasks.
     pub fn primary(&self) -> &Handle {
         &self.primary
     }
 
-    pub fn io(&self) -> &Handle {
-        &self.io
+    /// Runs DataFusion query planning and execution.
+    pub fn compute(&self) -> &Handle {
+        &self.compute
     }
+}
+
+/// Start polling a stream on its owning runtime at the first read. Dropping the
+/// receiver cancels the producer, including when it is waiting for I/O.
+pub fn spawn_stream_on<T, A, F>(handle: Handle, args: A, open: F) -> BoxStream<'static, T>
+where
+    T: Send + 'static,
+    A: Send + 'static,
+    F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
+{
+    async_stream::stream! {
+        let (tx, mut rx) = mpsc::channel(1);
+        let task = AbortOnDropHandle::new(handle.spawn(async move {
+            let mut stream = open(&args);
+            while let Some(item) = stream.next().await {
+                if tx.send(item).await.is_err() {
+                    break;
+                }
+            }
+        }));
+        while let Some(item) = rx.recv().await {
+            yield item;
+        }
+        if let Err(error) = task.await
+            && error.is_panic()
+        {
+            std::panic::resume_unwind(error.into_panic());
+        }
+    }
+    .boxed()
 }
 
 /// Register shutdown signals before a standalone Sail process starts serving.

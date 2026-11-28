@@ -36,7 +36,7 @@ impl PyUnityCatalogProvider {
                     },
                 )
             },
-            runtime.io().clone(),
+            runtime.primary().clone(),
         )
         .map_err(to_py_error)?;
 
