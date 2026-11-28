@@ -28,7 +28,7 @@ use crate::delta_log::{
     resolve_version_timestamp,
 };
 use crate::options::session_user_metadata;
-use crate::snapshot::{DeltaSnapshotConfig, partition_time_zone};
+use crate::snapshot::{DEFAULT_PARTITION_TIME_ZONE, DeltaSnapshotConfig, partition_time_zone};
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
     Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
@@ -1058,7 +1058,7 @@ impl Default for CommitProperties {
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
-            partition_time_zone: "UTC".into(),
+            partition_time_zone: DEFAULT_PARTITION_TIME_ZONE.into(),
         }
     }
 }
@@ -1542,26 +1542,24 @@ impl std::future::IntoFuture for PreparedCommit {
                     .await
                 {
                     Ok(()) => {
+                        let (create_checkpoint, cleanup_expired_logs, partition_time_zone) =
+                            match this.post_commit {
+                                Some(hook) => (
+                                    hook.create_checkpoint,
+                                    hook.cleanup_expired_logs,
+                                    hook.partition_time_zone,
+                                ),
+                                None => (false, None, DEFAULT_PARTITION_TIME_ZONE.into()),
+                            };
                         return Ok(PostCommit {
                             version,
                             data: CommitData {
                                 actions: finalized_actions,
                                 operation: this.data.operation.clone(),
                             },
-                            create_checkpoint: this
-                                .post_commit
-                                .as_ref()
-                                .map(|v| v.create_checkpoint)
-                                .unwrap_or_default(),
-                            cleanup_expired_logs: this
-                                .post_commit
-                                .as_ref()
-                                .map(|v| v.cleanup_expired_logs)
-                                .unwrap_or_default(),
-                            partition_time_zone: this
-                                .post_commit
-                                .as_ref()
-                                .map_or_else(|| "UTC".into(), |v| v.partition_time_zone.clone()),
+                            create_checkpoint,
+                            cleanup_expired_logs,
+                            partition_time_zone,
                             log_store: this.log_store,
                             table_data: read_snapshot,
                             custom_execute_handler: this.post_commit_hook_handler,

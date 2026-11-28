@@ -55,8 +55,8 @@ mod stats;
 
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
-    CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
-    catalog_managed_commit_path, partition_time_zone,
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DEFAULT_PARTITION_TIME_ZONE,
+    catalog_managed_commit_file_name, catalog_managed_commit_path, partition_time_zone,
 };
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 

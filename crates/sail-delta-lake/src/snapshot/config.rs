@@ -83,10 +83,15 @@ impl DeltaSnapshotConfig {
     }
 }
 
+/// The time zone of TIMESTAMP partition values without an offset when no session time zone applies.
+pub(crate) const DEFAULT_PARTITION_TIME_ZONE: &str = "UTC";
+
 /// Returns the time zone in which a TIMESTAMP partition value without an offset is read: the
 /// session time zone with full Spark offset precision, as Delta-Spark reads it.
 pub(crate) fn partition_time_zone(options: &ConfigOptions) -> Arc<str> {
-    session_time_zone(options).unwrap_or("UTC").into()
+    session_time_zone(options)
+        .unwrap_or(DEFAULT_PARTITION_TIME_ZONE)
+        .into()
 }
 
 impl Default for DeltaSnapshotConfig {
@@ -97,7 +102,7 @@ impl Default for DeltaSnapshotConfig {
             log_buffer_size: default_parallelism() * 4,
             log_batch_size: 1024,
             catalog_managed_commits: None,
-            partition_time_zone: "UTC".into(),
+            partition_time_zone: DEFAULT_PARTITION_TIME_ZONE.into(),
         }
     }
 }
