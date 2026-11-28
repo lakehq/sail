@@ -352,6 +352,11 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
         frame = spark.read.format("delta").load(str(path)).selectExpr("id", "unix_micros(ts) AS micros")
         return sorted((row.id, row.micros) for row in frame.collect())
 
+    def overwrite(query):
+        spark.sql(query).write.format("delta").mode("overwrite").option("partitionOverwriteMode", "dynamic").save(
+            str(path)
+        )
+
     for metadata_as_data in ["false", "true"]:
         frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
         assert sorted(row.id for row in frame.where("ts IS NULL").collect()) == [1, 2, 7]
@@ -373,9 +378,11 @@ def test_delta_timestamp_partition_values_that_do_not_parse_are_null(spark, tmp_
         if row["add"]
     }
     assert parsed == {"2024-01-01t09:00:00z": None, "2024-06-01T07:00:00.000000Z": datetime(2024, 6, 1, 7, tzinfo=UTC)}
+    # Like Delta Lake on Spark, a dynamic overwrite of the NULL partition keeps the files whose value does
+    # not parse.
+    overwrite("SELECT 8 AS id, CAST(NULL AS TIMESTAMP) AS ts")
+    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (8, None)]
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june)]
-    spark.sql("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts").write.format("delta").mode("overwrite").option(
-        "partitionOverwriteMode", "dynamic"
-    ).save(str(path))
-    assert rows() == [(1, None), (2, None), (6, june)]
+    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (8, None)]
+    overwrite("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts")
+    assert rows() == [(1, None), (2, None), (6, june), (8, None)]

@@ -961,6 +961,14 @@ impl ExecutionPlan for DeltaCommitExec {
                                     ScalarValue::Float64(Some(0.0)) => {
                                         ScalarValue::Float64(Some(0.0))
                                     }
+                                    // Like Delta-Spark, a value that does not parse matches only
+                                    // its own spelling, not the NULL partition.
+                                    value
+                                        if value.is_null()
+                                            && raw.is_some_and(|raw| !raw.is_empty()) =>
+                                    {
+                                        ScalarValue::Utf8(raw.map(ToOwned::to_owned))
+                                    }
                                     value => value,
                                 })
                                 .map_err(|error| DataFusionError::External(Box::new(error)))
