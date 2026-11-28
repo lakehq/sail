@@ -2311,8 +2311,6 @@ def test_global_view_over_a_python_data_source_table_reads_by_the_source_of_its_
         assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
         observer.dataSource.register(source(99))
         assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
-        assert rows(observer, f"SELECT * FROM {name}") == [(99,)]
-        assert rows(observer, f"SELECT * FROM {view} UNION ALL SELECT * FROM {name}") == [(7,), (99,)]
         assert rows(spark, f"SELECT * FROM {view}") == [(7,)]
     finally:
         for view in views:

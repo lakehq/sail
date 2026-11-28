@@ -804,14 +804,18 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
         )
         .await?;
     // A table in the catalog of the session that created the view is read in that
-    // catalog, once for each statement, whatever the session of the reader has.
+    // catalog, once for each statement, whatever the session of the reader has. The views
+    // read their tables by the data sources of the session that created them.
     for sql in [
         "SELECT * FROM global_temp.xs_mine",
         "SELECT * FROM global_temp.xs_mine_df",
         "SELECT * FROM global_temp.xs_mine a JOIN global_temp.xs_mine_df b ON a.k = b.k",
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
-        let sources = reader.resolve(sql).await?.assert_loads(0, 1, sql);
+        take(&creator.source.created)?;
+        reader.resolve(sql).await?.assert_loads(0, 0, sql);
+        let sources = take(&creator.source.created)?;
+        assert_eq!(sources.len(), 1, "{sql}");
         assert_eq!(sources[0].snapshot, before.0.to_string(), "{sql}");
         assert_eq!(loads(&creator), (before.0 + 1, before.1), "{sql}");
         assert_eq!(loads(&reader), snapshot, "{sql}");
@@ -824,7 +828,9 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
         .await?;
     let sql = "SELECT a.v, b.w FROM global_temp.xs_mine a JOIN mine b ON a.k = b.k";
     let before = loads(&creator);
-    reader.resolve(sql).await?.assert_loads(1, 2, sql);
+    take(&creator.source.created)?;
+    reader.resolve(sql).await?.assert_loads(1, 1, sql);
+    assert_eq!(take(&creator.source.created)?.len(), 1, "{sql}");
     assert_eq!(loads(&creator), (before.0 + 1, before.1));
     // A table in a catalog that is the same in every session is read in the catalog of
     // the reader, with the other references to the table in the statement.
@@ -835,7 +841,10 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
             JOIN global_temp.xs_shared_df c ON a.k = c.k",
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
-        let sources = reader.resolve(sql).await?.assert_loads(0, 1, sql);
+        take(&creator.source.created)?;
+        reader.resolve(sql).await?.assert_loads(0, 0, sql);
+        let sources = take(&creator.source.created)?;
+        assert_eq!(sources.len(), 1, "{sql}");
         assert_eq!(sources[0].snapshot, snapshot.1.to_string(), "{sql}");
         assert_eq!(loads(&reader), (snapshot.0, snapshot.1 + 1), "{sql}");
         assert_eq!(loads(&creator), before, "{sql}");
@@ -860,10 +869,13 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
     }
     // The views outlive the session that created them.
     let catalog = Arc::clone(&creator.catalog);
+    let source = Arc::clone(&creator.source);
     drop(creator);
     let before = catalog.loads.load(Ordering::SeqCst);
     let sql = "SELECT * FROM global_temp.xs_mine";
-    reader.resolve(sql).await?.assert_loads(0, 1, sql);
+    take(&source.created)?;
+    reader.resolve(sql).await?.assert_loads(0, 0, sql);
+    assert_eq!(take(&source.created)?.len(), 1, "{sql}");
     assert_eq!(catalog.loads.load(Ordering::SeqCst), before + 1);
     Ok(())
 }
