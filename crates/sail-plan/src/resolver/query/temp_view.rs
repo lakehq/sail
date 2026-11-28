@@ -22,14 +22,16 @@ use std::task::{Context, Poll};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use datafusion::catalog::Session;
 use datafusion::config::ConfigOptions;
-use datafusion::datasource::source_as_provider;
+use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, JoinType, ScalarValue, TableReference};
+use datafusion_common::{Column, DataFusionError, JoinType, ScalarValue, TableReference};
 use datafusion_expr::expr::{Cast, Exists, InSubquery, SetComparison};
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, SubqueryAlias, TableScan, TableScanBuilder,
@@ -157,6 +159,49 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// as they were then, which build the sources of the read (see
     /// [`PlanResolver::source_build_settings`]).
     pub settings: Option<Arc<ViewSourceSettings>>,
+}
+
+/// The source of a scan of the stored plan of a temporary view whose read failed, for a
+/// request for the schema of the view. It has the columns of the scan, and a plan that
+/// the resolver executes over it fails with the error of the read.
+#[derive(Debug)]
+struct FailedViewRead {
+    schema: SchemaRef,
+    error: Arc<DataFusionError>,
+}
+
+#[async_trait::async_trait]
+impl TableProvider for FailedViewRead {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> datafusion_expr::TableType {
+        datafusion_expr::TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&[usize]>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::Shared(Arc::clone(&self.error)))
+    }
+}
+
+/// Returns the error of a failed read of a temporary view as an error of the execution of
+/// a plan, which is reported as the read reports it.
+fn view_read_error(error: PlanError) -> DataFusionError {
+    match error {
+        PlanError::DataFusionError(error) => error,
+        PlanError::AnalysisError(message) => DataFusionError::Plan(message),
+        PlanError::NotImplemented(message) | PlanError::NotSupported(message) => {
+            DataFusionError::NotImplemented(message)
+        }
+        error => DataFusionError::External(Box::new(error)),
+    }
 }
 
 /// The settings of a session that the sources of tables are built with: its DataFusion
@@ -874,6 +919,8 @@ impl PlanResolver<'_> {
         // view would read when the query is resolved again, as a direct query reads them.
         let mut gained_columns = false;
         let mut recorded = state.view_definition_mut().map(|reads| reads.clone());
+        // The error of a read of the view whose schema the stored plan gives.
+        let mut failed = None;
         for scan in &references {
             let address = table_source_address(&scan.source);
             if scans.contains_key(&address) {
@@ -921,10 +968,12 @@ impl PlanResolver<'_> {
                     error
                 }
             };
-            // A request for the schema gets the columns of the stored plan.
+            // A request for the schema gets the columns of the stored plan, whose scans fail
+            // with the error of the read if a plan of the resolver is executed over them.
             if !self.schema_only {
                 return Err(error);
             }
+            failed = Some(Arc::new(view_read_error(error)));
             scans.clear();
             (gained_columns, recompute_schemas) = (false, false);
             break;
@@ -943,10 +992,22 @@ impl PlanResolver<'_> {
             state.replace_view_definition(bound);
         }
         let mut bind = |scan: TableScan| {
-            Ok(match scans.get(&table_source_address(&scan.source)) {
-                Some(bound) => Transformed::yes(bound.clone()),
-                None => Transformed::no(LogicalPlan::TableScan(scan)),
-            })
+            Ok(
+                match (scans.get(&table_source_address(&scan.source)), &failed) {
+                    (Some(bound), _) => Transformed::yes(bound.clone()),
+                    (None, Some(error)) if ViewTableReference::try_from_scan(&scan).is_some() => {
+                        let source = FailedViewRead {
+                            schema: scan.source.schema(),
+                            error: Arc::clone(error),
+                        };
+                        Transformed::yes(LogicalPlan::TableScan(TableScan {
+                            source: provider_as_source(Arc::new(source)),
+                            ..scan
+                        }))
+                    }
+                    (None, _) => Transformed::no(LogicalPlan::TableScan(scan)),
+                },
+            )
         };
         // Without CTE sharing, the plan refers to no CTE definition once its references are
         // inlined, so that only its scans are bound.

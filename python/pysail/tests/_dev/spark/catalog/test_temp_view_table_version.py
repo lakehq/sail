@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import shutil
 import time
 import uuid
@@ -1933,6 +1934,23 @@ def test_view_of_a_table_whose_name_is_now_a_view_without_its_columns_fails_as_i
         assert error(spark, f"SELECT * FROM {view}").splitlines()[0] == error(spark, query).splitlines()[0]
     finally:
         spark.sql(f"DROP VIEW {table.name}")
+
+
+@pytest.mark.parametrize("change", ["drop", "retype"])
+def test_plan_over_a_failed_read_of_a_view_fails_as_the_read(spark, tables, change):
+    table = tables("delta", columns="a INT, b INT")
+    table.insert("(1, 1), (2, 2)")
+    view = table.create_view("sv", f"SELECT a + 1 AS a, b FROM {table.name}")
+    spark.sql(f"DROP TABLE {table.name}")
+    if change == "retype":
+        table.create("a ARRAY<INT>, b INT")
+    expected = error(spark, f"SELECT * FROM {view}").splitlines()[0]
+    # The schema of the view is the schema of its stored plan, and a plan that the schema of a
+    # query needs to execute over the view fails with the error of the read.
+    assert spark.table(view).columns == ["a", "b"]
+    for frame in [spark.table(view).groupBy("a").pivot("b").count(), spark.table(view).crosstab("a", "b")]:
+        with pytest.raises(Exception, match=re.escape(expected)):
+            _ = frame.columns
 
 
 @pytest.mark.parametrize("kind", KINDS)
