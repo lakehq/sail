@@ -5,6 +5,8 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::config::ConfigOptions;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
@@ -37,7 +39,10 @@ use sail_physical_plan::tail::TailExec;
 /// operators. A round-robin repartition to the same number of partitions is added above the
 /// operator instead, so that the operators above keep their parallelism, unless it would lose
 /// the order of the rows that the operators above rely on. It is merged into a round-robin
-/// repartition that directly follows it.
+/// repartition that directly follows it. A file scan that defines the partitions declares them,
+/// so that each partition reads only the files of its own group, as Spark assigns the splits of
+/// files to partitions, instead of the files of another partition that it would otherwise take
+/// when it has read its own.
 ///
 /// The tail selects the last rows in the order of its input, so the round-robin repartitions
 /// below the partition coalescing or merge of its input are removed in the same way. The merge
@@ -189,6 +194,9 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
             vec![left, right.data],
         )?));
     }
+    if let Some(scan) = declare_file_scan_partitions(&plan) {
+        return Ok(Transformed::yes(scan));
+    }
     if !(plan.is::<FilterExec>()
         || plan.is::<ProjectionExec>()
         || plan.is::<CooperativeExec>()
@@ -215,10 +223,31 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
     )?))
 }
 
+/// Returns the file scan with its partitions declared, if it does not declare them, which
+/// keeps each partition from reading the files of the other partitions.
+fn declare_file_scan_partitions(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    let config = plan
+        .downcast_ref::<DataSourceExec>()?
+        .data_source()
+        .downcast_ref::<FileScanConfig>()?;
+    if config.output_partitioning.is_some() {
+        return None;
+    }
+    let partitions = plan.output_partitioning().partition_count();
+    let config = FileScanConfigBuilder::from(config.clone())
+        .with_output_partitioning(Some(Partitioning::UnknownPartitioning(partitions)))
+        .build();
+    Some(Arc::new(DataSourceExec::new(Arc::new(config))))
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::common::{JoinType, NullEquality, internal_datafusion_err};
+    use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::physical_expr::expressions::{col, lit};
     use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion::physical_plan::displayable;
@@ -284,6 +313,77 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?))
+    }
+
+    fn file_scan(groups: usize) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let source = Arc::new(ParquetSource::new(schema));
+        let config = (0..groups)
+            .fold(
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source),
+                |config, i| {
+                    config.with_file_group(FileGroup::new(vec![PartitionedFile::new(
+                        format!("{i}.parquet"),
+                        10,
+                    )]))
+                },
+            )
+            .build();
+        Arc::new(DataSourceExec::new(Arc::new(config)))
+    }
+
+    fn declares_file_scan_partitions(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+        let mut declared = false;
+        plan.apply(|plan| {
+            if let Some(config) = plan
+                .downcast_ref::<DataSourceExec>()
+                .and_then(|scan| scan.data_source().downcast_ref::<FileScanConfig>())
+            {
+                declared = config.output_partitioning.is_some();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(declared)
+    }
+
+    fn spark_partition_id(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut fields = input.schema().fields().to_vec();
+        fields.push(Arc::new(Field::new("pid", DataType::Int32, false)));
+        Ok(Arc::new(SparkPartitionIdExec::try_new(
+            input,
+            "pid",
+            Arc::new(Schema::new(fields)),
+        )?))
+    }
+
+    #[test]
+    fn file_scans_below_partition_sensitive_operators_declare_their_partitions() -> Result<()> {
+        type Operator = fn(Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>;
+        let operators: [Operator; 3] = [spark_partition_id, monotonic_id, |input| {
+            Ok(Arc::new(TailExec::new(
+                Arc::new(CoalescePartitionsExec::new(input)),
+                1,
+            )))
+        }];
+        for operator in operators {
+            for repartition in [false, true] {
+                let input = filter(file_scan(3))?;
+                let input = if repartition {
+                    round_robin(input, 8)?
+                } else {
+                    input
+                };
+                let plan = operator(input)?;
+                let plan =
+                    KeepPartitionSensitiveInputs.optimize(plan, &ConfigOptions::default())?;
+                let text = displayable(plan.as_ref()).indent(false).to_string();
+                assert!(declares_file_scan_partitions(&plan)?, "{text}");
+            }
+        }
+        let plan = KeepPartitionSensitiveInputs
+            .optimize(filter(file_scan(3))?, &ConfigOptions::default())?;
+        assert!(!declares_file_scan_partitions(&plan)?);
+        Ok(())
     }
 
     fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
