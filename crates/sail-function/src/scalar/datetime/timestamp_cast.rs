@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, cast, lit};
+use datafusion_expr::{Expr, ScalarUDF, cast, lit};
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 
 use crate::scalar::datetime::convert_tz::ConvertTz;
@@ -34,20 +32,6 @@ pub fn cast_timestamp_ntz_to_ltz(expression: Expr, timezone: &Arc<str>, is_try: 
     ])
 }
 
-/// Casts the TIMESTAMP_NTZ values of `array` to TIMESTAMP values labelled with UTC, as
-/// [`cast_timestamp_ntz_to_ltz`] does in `timezone`.
-pub fn cast_timestamp_ntz_array_to_ltz(array: &ArrayRef, timezone: &str) -> Result<ArrayRef> {
-    let args = [
-        ColumnarValue::Scalar(ScalarValue::from(timezone)),
-        ColumnarValue::Scalar(ScalarValue::from("UTC")),
-        ColumnarValue::Array(Arc::clone(array)),
-    ];
-    ConvertTz::cast(false)
-        .with_output_timezone(Some(Arc::from("UTC")))
-        .invoke_cast(&args)?
-        .into_array(array.len())
-}
-
 /// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in
 /// `timezone`. Arrow would take the wall-clock time in UTC.
 pub fn cast_timestamp_ltz_to_ntz(expression: Expr, timezone: &str, is_try: bool) -> Expr {
@@ -56,24 +40,6 @@ pub fn cast_timestamp_ltz_to_ntz(expression: Expr, timezone: &str, is_try: bool)
         return utc;
     }
     ScalarUDF::from(ConvertTz::cast(is_try)).call(vec![lit("UTC"), lit(timezone), utc])
-}
-
-/// Casts the TIMESTAMP values of `array` to TIMESTAMP_NTZ values, as
-/// [`cast_timestamp_ltz_to_ntz`] does in `timezone`.
-pub fn cast_timestamp_ltz_array_to_ntz(array: &ArrayRef, timezone: &str) -> Result<ArrayRef> {
-    let DataType::Timestamp(unit, Some(_)) = array.data_type() else {
-        return exec_err!("expected TIMESTAMP values, got {}", array.data_type());
-    };
-    // Arrow's cast keeps the instants, which are the wall-clock times in UTC.
-    let utc = datafusion::arrow::compute::cast(array, &DataType::Timestamp(*unit, None))?;
-    let args = [
-        ColumnarValue::Scalar(ScalarValue::from("UTC")),
-        ColumnarValue::Scalar(ScalarValue::from(timezone)),
-        ColumnarValue::Array(utc),
-    ];
-    ConvertTz::cast(false)
-        .invoke_cast(&args)?
-        .into_array(array.len())
 }
 
 /// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ `data_type`, which takes the wall-clock time of the

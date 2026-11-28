@@ -393,7 +393,7 @@ impl ScalarUDFImpl for ConvertTz {
 }
 
 impl ConvertTz {
-    pub(crate) fn invoke_cast(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_cast(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let [from, to, value] = args else {
             return exec_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
         };

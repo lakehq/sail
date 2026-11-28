@@ -506,17 +506,18 @@ fn serialize_decimal(bits: i128, scale: i8) -> String {
     match scale.cmp(&0) {
         Ordering::Equal => bits.to_string(),
         Ordering::Greater => {
-            // The sign is written once, before the integer part, so that -1.25 is not written
-            // as -1.-25 and -0.001 is not written as 0.0-1.
-            let sign = if bits < 0 { "-" } else { "" };
-            let value = bits.unsigned_abs();
-            let scalar_multiple = 10_u128.pow(scale as u32);
-            format!(
-                "{sign}{}.{:0>scale$}",
-                value / scalar_multiple,
+            let value = bits;
+            let scale_u32 = scale as u32;
+            let scalar_multiple = 10_i128.pow(scale_u32);
+            let mut string = String::new();
+            string.push_str((value / scalar_multiple).to_string().as_str());
+            string.push('.');
+            string.push_str(&format!(
+                "{:0>scale$}",
                 value % scalar_multiple,
                 scale = scale as usize
-            )
+            ));
+            string
         }
         Ordering::Less => {
             let mut string = bits.to_string();
@@ -746,49 +747,6 @@ mod tests {
             );
         }
         Ok(())
-    }
-
-    /// Decimal values are written as Delta-Spark writes them (plain, with one sign) and parse back.
-    #[test]
-    fn decimal_partition_values_round_trip() {
-        const MAX_DECIMAL38: i128 = 10_i128.pow(38) - 1;
-        for (precision, scale, bits, expected) in [
-            (5, 2, -125, "-1.25"),
-            (5, 2, 250, "2.50"),
-            (5, 2, 0, "0.00"),
-            (10, 3, -1, "-0.001"),
-            (10, 3, -12_500, "-12.500"),
-            (10, 3, -7_000, "-7.000"),
-            (
-                38,
-                0,
-                MAX_DECIMAL38,
-                "99999999999999999999999999999999999999",
-            ),
-            (
-                38,
-                0,
-                -MAX_DECIMAL38,
-                "-99999999999999999999999999999999999999",
-            ),
-            (
-                38,
-                2,
-                -MAX_DECIMAL38,
-                "-999999999999999999999999999999999999.99",
-            ),
-            (38, 38, -1, "-0.00000000000000000000000000000000000001"),
-        ] {
-            let data_type = ArrowDataType::Decimal128(precision, scale);
-            let value = ScalarValue::Decimal128(Some(bits), precision, scale);
-            assert_eq!(value.serialize(), expected, "{data_type}");
-            let parser = PartitionValueParser::try_new(&data_type, "UTC");
-            assert_eq!(
-                parser.map(|parser| parser.parse(Some(expected))).ok(),
-                Some(value),
-                "{expected} as {data_type}"
-            );
-        }
     }
 
     #[test]

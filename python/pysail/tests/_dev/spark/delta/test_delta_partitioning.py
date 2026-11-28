@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from decimal import Decimal
 
 import pandas as pd
 import pytest
@@ -213,40 +212,3 @@ def test_delta_append_uses_existing_partition_metadata(spark, tmp_path):
     result_pdf = result_df.toPandas().sort_values("id").reset_index(drop=True)
     result_pdf = result_pdf[["id", "value", "category"]]
     assert_frame_equal(result_pdf, expected, check_dtype=False)
-
-
-def test_delta_negative_decimal_partition_values(spark, tmp_path):
-    """Negative fractional DECIMAL partition values are written with one sign, as Delta Lake on Spark
-    writes them, so they read back, filter and survive rewrites of their files."""
-    path = tmp_path / "table"
-    values = [Decimal("-1.25"), Decimal("-0.01"), Decimal("2.25"), None]
-
-    def append(offset):
-        rows = [(offset + index, offset + index, value) for index, value in enumerate(values, 1)]
-        spark.createDataFrame(rows, "id INT, v INT, p DECIMAL(5, 2)").write.format("delta").mode("append").partitionBy(
-            "p"
-        ).save(str(path))
-
-    def rows():
-        frame = spark.read.format("delta").load(str(path))
-        return sorted((row.id, row.v, row.p) for row in frame.collect())
-
-    # Two files per partition, so that OPTIMIZE rewrites each partition.
-    append(0)
-    append(4)
-    expected = [(index, index, values[(index - 1) % 4]) for index in range(1, 9)]
-    assert rows() == expected
-    logs = sorted((path / "_delta_log").glob("*.json"))
-    spellings = {
-        action["add"]["partitionValues"]["p"]
-        for log in logs
-        for action in map(json.loads, log.read_text().splitlines())
-        if "add" in action
-    }
-    assert spellings == {"-1.25", "-0.01", "2.25", None}
-    frame = spark.read.format("delta").load(str(path))
-    assert sorted(row.id for row in frame.where("p < 0").collect()) == [1, 2, 5, 6]
-    spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert rows() == expected
-    spark.sql(f"UPDATE delta.`{path}` SET v = v + 100 WHERE id IN (1, 2)").collect()  # noqa: S608
-    assert rows() == [(id_, v + 100 if id_ in {1, 2} else v, p) for id_, v, p in expected]

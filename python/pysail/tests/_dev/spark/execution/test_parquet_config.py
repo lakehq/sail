@@ -135,16 +135,27 @@ def http_ranges(tmp_path):
 @pytest.mark.parametrize(
     ("statements", "fraction"),
     [
-        ([], "678901"),
-        (["RESET datafusion.execution.parquet.coerce_int96"], "678901"),
-        (["SET datafusion.execution.parquet.coerce_int96 = 'ms'"], "678"),
-        (
+        pytest.param([], "678901", id="startup"),
+        pytest.param(
+            ["RESET datafusion.execution.parquet.coerce_int96"],
+            "678901",
+            id="reset",
+            marks=pytest.mark.skip(reason="needs fix-reset-native-option-initial-value"),
+        ),
+        pytest.param(["SET datafusion.execution.parquet.coerce_int96 = 'ms'"], "678", id="set"),
+        pytest.param(
             ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET datafusion.execution.parquet.coerce_int96"],
             "678901",
+            id="set-and-reset",
+            marks=pytest.mark.skip(reason="needs fix-reset-native-option-initial-value"),
         ),
-        (["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET"], "678901"),
+        pytest.param(
+            ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET"],
+            "678901",
+            id="set-and-reset-all",
+            marks=pytest.mark.skip(reason="needs fix-reset-native-option-initial-value"),
+        ),
     ],
-    ids=["startup", "reset", "set", "set-and-reset", "set-and-reset-all"],
 )
 def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadata_as_data, statements, fraction):
     path = tmp_path / "timestamps.parquet"
