@@ -101,6 +101,36 @@ def test_delta_append_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, 
         spark.sql("DROP TABLE IF EXISTS ntz_append").collect()
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("partitioned", [False, True], ids=["flat", "partitioned"])
+@pytest.mark.parametrize("write", ["insert", "save-as-table"])
+def test_delta_insert_casts_timestamp_ntz_in_session_time_zone(spark, tmp_path, session_timezone, partitioned, write):
+    _ = session_timezone
+    path = tmp_path / "table"
+    partition = "PARTITIONED BY (ts)" if partitioned else ""
+    spark.sql(
+        f"CREATE TABLE ntz_insert (id INT, ts TIMESTAMP) USING delta {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        if write == "insert":
+            ntz_rows(spark).createOrReplaceTempView("ntz_rows")
+            spark.sql("INSERT INTO ntz_insert SELECT * FROM ntz_rows").collect()
+        else:
+            ntz_rows(spark).write.format("delta").mode("append").saveAsTable("ntz_insert")
+        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_insert ORDER BY id").collect()
+        # The wall clock is read in the session time zone (UTC-8), as Spark's cast reads it.
+        assert [(row.id, row.micros) for row in rows] == [(1, utc_micros(9)), (2, utc_micros(10))]
+        if partitioned:
+            assert partition_values(path.glob("_delta_log/*.json")) == {
+                "2024-01-01T09:00:00.000000Z",
+                "2024-01-01T10:00:00.000000Z",
+            }
+    finally:
+        spark.sql("DROP TABLE IF EXISTS ntz_insert").collect()
+        spark.sql("DROP VIEW IF EXISTS ntz_rows").collect()
+
+
 @pytest.mark.parametrize(
     ("session_timezone", "wall_clock", "micros"),
     [

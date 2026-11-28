@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{FieldMetadata, Sort};
@@ -36,7 +36,9 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::parse_absolute_directory_url;
-use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ntz_to_ltz, session_wall_clock,
+};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_optimizer::convert_session_timestamp_casts_in_predicate;
 use sail_logical_plan::barrier::BarrierNode;
@@ -1182,6 +1184,14 @@ impl PlanResolver<'_> {
         Ok(match (expr.get_type(schema)?, data_type) {
             (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
                 session_wall_clock(expr, data_type, &self.config.session_timezone_label())
+            }
+            // The session time zone cast works in microseconds, so nanosecond values keep
+            // Arrow's cast when the column keeps nanoseconds.
+            (DataType::Timestamp(unit, None), DataType::Timestamp(column_unit, Some(_)))
+                if unit != TimeUnit::Nanosecond || *column_unit != TimeUnit::Nanosecond =>
+            {
+                cast_timestamp_ntz_to_ltz(expr, &self.config.session_timezone, false)
+                    .cast_to(data_type, schema)?
             }
             _ => expr.cast_to(data_type, schema)?,
         })
