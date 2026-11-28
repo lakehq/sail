@@ -327,7 +327,7 @@ impl<'a> PlannerContext<'a> {
             require_files: false,
             ..Default::default()
         }
-        .with_partition_time_zone(self.session().config().options());
+        .with_session_time_zone(self.session().config().options());
 
         if let Some(snapshot) = &self.config.table_snapshot {
             let mut table = create_delta_table_with_object_store(

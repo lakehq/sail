@@ -763,7 +763,7 @@ pub(crate) async fn open_table(
         require_files: false,
         ..Default::default()
     }
-    .with_partition_time_zone(ctx.session_config().options());
+    .with_session_time_zone(ctx.session_config().options());
     if let Some(lakehouse) = catalog_managed_commit_context(lakehouse) {
         config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             ctx,

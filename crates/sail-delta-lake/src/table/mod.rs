@@ -831,7 +831,7 @@ pub(crate) async fn load_delta_read_state(
     };
 
     let mut table_config = delta_read_snapshot_config(metadata_only, &options)
-        .with_partition_time_zone(ctx.config().options());
+        .with_session_time_zone(ctx.config().options());
     table_config.catalog_managed_commits = catalog_managed_commits;
     let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 

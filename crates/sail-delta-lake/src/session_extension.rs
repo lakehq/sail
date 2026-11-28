@@ -111,7 +111,7 @@ pub(crate) async fn load_table_uncached(
         require_files: false,
         ..Default::default()
     }
-    .with_partition_time_zone(context.session_config().options());
+    .with_session_time_zone(context.session_config().options());
     if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             context,

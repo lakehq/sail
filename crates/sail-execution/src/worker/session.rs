@@ -316,7 +316,7 @@ mod tests {
             assert_eq!(options.execution.time_zone, driver.execution.time_zone);
             let partition_time_zone = |options: &ConfigOptions| {
                 DeltaSnapshotConfig::default()
-                    .with_partition_time_zone(options)
+                    .with_session_time_zone(options)
                     .partition_time_zone
             };
             assert_eq!(partition_time_zone(&options), partition_time_zone(&driver));

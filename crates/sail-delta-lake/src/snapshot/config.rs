@@ -70,12 +70,13 @@ pub struct DeltaSnapshotConfig {
     /// The time zone of TIMESTAMP partition values without an offset (see
     /// [`partition_time_zone`]). The default, UTC, suits only loads that never parse partition
     /// values; a load whose snapshot is scanned, pruned or aggregated must use
-    /// [`Self::with_partition_time_zone`].
+    /// [`Self::with_session_time_zone`].
     pub partition_time_zone: Arc<str>,
 }
 
 impl DeltaSnapshotConfig {
-    pub fn with_partition_time_zone(self, options: &ConfigOptions) -> Self {
+    /// Sets [`Self::partition_time_zone`] to the session time zone (see [`partition_time_zone`]).
+    pub fn with_session_time_zone(self, options: &ConfigOptions) -> Self {
         Self {
             partition_time_zone: partition_time_zone(options),
             ..self

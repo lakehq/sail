@@ -155,7 +155,7 @@ impl ScanByAddsStreamState {
                     catalog_managed_commits: Some(catalog_managed_commits),
                     ..Default::default()
                 }
-                .with_partition_time_zone(self.context.session_config().options()),
+                .with_session_time_zone(self.context.session_config().options()),
             )
             .await?
         } else {
