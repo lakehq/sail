@@ -116,11 +116,37 @@ def test_delta_append_casts_timestamp_ntz_as_spark_casts(
     indirect=["session_timezone"],
     ids=["first-chrono-date", "last-chrono-date"],
 )
+@pytest.mark.parametrize("partitioned", [False, True], ids=["flat", "partitioned"])
 def test_delta_append_casts_timestamp_ntz_at_the_ends_of_chrono_range(
-    spark, tmp_path, session_timezone, wall_clock, micros
+    spark, tmp_path, session_timezone, wall_clock, micros, partitioned
 ):
     _ = session_timezone
-    check_timestamp_ntz_append(spark, tmp_path / "table", wall_clock, micros)
+    partition = "PARTITIONED BY (ts)" if partitioned else ""
+    check_timestamp_ntz_append(spark, tmp_path / "table", wall_clock, micros, partition)
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_delta_timestamp_partition_values_beyond_chrono_range(spark, tmp_path, session_timezone):
+    """TIMESTAMP partition values beyond the years that chrono represents are written as dates, as
+    Delta Lake on Spark writes them, so they are not read back as NULL."""
+    _ = session_timezone
+    path = tmp_path / "table"
+    micros = [None, 2**63 - 1, 8210266876800000000, 8210266876799999999, -(2**63), 0]
+    rows = " UNION ALL ".join(
+        f"SELECT {id_} AS id, "
+        + ("CAST(NULL AS TIMESTAMP)" if value is None else f"timestamp_micros(CAST('{value}' AS BIGINT))")
+        + " AS ts"
+        for id_, value in enumerate(micros, 1)
+    )
+    spark.sql(rows).write.format("delta").partitionBy("ts").save(str(path))
+    values = partition_values((path / "_delta_log").glob("*.json"))
+    assert {"+294247-01-10T04:00:54.775807Z", "-290308-12-21T19:59:05.224192Z"} <= values
+    table = f"delta.`{path}`"
+    frame = spark.sql(f"SELECT id, unix_micros(ts) AS micros FROM {table}")  # noqa: S608
+    assert sorted((row.id, row.micros) for row in frame.collect()) == list(enumerate(micros, 1))
+    assert [row.id for row in spark.sql(f"SELECT id FROM {table} WHERE ts IS NULL").collect()] == [1]  # noqa: S608
+    spark.sql(f"DELETE FROM {table} WHERE ts IS NULL").collect()  # noqa: S608
+    assert sorted(row.id for row in spark.sql(f"SELECT id FROM {table}").collect()) == [2, 3, 4, 5, 6]  # noqa: S608
 
 
 @pytest.mark.parametrize(

@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::DateTime;
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
     Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, UInt8Array, UInt16Array,
@@ -20,6 +20,7 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{Result as DataFusionResult, exec_datafusion_err};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use sail_common::utils::datetime::civil_from_days;
 use sail_common_datafusion::utils::datetime::SparkZone;
 use sail_function::scalar::datetime::timestamp::parse_unformatted_timestamp;
 use serde_json::Value;
@@ -456,23 +457,41 @@ impl ScalarExt for ScalarValue {
     }
 }
 
-fn format_micros(value: i64, format: &str) -> String {
-    Utc.timestamp_micros(value)
-        .single()
-        .map(|ts| ts.format(format).to_string())
-        .unwrap_or_else(|| value.to_string())
+/// Formats microseconds since the epoch as the UTC wall clock `yyyy-MM-dd<separator>HH:mm:ss.SSSSSS`
+/// followed by `suffix`. Years outside 0000-9999 are signed, as Delta-Spark's `uuuu` pattern writes
+/// them, and every `i64` value is formatted, including years that chrono does not represent.
+fn format_micros(value: i64, separator: char, suffix: &str) -> String {
+    const MICROS_PER_SECOND: i64 = 1_000_000;
+    const MICROS_PER_DAY: i64 = 86_400 * MICROS_PER_SECOND;
+    let (year, month, day) = civil_from_days(value.div_euclid(MICROS_PER_DAY));
+    let micros = value.rem_euclid(MICROS_PER_DAY);
+    let seconds = micros / MICROS_PER_SECOND;
+    let mut string = String::with_capacity(32);
+    let _ = match year {
+        0..=9999 => write!(string, "{year:04}"),
+        10_000.. => write!(string, "{year:+}"),
+        _ => write!(string, "{year:05}"),
+    };
+    let _ = write!(
+        string,
+        "-{month:02}-{day:02}{separator}{:02}:{:02}:{:02}.{:06}{suffix}",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60,
+        micros % MICROS_PER_SECOND
+    );
+    string
 }
 
 fn format_timestamp(value: i64) -> String {
-    format_micros(value, "%Y-%m-%d %H:%M:%S%.6f")
+    format_micros(value, ' ', "")
 }
 
 /// Formats a timestamp partition value as UTC with an explicit offset, as Delta writes it with
 /// `spark.databricks.delta.write.utcTimestampPartitionValues` (the default), so that every reader
 /// gets the same instant whatever its session time zone.
 fn format_utc_timestamp(value: i64) -> String {
-    // chrono's `%Y` signs years outside 0000-9999, as Delta-Spark's `uuuu` pattern does.
-    format_micros(value, "%Y-%m-%dT%H:%M:%S%.6fZ")
+    format_micros(value, 'T', "Z")
 }
 
 fn format_date(days: i32) -> String {
@@ -679,6 +698,53 @@ mod tests {
                 Some(expected.to_string())
             );
         }
+        // Values beyond the years that chrono represents, as Delta-Spark writes them, read back.
+        for (micros, expected) in [
+            (i64::MAX, "+294247-01-10T04:00:54.775807Z"),
+            (i64::MIN, "-290308-12-21T19:59:05.224192Z"),
+            (8_210_266_876_800_000_000, "+262143-01-01T00:00:00.000000Z"),
+            (-8_334_601_279_200_000_000, "-262144-12-31T10:00:00.000000Z"),
+        ] {
+            let value = timestamp(micros, Some("UTC"));
+            assert_eq!(value.serialize(), expected);
+            let parser = PartitionValueParser::try_new(&value.data_type(), "UTC");
+            assert_eq!(
+                parser.map(|parser| parser.parse(Some(expected))).ok(),
+                Some(value),
+                "{expected}"
+            );
+        }
+    }
+
+    /// The UTC wall clock formatting agrees with chrono over the years that chrono represents.
+    #[test]
+    fn timestamp_partition_values_agree_with_chrono() -> Result<(), Box<dyn std::error::Error>> {
+        use chrono::{TimeZone, Utc};
+
+        let limit = Utc
+            .with_ymd_and_hms(262_142, 12, 31, 23, 59, 59)
+            .single()
+            .ok_or("chrono's last year is not representable")?
+            .timestamp_micros();
+        let step = limit / 4_999 + 7_919;
+        for micros in (-limit..=limit)
+            .step_by(step as usize)
+            .chain([0, -1, 1, limit, -limit])
+        {
+            let expected = Utc
+                .timestamp_micros(micros)
+                .single()
+                .map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string());
+            assert_eq!(
+                Some(timestamp(micros, Some("UTC")).serialize().into_owned()),
+                expected
+            );
+            assert_eq!(
+                timestamp(micros, None).serialize().replace(' ', "T") + "Z",
+                timestamp(micros, Some("UTC")).serialize()
+            );
+        }
+        Ok(())
     }
 
     /// Decimal values are written as Delta-Spark writes them (plain, with one sign) and parse back.
