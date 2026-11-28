@@ -288,6 +288,36 @@ def test_delta_delete_by_name_skips_files_by_timestamp_statistics(spark, tmp_pat
             spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
+@pytest.mark.parametrize("condition", ["d IS NULL", "d IS NOT NULL", "isnull(d)", "d IS NULL OR x = 1"])
+def test_delta_delete_by_null_checks_of_timestamp_columns(
+    spark, tmp_path, session_timezone, deletion_vectors, condition
+):
+    """A DELETE with a null check of a TIMESTAMP data column removes the rows that the check selects in a
+    query, for a table referenced by name and by path."""
+    _ = session_timezone
+    properties = "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')" if deletion_vectors else ""
+    names = ["null_by_name", "null_by_path"]
+    try:
+        for name in names:
+            spark.sql(
+                f"CREATE TABLE {name} (id INT, x INT, d TIMESTAMP) USING delta "
+                f"LOCATION '{escape_sql_string_literal(str(tmp_path / name))}' {properties}"
+            )
+            # One file per row.
+            spark.sql(f"INSERT INTO {name} VALUES (1, 1, TIMESTAMP '2024-01-01 00:00:00')").collect()  # noqa: S608
+            spark.sql(f"INSERT INTO {name} VALUES (2, 2, NULL)").collect()  # noqa: S608
+        for table in ["null_by_name", f"delta.`{tmp_path / 'null_by_path'}`"]:
+            selected = {row.id for row in spark.sql(f"SELECT id FROM {table} WHERE {condition}").collect()}  # noqa: S608
+            spark.sql(f"DELETE FROM {table} WHERE {condition}").collect()  # noqa: S608
+            left = {row.id for row in spark.sql(f"SELECT id FROM {table}").collect()}  # noqa: S608
+            assert {1, 2} - left == selected, table
+    finally:
+        for name in names:
+            spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
 def declare_table_without_offsets(spark, tmp_path, name):
     """Declares `name` over a table whose TIMESTAMP partition values have no offset, as older
     writers wrote them: `2024-01-01 09:00:00.000000` for ids 1, 2 and 5, `10:00` for id 3."""

@@ -425,7 +425,9 @@ impl MetadataPredicateRewriter<'_> {
             return None;
         }
 
-        let null_count = template.apply(self.stats_null_count_expr(&template.logical_path));
+        // A relabel does not change which values are NULL, and the null count is not a value of
+        // the column, so the cast does not apply to it.
+        let null_count = self.stats_null_count_expr(&template.logical_path);
         if is_not_null {
             let num_records = self.stats_num_records_expr();
             Some(
@@ -975,6 +977,30 @@ mod tests {
             let rewritten = rewrite_predicate_for_metadata(expr, &[], &HashMap::new(), &schema);
             assert_eq!(rewritten != literal_true(), pruned, "{column}");
         }
+    }
+
+    /// A null check through a TIMESTAMP relabel compares the null count of the column, which is not
+    /// a TIMESTAMP, without the cast.
+    #[test]
+    fn null_checks_go_through_timestamp_relabels_without_the_cast() -> Result<()> {
+        let schema = ArrowSchema::new(vec![Field::new(
+            "ts",
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        )]);
+        let column = Expr::Cast(Cast::new(
+            Box::new(Expr::Column(LogicalColumn::new_unqualified("ts"))),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("America/Los_Angeles".into())),
+        ));
+        for expr in [column.clone().is_null(), column.is_not_null()] {
+            let rewritten = rewrite_predicate_for_metadata(expr, &[], &HashMap::new(), &schema);
+            assert_ne!(rewritten, literal_true());
+            assert!(
+                !rewritten.exists(|expr| Ok(matches!(expr, Expr::Cast(_))))?,
+                "{rewritten}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
