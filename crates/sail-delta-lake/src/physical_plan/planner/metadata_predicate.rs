@@ -11,15 +11,17 @@ use datafusion::common::{
 };
 use datafusion::functions::core::expr_fn::nullif;
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList, TryCast};
+use datafusion::functions::string::expr_fn::concat;
+use datafusion::logical_expr::expr::{Between, BinaryExpr, Case, Cast, InList, TryCast};
 use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunction};
 use datafusion::logical_expr::{Expr, Operator, ScalarUDF, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use sail_common_datafusion::session::ansi_mode::spark_session_ansi_mode;
 use sail_function::scalar::datetime::partition_timestamp::DeltaPartitionTimestamp;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
-use crate::datasource::{predicate_uses_struct_value, simplify_expr};
+use crate::datasource::{PATH_COLUMN, predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
 use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
 use crate::spec::fields::{
@@ -87,6 +89,56 @@ pub(crate) fn build_metadata_filter(
     )?;
     let df_schema = input.schema().to_dfschema()?;
     let physical_expr = simplify_expr(session, &df_schema, predicate)?;
+    Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))
+}
+
+/// Fails for a file of the log replay `input` whose partition value does not parse. Such a value
+/// reads as NULL, so rewriting the file would write NULL in its place. Delta-Spark rewrites it as
+/// NULL; Sail refuses to, in both ANSI modes, so that the value is not lost.
+pub(crate) fn build_rewrite_guard(
+    session: &dyn Session,
+    input: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let partition_columns = snapshot.metadata().partition_columns();
+    let logical_schema = snapshot.schema();
+    let mut when_then = Vec::new();
+    for name in partition_columns {
+        let data_type = logical_schema.field_with_name(name)?.data_type();
+        if matches!(
+            data_type,
+            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View
+        ) {
+            continue;
+        }
+        let raw = Expr::Column(LogicalColumn::new_unqualified(name));
+        let value = type_partition_columns(
+            raw.clone(),
+            partition_columns,
+            logical_schema,
+            snapshot.partition_time_zone(),
+            false,
+        )?;
+        let does_not_parse = nullif(raw.clone(), lit(""))
+            .is_not_null()
+            .and(value.is_null());
+        let message = concat(vec![
+            lit("Cannot rewrite the Delta file '"),
+            Expr::Column(LogicalColumn::new_unqualified(PATH_COLUMN)),
+            lit("' because the value '"),
+            raw,
+            lit(format!(
+                "' of its partition column `{name}` cannot be read as {data_type}, so the rewritten file would have NULL instead."
+            )),
+        ]);
+        let raise = ScalarUDF::from(RaiseError::new()).call(vec![message]);
+        when_then.push((Box::new(does_not_parse), Box::new(raise)));
+    }
+    if when_then.is_empty() {
+        return Ok(input);
+    }
+    let predicate = Expr::Case(Case::new(None, when_then, Some(Box::new(lit(true)))));
+    let physical_expr = simplify_expr(session, &input.schema().to_dfschema()?, predicate)?;
     Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))
 }
 

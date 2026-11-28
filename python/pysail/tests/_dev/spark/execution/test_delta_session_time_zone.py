@@ -505,9 +505,11 @@ def check_timestamp_partition_values_that_do_not_parse(spark, path, june):
         ]
         (row,) = frame.selectExpr("count(ts) AS n", "unix_micros(max(ts)) AS m").collect()
         assert (row.n, row.m) == (3, june)
-    # The DELETE commits version 7, which writes a checkpoint. Like Delta Lake on Spark, its typed copy
+    # The append commits version 7, which writes a checkpoint. Like Delta Lake on Spark, its typed copy
     # of the value is NULL.
-    spark.sql(f"DELETE FROM delta.`{path}` WHERE ts IS NULL AND id = 7").collect()  # noqa: S608
+    spark.sql("SELECT 9 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts").write.format("delta").mode("append").save(
+        str(path)
+    )
     checkpoint = pq.read_table(path / "_delta_log" / f"{7:020}.checkpoint.parquet").to_pylist()
     parsed = {
         dict(row["add"]["partitionValues"])["ts"]: row["add"]["partitionValues_parsed"]["ts"]
@@ -518,11 +520,25 @@ def check_timestamp_partition_values_that_do_not_parse(spark, path, june):
     # Like Delta Lake on Spark, a dynamic overwrite of the NULL partition keeps the files whose value does
     # not parse.
     overwrite("SELECT 8 AS id, CAST(NULL AS TIMESTAMP) AS ts")
-    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (8, None)]
+    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (7, None), (8, None), (9, june)]
+    # OPTIMIZE leaves out the files whose value does not parse, so their value keeps its spelling.
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (8, None)]
+    assert rows() == [(1, None), (2, None), (3, june), (4, june), (5, june), (7, None), (8, None), (9, june)]
+    assert active_partition_values(path, "ts").count(UNPARSED_TIMESTAMP) == 3
     overwrite("SELECT 6 AS id, TIMESTAMP '2024-06-01 07:00:00' AS ts")
-    assert rows() == [(1, None), (2, None), (6, june), (8, None)]
+    assert rows() == [(1, None), (2, None), (6, june), (7, None), (8, None)]
+
+
+def active_partition_values(path, column):
+    """The raw values of `column` of the files of the latest version of the table at `path`."""
+    active = {}
+    for log in sorted((path / "_delta_log").glob("*.json")):
+        for action in map(json.loads, log.read_text().splitlines()):
+            if "add" in action:
+                active[action["add"]["path"]] = action["add"]["partitionValues"][column]
+            elif "remove" in action:
+                active.pop(action["remove"]["path"], None)
+    return list(active.values())
 
 
 def write_partitioned_log(path, data_type, values):
@@ -651,3 +667,40 @@ def test_delta_timestamp_partition_values_in_spellings_of_earlier_sail_versions(
         assert {row.id: row.micros for row in left} == {
             id_: micros for id_, micros in expected.items() if micros != nine
         }
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+@pytest.mark.parametrize("ansi", [True, False], ids=["ansi", "not-ansi"])
+@pytest.mark.parametrize(
+    ("data_type", "bad", "good"),
+    [
+        ("decimal(5,2)", "-1.-25", "2.50"),
+        ("integer", "abc", "2"),
+        ("timestamp", UNPARSED_TIMESTAMP, "2024-01-01T09:00:00.000000Z"),
+    ],
+    ids=["decimal", "integer", "timestamp"],
+)
+def test_delta_rewrites_refuse_files_whose_partition_value_does_not_parse(
+    spark, tmp_path, session_timezone, ansi, data_type, bad, good
+):
+    """Rewriting a file whose partition value does not parse would write NULL in its place, as Delta Lake
+    on Spark does. Sail refuses the rewrite instead, and OPTIMIZE leaves such files out."""
+    _ = session_timezone
+    for name, statement in [
+        ("update", "UPDATE delta.`{path}` SET v = v + 100 WHERE id <= 2"),
+        (
+            "merge",
+            "MERGE INTO delta.`{path}` t USING (SELECT 1 AS k) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET v = 0",
+        ),
+        ("delete", "DELETE FROM delta.`{path}` WHERE id = 1"),
+    ]:
+        path = tmp_path / name
+        write_partitioned_log(path, data_type, [bad, bad, good, None])
+        with ansi_mode(spark, enabled=ansi), pytest.raises(Exception, match=re.escape(bad)):
+            spark.sql(statement.format(path=path)).collect()
+        assert len(list((path / "_delta_log").glob("*.json"))) == 1, name
+    path = tmp_path / "optimize"
+    write_partitioned_log(path, data_type, [bad, bad, good, good, None])
+    with ansi_mode(spark, enabled=ansi):
+        spark.sql(f"OPTIMIZE delta.`{path}`").collect()
+    assert sorted(active_partition_values(path, "p"), key=str) == sorted([bad, bad, good, None], key=str)

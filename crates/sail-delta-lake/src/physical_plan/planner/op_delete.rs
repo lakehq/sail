@@ -18,7 +18,9 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
-use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
+use super::metadata_predicate::{
+    build_metadata_filter, build_rewrite_guard, predicate_requires_stats,
+};
 use super::utils::{
     LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
@@ -80,6 +82,12 @@ pub async fn build_delete_plan(
         snapshot_state.schema(),
         condition_expr.clone(),
     )?;
+    // A partition-only DELETE removes whole files, which follows the partition filter rules.
+    let meta_scan_w = if partition_only {
+        meta_scan_w
+    } else {
+        build_rewrite_guard(ctx.session(), meta_scan_w, snapshot_state)?
+    };
     let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_w,
         ctx.table_url().clone(),
@@ -97,6 +105,11 @@ pub async fn build_delete_plan(
         snapshot_state.schema(),
         condition_expr,
     )?;
+    let meta_scan_r = if partition_only {
+        meta_scan_r
+    } else {
+        build_rewrite_guard(ctx.session(), meta_scan_r, snapshot_state)?
+    };
     let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_r,
         ctx.table_url().clone(),
@@ -303,6 +316,7 @@ pub async fn build_delete_plan_mor(
         snapshot_state.schema(),
         condition_expr.clone(),
     )?;
+    let meta_scan = build_rewrite_guard(ctx.session(), meta_scan, snapshot_state)?;
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
@@ -423,6 +437,7 @@ pub async fn build_delete_plan_mor(
         snapshot_state.schema(),
         condition_expr,
     )?;
+    let metadata = build_rewrite_guard(ctx.session(), metadata, snapshot_state)?;
     let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &metadata.schema())?;
     let metadata = Arc::new(RepartitionExec::try_new(
         metadata,

@@ -551,7 +551,7 @@ data:
                 ProjectionExec: expr=[id@0 as id, name@1 as name, value@2 as value, year@3 as year, month@4 as month, CASE WHEN (year@3 = 2024 AND value@2 > 650) IS DISTINCT FROM true THEN 0 ELSE 1 END as __sail_operation_type]
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=2, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2, mode=sort)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -561,7 +561,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2, mode=sort)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -582,7 +582,7 @@ data:
                 ProjectionExec: expr=[id@0 as id, name@1 as name, value@2 as value, year@3 as year, month@4 as month, CASE WHEN (year@3 = 2024 AND value@2 > 650) IS DISTINCT FROM true THEN 0 ELSE 1 END as __sail_operation_type]
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=3, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=3, mode=sort)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -592,7 +592,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=3, mode=sort)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -613,7 +613,7 @@ data:
                 ProjectionExec: expr=[id@0 as id, name@1 as name, value@2 as value, year@3 as year, month@4 as month, CASE WHEN (year@3 = 2024 AND value@2 > 650) IS DISTINCT FROM true THEN 0 ELSE 1 END as __sail_operation_type]
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=1, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1, mode=sort)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -623,7 +623,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CASE WHEN nullif(year@5, ) IS NOT NULL AND TRY_CAST(nullif(year@5, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', year@5, ' of its partition column `year` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) WHEN nullif(month@6, ) IS NOT NULL AND TRY_CAST(nullif(month@6, ) AS Int32) IS NULL THEN CAST(raise_error(concat(Cannot rewrite the Delta file ', __sail_file_path@0, ' because the value ', month@6, ' of its partition column `month` cannot be read as Int32, so the rewritten file would have NULL instead.)) AS Boolean) ELSE true END AND CAST(nullif(year@5, ) AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1, mode=sort)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, __sail_delta_log_version@11 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]

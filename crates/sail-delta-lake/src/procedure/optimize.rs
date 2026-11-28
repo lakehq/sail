@@ -127,8 +127,11 @@ pub(crate) async fn plan(
             })
         });
         if add.size < min_size || dv_rewrite {
-            let key = bin_key(&snapshot, &partition_columns, &add)?;
-            partitions.entry(key).or_default().push(add);
+            // A file whose partition value does not parse keeps its spelling: a rewrite would write
+            // the value it reads, NULL.
+            if let Some(key) = bin_key(&snapshot, &partition_columns, &add)? {
+                partitions.entry(key).or_default().push(add);
+            }
         }
     }
     let mut bins = vec![];
@@ -371,7 +374,8 @@ fn bin_key_columns(
     Ok(columns.into_iter().zip(parsers).collect())
 }
 
-/// Returns the partition of a file for grouping files into bins, without changing the `Add`.
+/// Returns the partition of a file for grouping files into bins, without changing the `Add`, or
+/// `None` for a file that must not be rewritten because a partition value does not parse.
 ///
 /// Null encodings are normalized, and so are timestamp values, which are written as UTC with an
 /// offset now but without one by earlier versions, so that files of one partition share a bin.
@@ -379,7 +383,7 @@ fn bin_key(
     snapshot: &DeltaSnapshot,
     partition_columns: &[(PhysicalPartitionColumn, Option<PartitionValueParser>)],
     add: &Add,
-) -> Result<BTreeMap<String, Option<String>>> {
+) -> Result<Option<BTreeMap<String, Option<String>>>> {
     let mut key = add
         .partition_values
         .iter()
@@ -398,15 +402,17 @@ fn bin_key(
         };
         if value.as_deref() == Some("") {
             *value = None;
-        } else if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_))) {
+        } else if value.is_some() {
             let scalar = parser.parse(value.as_deref());
-            // A timestamp value that does not parse is NULL and keeps its spelling, as before.
-            if !scalar.is_null() {
+            if scalar.is_null() {
+                return Ok(None);
+            }
+            if matches!(parser.data_type(), ArrowDataType::Timestamp(_, Some(_))) {
                 *value = Some(scalar.serialize().into_owned());
             }
         }
     }
-    Ok(key)
+    Ok(Some(key))
 }
 
 fn retain_bin(bins: &mut Vec<Vec<Add>>, bin: Vec<Add>) {
@@ -674,11 +680,45 @@ mod tests {
         let new = key("2024-01-01T09:00:00.000000Z")?;
         assert_eq!(old, new);
         assert_eq!(
-            new.get("ts"),
+            new.as_ref().and_then(|key| key.get("ts")),
             Some(&Some("2024-01-01T09:00:00.000000Z".to_string()))
         );
         assert_ne!(new, key("2024-01-01 09:00:00.000000")?);
         assert_ne!(new, key("2024-01-01T10:00:00.000000Z")?);
+        Ok(())
+    }
+
+    /// A file whose partition value does not parse is left out of the bins, so OPTIMIZE keeps its
+    /// spelling rather than rewriting it as NULL.
+    #[tokio::test]
+    async fn bin_key_skips_partition_values_that_do_not_parse() -> Result<()> {
+        let snapshot = snapshot_with(
+            [
+                StructField::not_null("value", DataType::LONG),
+                StructField::nullable("d", DataType::decimal(5, 2)?),
+                StructField::nullable("ts", DataType::TIMESTAMP),
+            ],
+            vec!["d".into(), "ts".into()],
+            [],
+            Default::default(),
+        )
+        .await?;
+        let columns = bin_key_columns(&snapshot)?;
+        let key = |d: &str, ts: &str| {
+            let add = Add {
+                path: "file.parquet".to_string(),
+                partition_values: HashMap::from([
+                    ("d".to_string(), Some(d.to_string())),
+                    ("ts".to_string(), Some(ts.to_string())),
+                ]),
+                ..Default::default()
+            };
+            bin_key(&snapshot, &columns, &add)
+        };
+        assert!(key("2.50", "2024-01-01T09:00:00.000000Z")?.is_some());
+        assert!(key("", "")?.is_some());
+        assert_eq!(key("-1.-25", "2024-01-01T09:00:00.000000Z")?, None);
+        assert_eq!(key("2.50", "2024-01-01T09:00:00 Q")?, None);
         Ok(())
     }
 
