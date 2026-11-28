@@ -701,7 +701,6 @@ impl PlanResolverState {
             fields,
             next_cte_definition_index,
             shared_cte_definitions,
-            config,
             table_sources,
             lake_path_sources,
             lake_snapshot_pins,

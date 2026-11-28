@@ -2093,6 +2093,29 @@ def test_view_reads_the_table_of_the_database_that_it_was_created_in(spark, tmp_
         spark.sql(f"DROP DATABASE {second} CASCADE")
 
 
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_resolved_again_in_a_table_argument_resolves_as_when_it_was_created(spark, tables, kind):
+    from pyspark.sql.functions import udtf
+
+    class Rows:
+        def eval(self, row):
+            yield row["id"], str(row["r"])
+
+    spark.udtf.register("view_rows", udtf(Rows, returnType="id int, r string"))
+    table = tables("parquet")
+    table.insert("(1)")
+    view = table.create_view(kind, f"SELECT id, conv(CAST(id AS STRING), 10, 2) AS r FROM {table.name}")
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    spark.conf.set(key, "true")
+    try:
+        # The table gains a column, so the view resolves its query again inside the argument.
+        spark.sql(f"ALTER TABLE {table.name} ADD COLUMNS (x INT)")
+        assert rows(spark, f"SELECT * FROM view_rows(TABLE({view}))") == [(1, "1")]
+    finally:
+        spark.conf.set(key, previous)
+
+
 @pytest.mark.parametrize("table", FORMATS, indirect=True)
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_after_the_session_configuration_changed(spark, table, kind):
