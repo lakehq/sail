@@ -538,6 +538,9 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
+    physical_plan after RejectSelfOverwrite:
+    SAME TEXT AS ABOVE
+
     physical_plan:
     ProjectionExec: expr=[#13@0 as g, #14@1 as count, #15@2 as s1, #16@3 as s2]
       SortPreservingMergeExec: [#13@0 ASC]
