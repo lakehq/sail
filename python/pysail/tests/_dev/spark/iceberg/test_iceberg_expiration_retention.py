@@ -78,19 +78,22 @@ def test_default_retention_properties(spark, history, property_name, value, rema
     assert counts == (0, 0, 0, 0, len(ids) - remaining, 0)
 
 
-@pytest.mark.parametrize("style", ["positional", "named", "comments", "stream", "concurrent"])
+@pytest.mark.parametrize("style", ["positional", "named", "current_timestamp", "comments", "stream", "concurrent"])
 def test_procedure_argument_forms(spark, history, style):
     name, path = history
-    append_history(spark, history)
+    before = append_history(spark, history)
     queries = {
         "positional": f"CALL system.expire_snapshots('{name}', {FUTURE}, 1)",
         "named": f"CALL system.expire_snapshots(older_than => {FUTURE}, table => '{name}')",
+        "current_timestamp": (
+            f"CALL system.expire_snapshots(table => '{name}', older_than => current_timestamp(), retain_last => 1)"
+        ),
         "comments": f"/* before */ -- line\n CALL /* routine */ system.expire_snapshots('{name}', {FUTURE})",
         "stream": f"CALL system.expire_snapshots('{name}', {FUTURE}, stream_results => true)",
         "concurrent": f"CALL system.expire_snapshots('{name}', {FUTURE}, max_concurrent_deletes => 4)",
     }
     assert tuple(spark.sql(queries[style]).first()) == (0, 0, 0, 0, 3, 0)
-    assert len(snapshot_ids(path)) == 1
+    assert snapshot_ids(path) == [before["current-snapshot-id"]]
     assert [row.id for row in spark.table(name).orderBy("id").collect()] == list(range(4))
 
 
