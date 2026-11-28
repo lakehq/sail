@@ -1795,6 +1795,25 @@ mod tests {
         Ok(())
     }
 
+    /// TIMESTAMP_NTZ values at the ends of Chrono's range are cast as Spark casts them, and a
+    /// value whose instant is out of the microsecond range fails, as in Spark.
+    #[test]
+    fn timestamp_ntz_values_out_of_chrono_range_are_cast() -> Result<()> {
+        // -262143-01-01 00:00:00 and +262142-12-31 23:59:59
+        assert_eq!(
+            adapt_timestamp_ntz(vec![-8_334_601_228_800_000_000], "+05:00")?,
+            vec![-8_334_601_246_800_000_000]
+        );
+        assert_eq!(
+            adapt_timestamp_ntz(vec![8_210_266_876_799_000_000], "America/Los_Angeles")?,
+            vec![8_210_266_905_599_000_000]
+        );
+        assert!(adapt_timestamp_ntz(vec![i64::MAX], "-01:00").is_err());
+        assert!(adapt_timestamp_ntz(vec![i64::MIN], "America/Los_Angeles").is_ok());
+        assert!(adapt_timestamp_ntz(vec![i64::MIN], "+01:00").is_err());
+        Ok(())
+    }
+
     #[test]
     fn adapt_batch_replaces_nested_field_metadata() -> Result<()> {
         let source_fields = vec![

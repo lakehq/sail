@@ -102,6 +102,35 @@ def test_delta_append_casts_timestamp_ntz_as_spark_casts(
         spark.sql("DROP TABLE IF EXISTS ntz_cast").collect()
 
 
+@pytest.mark.parametrize(
+    ("session_timezone", "wall_clock", "micros"),
+    [
+        ("+05:00", "-262143-01-01 00:00:00", -8334601246800000000),
+        ("America/Los_Angeles", "+262142-12-31 23:59:59", 8210266905599000000),
+    ],
+    indirect=["session_timezone"],
+    ids=["first-chrono-date", "last-chrono-date"],
+)
+def test_delta_append_casts_timestamp_ntz_at_the_ends_of_chrono_range(
+    spark, tmp_path, session_timezone, wall_clock, micros
+):
+    _ = session_timezone
+    path = tmp_path / "table"
+    spark.sql(
+        f"CREATE TABLE ntz_range (id INT, ts TIMESTAMP) USING delta LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        cast = f"CAST(TIMESTAMP_NTZ '{wall_clock}' AS TIMESTAMP)"
+        assert spark.sql(f"SELECT unix_micros({cast}) AS micros").collect()[0].micros == micros
+        spark.sql(
+            f"SELECT * FROM VALUES (1, TIMESTAMP_NTZ '{wall_clock}'), (2, TIMESTAMP_NTZ '{wall_clock}') AS t(id, ts)"  # noqa: S608
+        ).repartition(2).write.format("delta").mode("append").save(str(path))
+        rows = spark.sql("SELECT id, unix_micros(ts) AS micros FROM ntz_range ORDER BY id").collect()
+        assert [(row.id, row.micros) for row in rows] == [(1, micros), (2, micros)]
+    finally:
+        spark.sql("DROP TABLE IF EXISTS ntz_range").collect()
+
+
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 def test_delta_timestamp_partition_values_are_utc(spark, tmp_path, session_timezone):
     _ = session_timezone
