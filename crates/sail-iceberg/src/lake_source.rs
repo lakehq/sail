@@ -124,6 +124,7 @@ impl DataSource for IcebergLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            target_table: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");

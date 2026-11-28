@@ -477,6 +477,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             sort_order,
             options,
             lakehouse_table,
+            target_table,
             sql_insert: _,
             identity_columns_to_track: _,
         } = info;
@@ -517,6 +518,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                     overwrite,
                     partition_by,
                     sort_by: sort_order,
+                    target_table,
                 },
             )),
         }))
