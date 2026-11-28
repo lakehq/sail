@@ -136,6 +136,7 @@ def http_ranges(tmp_path):
     ("statements", "fraction"),
     [
         ([], "678901"),
+        (["RESET datafusion.execution.parquet.coerce_int96"], "678901"),
         (["SET datafusion.execution.parquet.coerce_int96 = 'ms'"], "678"),
         (
             ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET datafusion.execution.parquet.coerce_int96"],
@@ -143,7 +144,7 @@ def http_ranges(tmp_path):
         ),
         (["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET"], "678901"),
     ],
-    ids=["startup", "set", "set-and-reset", "set-and-reset-all"],
+    ids=["startup", "reset", "set", "set-and-reset", "set-and-reset-all"],
 )
 def test_lake_int96_timestamp_resolution(remote, tmp_path, table_format, metadata_as_data, statements, fraction):
     path = tmp_path / "timestamps.parquet"

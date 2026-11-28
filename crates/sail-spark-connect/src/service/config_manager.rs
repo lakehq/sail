@@ -22,6 +22,8 @@ use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
 
 const DATAFUSION_TIME_ZONE_KEY: &str = "datafusion.execution.time_zone";
+const DATAFUSION_PARQUET_BINARY_AS_STRING_KEY: &str =
+    "datafusion.execution.parquet.binary_as_string";
 
 pub(crate) async fn handle_sql_config(
     ctx: &SessionContext,
@@ -36,7 +38,7 @@ pub(crate) async fn handle_sql_config(
                 .is_some_and(|key| !key.starts_with(DATAFUSION_TIME_ZONE_KEY)) =>
         {
             let spark = ctx.extension::<SparkSession>()?;
-            let initial_value = native_config_value(ctx, variable);
+            let initial_value = native_config_value(ctx, variable).flatten();
             execute_native_config(ctx, command.node.clone()).await?;
             spark.add_native_config_key(variable.clone(), initial_value)?;
             Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))))
@@ -138,20 +140,22 @@ async fn execute_native_config(
     Ok(())
 }
 
-fn native_config_value(ctx: &SessionContext, key: &str) -> Option<String> {
+/// Returns the value of a native setting, or `None` if there is no such setting.
+fn native_config_value(ctx: &SessionContext, key: &str) -> Option<Option<String>> {
     ctx.state_ref()
         .read()
         .config_options()
         .entries()
         .into_iter()
         .find(|entry| entry.key == key)
-        .and_then(|entry| entry.value)
+        .map(|entry| entry.value)
 }
 
-/// Restores the value a native setting had before SQL first changed it, as Spark's RESET restores
-/// the value the session started with, rather than DataFusion's default, which differs from Sail's
-/// for some settings. A setting that SQL did not change, or that had no value, uses DataFusion's
-/// reset. No Sail setting starts without a value where DataFusion's default has one.
+/// Restores the value a native setting had before the session first changed it, as Spark's RESET
+/// restores the value the session started with, rather than DataFusion's default, which differs
+/// from Sail's for some settings. A setting the session did not change keeps its value. A setting
+/// that had no value, or that is not a session option, such as a runtime setting, uses
+/// DataFusion's reset. No Sail setting starts without a value where DataFusion's default has one.
 async fn reset_native_config(
     ctx: &SessionContext,
     spark: &SparkSession,
@@ -162,6 +166,7 @@ async fn reset_native_config(
             variable: key.to_string(),
             value,
         }),
+        None if native_config_value(ctx, key).is_some() => return Ok(()),
         _ => Statement::ResetVariable(ResetVariable {
             variable: key.to_string(),
         }),
@@ -189,12 +194,13 @@ fn sync_parquet_binary_as_string(ctx: &SessionContext, spark: &SparkSession) -> 
         Some(value) => value.trim().to_lowercase().parse::<bool>()?,
         None => spark.options().parquet_binary_as_string,
     };
-    state
-        .config_mut()
-        .options_mut()
-        .execution
-        .parquet
-        .binary_as_string = value;
+    let parquet = &mut state.config_mut().options_mut().execution.parquet;
+    // A RESET of the native setting restores its value from before the mirror changed it.
+    spark.add_native_config_key(
+        DATAFUSION_PARQUET_BINARY_AS_STRING_KEY.to_string(),
+        Some(parquet.binary_as_string.to_string()),
+    )?;
+    parquet.binary_as_string = value;
     Ok(())
 }
 
@@ -554,7 +560,10 @@ mod tests {
                     value: value.to_string(),
                 };
                 handle_sql_config(&ctx, &sql(command)).await?;
-                assert_eq!(native_config_value(&ctx, key), Some(value.to_string()));
+                assert_eq!(
+                    native_config_value(&ctx, key),
+                    Some(Some(value.to_string()))
+                );
             }
             let variables = if reset_each_key {
                 initial.map(|(key, _)| Some(key.to_string())).to_vec()
@@ -568,11 +577,42 @@ mod tests {
             for (key, value) in initial {
                 assert_eq!(
                     native_config_value(&ctx, key),
-                    Some(value.to_string()),
+                    Some(Some(value.to_string())),
                     "{key}"
                 );
             }
         }
+        Ok(())
+    }
+
+    /// A setting the session did not change, or changed only through a Spark key it mirrors,
+    /// keeps or gets back the value the session started with.
+    #[tokio::test]
+    async fn test_reset_keeps_the_initial_value_of_an_unchanged_native_setting() -> SparkResult<()>
+    {
+        const COERCE_INT96: &str = "datafusion.execution.parquet.coerce_int96";
+        let reset = |key: &str| {
+            sql(spec::CommandNode::ResetVariable {
+                variable: Some(key.to_string()),
+            })
+        };
+        // DataFusion's defaults are no INT96 coercion and binary columns read as binary.
+        let ctx = test_context(true)?;
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .set(COERCE_INT96, "us")?;
+        handle_sql_config(&ctx, &reset(COERCE_INT96)).await?;
+        assert_eq!(
+            native_config_value(&ctx, COERCE_INT96),
+            Some(Some("us".to_string()))
+        );
+        handle_sql_config(&ctx, &reset(DATAFUSION_PARQUET_BINARY_AS_STRING_KEY)).await?;
+        assert!(mirrored_value(&ctx));
+        set(&ctx, "false")?;
+        handle_sql_config(&ctx, &reset(DATAFUSION_PARQUET_BINARY_AS_STRING_KEY)).await?;
+        assert!(mirrored_value(&ctx));
         Ok(())
     }
 }
