@@ -10,7 +10,7 @@ from pyiceberg.manifest import DataFile, DataFileContent, FileFormat
 from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField, TimestampType
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.tests._dev.spark.iceberg.utils import create_sql_catalog
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail worker Parquet configuration")
@@ -30,7 +30,19 @@ def remote(request):
 
 @pytest.mark.parametrize("table_format", ["delta", "iceberg"])
 @pytest.mark.parametrize("metadata_as_data", [False, True])
-def test_lake_int96_timestamps_use_microseconds(spark, tmp_path, table_format, metadata_as_data):
+# Like Spark's RESET, a RESET restores the resolution the session started with, which is Sail's rather than
+# DataFusion's default.
+@pytest.mark.parametrize(
+    "statements",
+    [
+        [],
+        ["RESET datafusion.execution.parquet.coerce_int96"],
+        ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET datafusion.execution.parquet.coerce_int96"],
+        ["SET datafusion.execution.parquet.coerce_int96 = 'ms'", "RESET"],
+    ],
+    ids=["startup", "reset", "set-and-reset", "set-and-reset-all"],
+)
+def test_lake_int96_timestamps_use_microseconds(remote, tmp_path, table_format, metadata_as_data, statements):
     path = tmp_path / "timestamps.parquet"
     schema = pa.schema(
         [
@@ -99,13 +111,19 @@ def test_lake_int96_timestamps_use_microseconds(spark, tmp_path, table_format, m
             )
         location = table.location()
     try:
-        query = (
-            spark.read.format(table_format).option("metadataAsDataRead", str(metadata_as_data).lower()).load(location)
-        )
-        if metadata_as_data:
-            node = "DeltaScanByAddsExec" if table_format == "delta" else "IcebergScanByDataFilesExec"
-            assert node in query._explain_string()  # noqa: SLF001
-        rows = query.orderBy("id").selectExpr("CAST(ts AS STRING) AS ts").collect()
+        with spark_session_factory(remote) as sessions:
+            spark = sessions.create()
+            for statement in statements:
+                spark.sql(statement).collect()
+            query = (
+                spark.read.format(table_format)
+                .option("metadataAsDataRead", str(metadata_as_data).lower())
+                .load(location)
+            )
+            if metadata_as_data:
+                node = "DeltaScanByAddsExec" if table_format == "delta" else "IcebergScanByDataFilesExec"
+                assert node in query._explain_string()  # noqa: SLF001
+            rows = query.orderBy("id").selectExpr("CAST(ts AS STRING) AS ts").collect()
         assert [row.ts for row in rows] == ["2024-01-02 03:04:05.678901", "3000-01-02 03:04:05.678901", None]
     finally:
         if catalog is not None:
