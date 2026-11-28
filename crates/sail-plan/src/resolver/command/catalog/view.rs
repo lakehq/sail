@@ -15,6 +15,7 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TemporaryViewDefinition, TemporaryViewSource};
+use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -175,6 +176,8 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
+                data_sources: self.ctx.extension::<DataSourceRegistry>()?
+                    as Arc<dyn Any + Send + Sync>,
                 resolves_at_each_read,
             }))
         } else {

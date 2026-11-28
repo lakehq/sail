@@ -36,6 +36,10 @@ pub(super) struct TableSourceKey {
     /// The ANSI mode and the session time zone of the read, which cast the values of the
     /// partitions that the catalog lists, for a source other than Delta Lake and Iceberg.
     pub partition_value_cast: Option<(bool, Arc<str>)>,
+    /// The address of the data sources that the source is created by, for a source other
+    /// than Delta Lake and Iceberg, which a global temporary view of another session can
+    /// resolve by the data sources of that session.
+    pub data_sources: Option<usize>,
     /// The catalog instance of the table, for a table that a global temporary view reads
     /// in a catalog of the session that created the view.
     pub session_catalog: Option<usize>,

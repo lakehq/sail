@@ -2274,6 +2274,52 @@ def test_view_over_a_python_data_source_table_reads_the_table_of_each_read(spark
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+@pytest.mark.parametrize("kind", ["gv", "dgv"])
+def test_global_view_over_a_python_data_source_table_reads_by_the_source_of_its_session(spark, observer, kind):
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
+    name = f"py_{uuid.uuid4().hex}"
+
+    def source(value):
+        class Reader(DataSourceReader):
+            def read(self, partition):  # noqa: ARG002
+                yield (value,)
+
+        class Source(DataSource):
+            @classmethod
+            def name(cls):
+                return name
+
+            def schema(self):
+                return StructType([StructField("id", IntegerType())])
+
+            def reader(self, schema):  # noqa: ARG002
+                return Reader()
+
+        return Source
+
+    spark.dataSource.register(source(7))
+    views = []
+    try:
+        spark.sql(f"CREATE TABLE {name} USING {name}")
+        view = create_view(spark, kind, f"SELECT * FROM {name}")
+        views.append(view)
+        # The view reads by the source of the session that created it, which another session
+        # does not have, or has under another implementation.
+        assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
+        observer.dataSource.register(source(99))
+        assert rows(observer, f"SELECT * FROM {view}") == [(7,)]
+        assert rows(observer, f"SELECT * FROM {name}") == [(99,)]
+        assert rows(observer, f"SELECT * FROM {view} UNION ALL SELECT * FROM {name}") == [(7,), (99,)]
+        assert rows(spark, f"SELECT * FROM {view}") == [(7,)]
+    finally:
+        for view in views:
+            drop_view(spark, view)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 PATH_KINDS = [*KINDS, "using"]
 # A view created with `USING iceberg` and a path cannot be created.
 PATH_VIEWS = [(fmt, kind) for fmt in LAKE_FORMATS for kind in PATH_KINDS if (fmt, kind) != ("iceberg", "using")]

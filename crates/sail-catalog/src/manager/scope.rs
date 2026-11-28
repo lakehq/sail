@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -100,6 +101,12 @@ impl ViewDefinitionScope {
         let definition = Self::pinned()?;
         let catalogs = definition.catalogs.downcast_ref::<SessionLocalCatalogs>()?;
         catalogs.get(name).cloned()
+    }
+
+    /// Returns the data sources of the session that created the view while the query is
+    /// resolved again.
+    pub fn pinned_data_sources() -> Option<Arc<dyn Any + Send + Sync>> {
+        Some(Arc::clone(&Self::pinned()?.data_sources))
     }
 
     /// Returns the temporary view that a reference names while the query is resolved again.

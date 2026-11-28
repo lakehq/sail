@@ -144,6 +144,9 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// The ANSI mode and the session time zone that cast the values of the partitions that
     /// the catalog lists, as the session had them when the query was resolved.
     pub partition_value_cast: (bool, Arc<str>),
+    /// The data sources that the read resolves the format of the table by: those of the
+    /// session that resolved the query.
+    pub data_sources: Arc<DataSourceRegistry>,
 }
 
 /// The source of a table scan in the stored plan of a temporary view. It is not a table
@@ -1213,9 +1216,8 @@ impl PlanResolver<'_> {
         }
         let lake_relation = match &origin.lake_relation {
             Some(name) => {
-                let relation = self
-                    .ctx
-                    .extension::<DataSourceRegistry>()?
+                let relation = origin
+                    .data_sources
                     .get_lake_source_if_supported(format)?
                     .and_then(|x| x.relation_provider())
                     .and_then(|provider| match provider.resolve_relation(name) {
@@ -1728,6 +1730,7 @@ mod tests {
         UserDefinedLogicalNode, col, lit,
     };
     use datafusion_functions::core::get_field;
+    use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_logical_plan::barrier::BarrierNode;
     use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -1752,6 +1755,7 @@ mod tests {
             travels_in_time: false,
             read_case_sensitive: false,
             partition_value_cast: (false, Arc::from("UTC")),
+            data_sources: Arc::new(DataSourceRegistry::new()),
         }))
     }
 

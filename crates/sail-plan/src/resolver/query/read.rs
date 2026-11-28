@@ -17,6 +17,7 @@ use sail_catalog::lakehouse::{
     LakehouseResolvedTable, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
@@ -92,7 +93,7 @@ impl PlanResolver<'_> {
         // registered data source. In that case, treat it as a direct data source read.
         if let [format, path] = name.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<DataSourceRegistry>()?;
+            let registry = self.data_source_registry()?;
             if registry.get_data_source(&format).is_ok() {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
@@ -262,6 +263,18 @@ impl PlanResolver<'_> {
         Ok(state.share_catalog_table(session_catalog, table, status, resolved))
     }
 
+    /// Returns the data sources that formats are resolved by: those of the session that
+    /// created a temporary view while the view resolves its query again, or else those of
+    /// this session.
+    pub(super) fn data_source_registry(&self) -> PlanResult<Arc<DataSourceRegistry>> {
+        match ViewDefinitionScope::pinned_data_sources()
+            .and_then(|x| x.downcast::<DataSourceRegistry>().ok())
+        {
+            Some(registry) => Ok(registry),
+            None => Ok(self.ctx.extension::<DataSourceRegistry>()?),
+        }
+    }
+
     /// Looks up what a read refers to. A read with a required format reads tables only.
     async fn lookup_catalog_read(
         manager: &CatalogManager,
@@ -292,7 +305,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&name);
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let data_source_registry = self.data_source_registry()?;
         let lookup = Self::lookup_catalog_read(&manager, &reference, required_format, state).await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
@@ -403,6 +416,7 @@ impl PlanResolver<'_> {
                         self.config.ansi_mode,
                         Arc::clone(&self.config.session_timezone),
                     ),
+                    data_sources: Arc::clone(&data_source_registry),
                 };
                 // The source has a large future, which the future of every read would
                 // otherwise hold, also in the recursion of the query resolver.
@@ -497,7 +511,7 @@ impl PlanResolver<'_> {
         // Repeated references to the same table within a query share its source,
         // so that they can share scalar subqueries. Delta Lake and Iceberg sources
         // also pin one table snapshot, while file tables still list files for each scan.
-        let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let data_source_registry = &origin.data_sources;
         // Delta Lake and Iceberg sources read their columns by the metadata of the table,
         // whatever the letter case of column names is matched by, and do not cast the
         // partition values that the catalog lists.
@@ -521,6 +535,7 @@ impl PlanResolver<'_> {
             temporal_options: origin.temporal_options.clone(),
             read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
             partition_value_cast: (!is_lake_source).then(|| origin.partition_value_cast.clone()),
+            data_sources: (!is_lake_source).then(|| Arc::as_ptr(data_source_registry) as usize),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(sources) = source_key
@@ -574,7 +589,7 @@ impl PlanResolver<'_> {
                 let manager = self.ctx.extension::<CatalogManager>()?;
                 self.create_catalog_table_sources(
                     &manager,
-                    &data_source_registry,
+                    data_source_registry,
                     origin,
                     &format,
                     resolved.registered_file_table,
@@ -954,8 +969,7 @@ impl PlanResolver<'_> {
             None => None,
         };
         let lake_source = self
-            .ctx
-            .extension::<DataSourceRegistry>()?
+            .data_source_registry()?
             .get_lake_source_if_supported(&format)?;
         let is_lake = lake_source.is_some();
         let origin = LakePathOrigin {
@@ -1017,8 +1031,7 @@ impl PlanResolver<'_> {
             snapshot_pins: Some(state.lake_snapshot_pins()),
         };
         let source = self
-            .ctx
-            .extension::<DataSourceRegistry>()?
+            .data_source_registry()?
             .get_data_source(&read.format)?
             .create_source(&self.ctx.state(), info)
             .await?;
