@@ -132,12 +132,7 @@ Feature: to_timestamp (strict variant)
         | 2024-01-15 10:30:00 |
 
   Rule: Numeric input is the number of SECONDS since the epoch
-    # Spark casts a numeric argument to TIMESTAMP with the *seconds* semantics of
-    # `Cast(NumericType -> TimestampType)`: the integral part is whole seconds and the
-    # fractional part is a fraction OF A SECOND. Verified on Spark JVM 4.2.0.
-    # These cases discriminate seconds-vs-microseconds: `to_timestamp(1)` is
-    # 00:00:01 under the real rule and 00:00:00.000001 under a micros reading, so a
-    # value like 0 (identical under both) would prove nothing and is kept separate below.
+    # Verified against Spark JVM 4.2.0.
 
     Scenario Outline: Numeric seconds: <case>
       When query
@@ -149,42 +144,70 @@ Feature: to_timestamp (strict variant)
         | <result> |
 
       Examples:
-        | case                          | input | result              |
-        | zero is the epoch             | 0     | 1970-01-01 00:00:00 |
-        | negative zero is the epoch    | -0.0  | 1970-01-01 00:00:00 |
+        | case                                | input                       | result                |
+        | zero is the epoch                   | 0                           | 1970-01-01 00:00:00   |
+        | negative zero is the epoch          | -0.0                        | 1970-01-01 00:00:00   |
+        | one is one second, not one micro    | 1                           | 1970-01-01 00:00:01   |
+        | minus one is one second before      | -1                          | 1969-12-31 23:59:59   |
+        | fraction is a fraction of a second  | 1.5                         | 1970-01-01 00:00:01.5 |
+        | negative fraction                   | -1.5                        | 1969-12-31 23:59:58.5 |
+        | sub-second only                     | 0.5                         | 1970-01-01 00:00:00.5 |
+        | negative sub-second only            | -0.5                        | 1969-12-31 23:59:59.5 |
+        | INT_MAX seconds                     | 2147483647                  | 2038-01-19 03:14:07   |
+        | INT_MAX plus one                    | 2147483648                  | 2038-01-19 03:14:08   |
+        | INT_MIN minus one                   | -2147483649                 | 1901-12-13 20:45:51   |
+        | last second of year 9999            | 253402300799                | 9999-12-31 23:59:59   |
+        | first second past year 9999         | 253402300800                | +10000-01-01 00:00:00 |
+        | first second of year 1              | -62135596800                | 0001-01-01 00:00:00   |
+        | one second before year 1            | -62135596801                | 0000-12-31 23:59:59   |
+        | decimal keeps the fractional second | CAST(1.5 AS DECIMAL(38,18)) | 1970-01-01 00:00:01.5 |
 
-    @sail-bug
-    Scenario Outline: Numeric seconds (Sail reads the value as microseconds): <case>
+    Scenario: Fractions truncate to whole microseconds after scaling
       When query
         """
-        SELECT to_timestamp(<input>) AS result
+        SELECT unix_micros(to_timestamp(CAST(1234567890 AS FLOAT))) AS float_us,
+               unix_micros(to_timestamp(CAST(-1.2345679 AS DECIMAL(38,33)))) AS decimal_us,
+               unix_micros(to_timestamp(CAST(100000000000000.125 AS DECIMAL(25,3)))) AS wrapped_us
         """
       Then query result
-        | result   |
-        | <result> |
+        | float_us         | decimal_us | wrapped_us          |
+        | 1234567936000000 | -1234567   | 7766279631452366920 |
+
+    Scenario Outline: Timestamp aliases convert a millisecond column divided by 1000 with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_timestamp_ltz(ms / 1000) AS ltz, try_to_timestamp(ms / 1000) AS tried,
+               timestamp(ms / 1000) AS ts FROM VALUES (1234567890123L), (NULL) AS t(ms)
+        """
+      Then query result
+        | ltz                     | tried                   | ts                      |
+        | 2009-02-13 23:31:30.123 | 2009-02-13 23:31:30.123 | 2009-02-13 23:31:30.123 |
+        | NULL                    | NULL                    | NULL                    |
 
       Examples:
-        | case                                | input                      | result                     |
-        | one is one second, not one micro    | 1                          | 1970-01-01 00:00:01        |
-        | minus one is one second before      | -1                         | 1969-12-31 23:59:59        |
-        | fraction is a fraction of a second  | 1.5                        | 1970-01-01 00:00:01.5      |
-        | negative fraction                   | -1.5                       | 1969-12-31 23:59:58.5      |
-        | sub-second only                     | 0.5                        | 1970-01-01 00:00:00.5      |
-        | negative sub-second only            | -0.5                       | 1969-12-31 23:59:59.5      |
-        | INT_MAX seconds                     | 2147483647                 | 2038-01-19 03:14:07        |
-        | INT_MAX plus one                    | 2147483648                 | 2038-01-19 03:14:08        |
-        | INT_MIN minus one                   | -2147483649                | 1901-12-13 20:45:51        |
-        | last second of year 9999            | 253402300799               | 9999-12-31 23:59:59        |
-        | first second past year 9999         | 253402300800               | +10000-01-01 00:00:00      |
-        | first second of year 1              | -62135596800               | 0001-01-01 00:00:00        |
-        | one second before year 1            | -62135596801               | 0000-12-31 23:59:59        |
-        | decimal keeps the fractional second | CAST(1.5 AS DECIMAL(38,18)) | 1970-01-01 00:00:01.5     |
+        | ansi  |
+        | true  |
+        | false |
 
   Rule: Numeric overflow and non-finite values
     # BIGINT micros saturate to the timestamp range; DOUBLE values that overflow BIGINT
     # raise CAST_OVERFLOW under ANSI and saturate under ANSI off; NaN and Infinity are
     # CAST_INVALID_INPUT under ANSI and NULL otherwise. Verified on Spark JVM 4.2.0.
 
+    Scenario: BIGINT and DOUBLE seconds saturate at the limits of timestamp microseconds
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT unix_micros(to_timestamp(9223372036854775807L)) AS int_max,
+               unix_micros(to_timestamp(-9223372036854775807L - 1L)) AS int_min,
+               unix_micros(to_timestamp(1e18)) AS double_max, unix_micros(to_timestamp(-1e18)) AS double_min
+        """
+      Then query result
+        | int_max             | int_min              | double_max          | double_min           |
+        | 9223372036854775807 | -9223372036854775808 | 9223372036854775807 | -9223372036854775808 |
+
+    # show() cannot format timestamps outside Chrono's date range.
     @sail-bug
     Scenario Outline: Saturating BIGINT bound: <case>
       When query
@@ -196,11 +219,10 @@ Feature: to_timestamp (strict variant)
         | <result> |
 
       Examples:
-        | case         | input                | result                        |
-        | LONG_MAX     | 9223372036854775807  | +294247-01-10 04:00:54.775807 |
-        | LONG_MIN     | -9223372036854775808 | -290308-12-21 19:59:05.224192 |
+        | case     | input                       | result                        |
+        | LONG_MAX | 9223372036854775807L        | +294247-01-10 04:00:54.775807 |
+        | LONG_MIN | -9223372036854775807L - 1L  | -290308-12-21 19:59:05.224192 |
 
-    @sail-bug
     Scenario Outline: DOUBLE overflowing BIGINT raises under ANSI: <case>
       Given config spark.sql.ansi.enabled = true
       When query
@@ -214,6 +236,7 @@ Feature: to_timestamp (strict variant)
         | 1e18 seconds      | 1e18  |
         | minus 1e18        | -1e18 |
 
+    # show() cannot format timestamps outside Chrono's date range.
     @sail-bug
     Scenario Outline: DOUBLE overflowing BIGINT saturates without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
@@ -230,7 +253,6 @@ Feature: to_timestamp (strict variant)
         | 1e18 seconds | 1e18  | +294247-01-10 04:00:54.775807 |
         | minus 1e18   | -1e18 | -290308-12-21 19:59:05.224192 |
 
-    @sail-bug
     Scenario Outline: NaN and Infinity raise under ANSI: <case>
       Given config spark.sql.ansi.enabled = true
       When query
@@ -245,7 +267,6 @@ Feature: to_timestamp (strict variant)
         | positive inf   | CAST('Infinity' AS DOUBLE)   |
         | negative inf   | CAST('-Infinity' AS DOUBLE)  |
 
-    @sail-bug
     Scenario Outline: NaN and Infinity are NULL without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -261,6 +282,16 @@ Feature: to_timestamp (strict variant)
         | NaN            | CAST('NaN' AS DOUBLE)        |
         | positive inf   | CAST('Infinity' AS DOUBLE)   |
         | negative inf   | CAST('-Infinity' AS DOUBLE)  |
+
+    Scenario: try_to_timestamp saturates finite overflow and returns NULL for non-finite input under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_micros(try_to_timestamp(1e18)) AS overflow, try_to_timestamp(double('NaN')) AS nan
+        """
+      Then query result
+        | overflow            | nan  |
+        | 9223372036854775807 | NULL |
 
   Rule: A NULL value short-circuits before the format is validated
     # Spark builds the formatter lazily inside the non-null path, so a NULL input returns
@@ -475,6 +506,22 @@ Feature: to_timestamp (strict variant)
 
   @function(nullability)
   Rule: Output schema
+
+    Scenario: Numeric timestamp nullability follows the input type
+      When query
+        """
+        SELECT to_timestamp(id) AS integral, to_timestamp(1.25) AS decimal_ts,
+               try_to_timestamp(CAST(id AS DOUBLE)) AS floating, to_timestamp(nullif(id, 0)) AS optional
+        FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- integral: timestamp (nullable = false)
+         |-- decimal_ts: timestamp (nullable = false)
+         |-- floating: timestamp (nullable = true)
+         |-- optional: timestamp (nullable = true)
+        """
 
     Scenario: a non-null string literal yields a timestamp
       When query

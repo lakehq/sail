@@ -54,18 +54,14 @@ Feature: to_timestamp_ntz
     # Measured on Spark JVM 4.2.0.
 
     Scenario: to_timestamp accepts a number, as seconds since the epoch
-      # The contrasting half of the pair. That Sail reads the number as MICROseconds is
-      # covered by its own scenarios in to_timestamp.feature; the value 0 is used here
-      # precisely because it is identical under both readings, so this half stays green
-      # and only the to_timestamp_ntz half below carries the divergence.
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT to_timestamp(0) AS result
+        SELECT to_timestamp(1) AS result
         """
       Then query result
         | result              |
-        | 1970-01-01 00:00:00 |
+        | 1970-01-01 00:00:01 |
 
     @sail-bug
     Scenario Outline: to_timestamp_ntz rejects a non-parseable type under ANSI: <case>
